@@ -1,0 +1,134 @@
+{
+ "actions": [],
+ "autoname": "field:folder_id",
+ "creation": "2026-01-12 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "folder_id",
+  "folder_path",
+  "display_name",
+  "index_key",
+  "column_break_1",
+  "level_depth",
+  "parent_folder",
+  "palace",
+  "product_range",
+  "section_media",
+  "hero_image",
+  "cloudinary_images",
+  "section_metadata",
+  "ai_metadata",
+  "last_synced"
+ ],
+ "fields": [
+  {
+   "fieldname": "folder_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Folder ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "folder_path",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Folder Path",
+   "reqd": 1
+  },
+  {
+   "fieldname": "display_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Display Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "index_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Index Key"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "level_depth",
+   "fieldtype": "Int",
+   "label": "Level Depth"
+  },
+  {
+   "fieldname": "parent_folder",
+   "fieldtype": "Link",
+   "label": "Parent Folder",
+   "options": "Product Catalogue"
+  },
+  {
+   "fieldname": "palace",
+   "fieldtype": "Data",
+   "label": "Palace"
+  },
+  {
+   "fieldname": "product_range",
+   "fieldtype": "Data",
+   "label": "Product Range"
+  },
+  {
+   "fieldname": "section_media",
+   "fieldtype": "Section Break",
+   "label": "Media"
+  },
+  {
+   "fieldname": "hero_image",
+   "fieldtype": "Data",
+   "label": "Hero Image URL"
+  },
+  {
+   "fieldname": "cloudinary_images",
+   "fieldtype": "JSON",
+   "label": "Cloudinary Images"
+  },
+  {
+   "fieldname": "section_metadata",
+   "fieldtype": "Section Break",
+   "label": "Metadata"
+  },
+  {
+   "fieldname": "ai_metadata",
+   "fieldtype": "JSON",
+   "label": "AI Metadata"
+  },
+  {
+   "fieldname": "last_synced",
+   "fieldtype": "Datetime",
+   "label": "Last Synced"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-01-12 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "dsi_catalogue",
+ "name": "Product Catalogue",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

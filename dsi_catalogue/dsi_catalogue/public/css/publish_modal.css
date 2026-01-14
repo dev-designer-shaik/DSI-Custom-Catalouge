@@ -1,0 +1,47 @@
+/* DSI Product Catalogue - Publish Modal Styles */
+
+.publish-modal-container {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.folder-tree-panel {
+  background: var(--fg-color);
+}
+
+.folder-tree .folder-item.selected {
+  background-color: var(--bg-blue) !important;
+  border-radius: 4px;
+}
+
+.folder-tree .folder-item:hover {
+  background-color: var(--bg-light);
+}
+
+.folder-tree .badge {
+  font-family: monospace;
+  font-weight: normal;
+}
+
+.preview-panel {
+  background: var(--fg-color);
+}
+
+.preview-content h5 {
+  color: var(--text-color);
+}
+
+.preview-content .ai-analysis {
+  font-size: 12px;
+}
+
+.tree-search {
+  border: 1px solid var(--border-color);
+}
+
+.sync-btn {
+  font-size: 11px;
+}
+
+.folder-toggle:hover {
+  color: var(--primary);
+}

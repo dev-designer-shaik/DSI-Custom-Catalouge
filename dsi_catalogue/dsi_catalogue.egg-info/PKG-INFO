@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: dsi_catalogue
+Version: 0.0.1
+Summary: DSI Product Catalogue - Manage product catalogue sync and website publishing
+Author: DSI
+Author-email: dev@designershaik.com
+Dynamic: author
+Dynamic: author-email
+Dynamic: summary

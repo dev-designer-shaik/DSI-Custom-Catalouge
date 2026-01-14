@@ -1,0 +1,13 @@
+MANIFEST.in
+setup.py
+dsi_catalogue/__init__.py
+dsi_catalogue/api.py
+dsi_catalogue/hooks.py
+dsi_catalogue.egg-info/PKG-INFO
+dsi_catalogue.egg-info/SOURCES.txt
+dsi_catalogue.egg-info/dependency_links.txt
+dsi_catalogue.egg-info/not-zip-safe
+dsi_catalogue.egg-info/top_level.txt
+dsi_catalogue/doctype/__init__.py
+dsi_catalogue/doctype/product_catalogue/__init__.py
+dsi_catalogue/doctype/product_catalogue/product_catalogue.py
