@@ -255,14 +255,23 @@ class PublishToWebsiteModal {
   }
 
   async syncCatalogue() {
-    frappe.show_alert({message: __("Triggering catalogue sync..."), indicator: "blue"});
-
-    frappe.msgprint({
-      title: __("Sync Required"),
-      message: __("Please run the Folder Sync workflow in n8n to populate the catalogue."),
+    frappe.show_alert({
+      message: __("Refreshing catalogue data..."), 
       indicator: "blue"
-    });
+    }, 3);
+
+    // Reload the folder tree to get fresh data from database
+    await this.loadFolderTree();
+
+    frappe.show_alert({
+      message: __("Catalogue refreshed!"), 
+      indicator: "green"
+    }, 3);
   }
+
+
+
+
 
   showLoadingState() {
     const previewContainer = this.dialog.$wrapper.find("#preview-container");

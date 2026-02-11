@@ -10,62 +10,21 @@ GENERATION_CACHE_PREFIX = "dsi_generation_task_"
 GENERATION_CACHE_TTL = 3600  # 1 hour
 
 
-def create_file_for_external_url(url, doctype=None, docname=None, filename=None):
-    """
-    Create a File record for an external URL (like Cloudinary).
-    ERPNext can reference external URLs via the File doctype.
-
-    Args:
-        url: The external URL (e.g., Cloudinary URL)
-        doctype: The doctype to attach the file to (optional)
-        docname: The document name to attach the file to (optional)
-        filename: Custom filename (optional, extracted from URL if not provided)
-
-    Returns:
-        The file_url that can be used in website_image field
-    """
-    if not url:
-        return None
-
-    # Extract filename from URL if not provided
-    if not filename:
-        # Handle Cloudinary URLs: extract the last part before query params
-        url_path = url.split('?')[0]
-        filename = url_path.split('/')[-1]
-        # Ensure it has an extension
-        if '.' not in filename:
-            filename = filename + '.webp'
-
-    # Check if a File record already exists for this URL
-    existing = frappe.db.exists("File", {"file_url": url})
-    if existing:
-        return url
-
-    # Create a new File record for the external URL
-    try:
-        file_doc = frappe.get_doc({
-            "doctype": "File",
-            "file_name": filename,
-            "file_url": url,
-            "is_private": 0,
-            "attached_to_doctype": doctype,
-            "attached_to_name": docname
-        })
-        file_doc.insert(ignore_permissions=True)
-        frappe.db.commit()
-        return url
-    except Exception as e:
-        frappe.log_error(f"Error creating file record for URL {url}: {str(e)}")
-        return url  # Return the URL anyway, it might still work
-
-
 def build_tree(catalogue_list):
     """Build hierarchical tree from flat catalogue list"""
     tree = []
     nodes = {}
 
-    # First pass: create all nodes
+    # First pass: create all nodes with ALL fields
     for item in catalogue_list:
+        # Convert last_synced to ISO format with UTC timezone for proper JS handling
+        last_synced_val = item.get("last_synced")
+        if last_synced_val:
+            # Add 'Z' suffix to indicate UTC timezone
+            last_synced_str = str(last_synced_val).replace(" ", "T") + "Z"
+        else:
+            last_synced_str = None
+            
         nodes[item.name] = {
             "name": item.name,
             "folder_id": item.get("folder_id"),
@@ -74,6 +33,11 @@ def build_tree(catalogue_list):
             "index_key": item.get("index_key"),
             "level_depth": item.get("level_depth", 0),
             "hero_image": item.get("hero_image"),
+            "palace": item.get("palace"),
+            "product_range": item.get("product_range"),
+            "last_synced": last_synced_str,
+            "cloudinary_images": item.get("cloudinary_images"),
+            "ai_metadata": item.get("ai_metadata"),
             "children": []
         }
 
@@ -91,22 +55,17 @@ def build_tree(catalogue_list):
 
 @frappe.whitelist()
 def get_product_catalogue_tree():
-    """Return folder tree for modal"""
+    """Return folder tree for modal - always fetches fresh data"""
+    # Ensure we get fresh data from database (bypass any ORM cache)
+    frappe.db.commit()
+    
     catalogue = frappe.get_all("Product Catalogue",
         fields=["name", "folder_id", "folder_path", "display_name", "index_key",
-                "level_depth", "parent_folder", "hero_image"],
+                "level_depth", "parent_folder", "hero_image", "palace", "product_range",
+                "last_synced", "cloudinary_images", "ai_metadata"],
         order_by="level_depth asc, folder_path asc"
     )
     return build_tree(catalogue)
-
-
-@frappe.whitelist()
-def clear_product_catalogue():
-    """Clear all Product Catalogue records - used before re-sync to ensure clean data"""
-    # Delete all records
-    frappe.db.sql("DELETE FROM `tabProduct Catalogue`")
-    frappe.db.commit()
-    return {"success": True, "message": "Product Catalogue cleared successfully"}
 
 
 @frappe.whitelist()
@@ -167,19 +126,28 @@ def create_or_update_slideshow(item_code, images):
 
     slideshow_items = []
     for img in images:
-        # Truncate description to 140 chars max to avoid ERPNext field limit
-        desc = img.get("alt", "") or ""
-        slideshow_items.append({
-            "image": img.get("url") or img.get("web_optimized"),
-            "heading": (img.get("fileName", "") or "")[:140],
-            "description": desc[:140] if desc else ""
-        })
+        # Get image URL - support both cloudinaryUrl and url keys
+        img_url = img.get("cloudinaryUrl") or img.get("url") or img.get("web_optimized")
+        if img_url:
+            # Truncate heading and description to avoid field length errors
+            heading = (img.get("fileName", "") or "")[:140]
+            description = (img.get("alt", "") or "")[:140]
+            slideshow_items.append({
+                "image": img_url,
+                "heading": heading,
+                "description": description
+            })
+
+    if not slideshow_items:
+        return None
 
     if frappe.db.exists("Website Slideshow", slideshow_name):
         doc = frappe.get_doc("Website Slideshow", slideshow_name)
         doc.slideshow_items = []
         for item in slideshow_items:
             doc.append("slideshow_items", item)
+        # Skip validation for external URLs (Cloudinary)
+        doc.flags.ignore_validate = True
         doc.save(ignore_permissions=True)
     else:
         doc = frappe.get_doc({
@@ -187,6 +155,8 @@ def create_or_update_slideshow(item_code, images):
             "slideshow_name": slideshow_name,
             "slideshow_items": slideshow_items
         })
+        # Skip validation for external URLs (Cloudinary)
+        doc.flags.ignore_validate = True
         doc.insert(ignore_permissions=True)
 
     return slideshow_name
@@ -298,6 +268,10 @@ def create_website_item(item_code, catalogue, content):
         "custom_index_key": catalogue.index_key,
     }
 
+    # Set primary image
+    if images:
+        website_item_data["website_image"] = images[0].get("url") or images[0].get("web_optimized")
+
     # Check if exists
     existing = frappe.db.exists("Website Item", {"item_code": item_code})
 
@@ -308,17 +282,6 @@ def create_website_item(item_code, catalogue, content):
     else:
         doc = frappe.get_doc(website_item_data)
         doc.insert(ignore_permissions=True)
-
-    # Set primary image after doc exists (so we can attach the File to it)
-    if images:
-        image_url = images[0].get("url") or images[0].get("web_optimized")
-        doc.website_image = create_file_for_external_url(
-            image_url,
-            doctype="Website Item",
-            docname=doc.name,
-            filename=images[0].get("fileName")
-        )
-        doc.save(ignore_permissions=True)
 
     # Add specifications as table rows
     if specs or care:
@@ -349,35 +312,17 @@ def create_website_item(item_code, catalogue, content):
 
 
 @frappe.whitelist(allow_guest=True)
-def sync_product_catalogue(folder_tree, synced_at, clear_existing=False):
-    """Receive sync from n8n workflow
-    
-    Args:
-        folder_tree: JSON tree structure of product catalogue
-        synced_at: ISO datetime string for last sync time
-        clear_existing: If True, completely clears the Product Catalogue table before syncing
-                       This ensures a clean overwrite with no stale entries
-    """
+def sync_product_catalogue(folder_tree, synced_at):
+    """Receive sync from n8n workflow"""
     # Convert ISO datetime to MySQL format
     from frappe.utils import get_datetime
     synced_at = get_datetime(synced_at).strftime("%Y-%m-%d %H:%M:%S") if synced_at else None
 
     tree = json.loads(folder_tree) if isinstance(folder_tree, str) else folder_tree
-    
-    # Parse clear_existing if it comes as string
-    if isinstance(clear_existing, str):
-        clear_existing = clear_existing.lower() in ('true', '1', 'yes')
-    
-    # If clear_existing is True, delete all existing records first
-    if clear_existing:
-        frappe.db.sql("DELETE FROM `tabProduct Catalogue`")
-        frappe.db.commit()
 
     def process_node(node, parent=None):
         folder_id = node.get("folder_id")
-        
-        # When clear_existing=True, we never need to check for existing records
-        name = None if clear_existing else frappe.db.exists("Product Catalogue", {"folder_id": folder_id})
+        name = frappe.db.exists("Product Catalogue", {"folder_id": folder_id})
 
         # Data for Product Catalogue - NO doctype key for set_value!
         data = {
@@ -410,10 +355,7 @@ def sync_product_catalogue(folder_tree, synced_at, clear_existing=False):
         process_node(root)
 
     frappe.db.commit()
-    
-    # Return count for verification
-    count = frappe.db.count("Product Catalogue")
-    return {"success": True, "message": f"Catalogue synced successfully. {count} entries.", "count": count}
+    return {"success": True, "message": "Catalogue synced successfully"}
 
 
 @frappe.whitelist(allow_guest=True)
@@ -477,46 +419,12 @@ def receive_publish_callback(item_code, content, status="success", folder_id=Non
     if slideshow_name:
         doc.slideshow = slideshow_name
     if images:
-        image_url = images[0].get("cloudinaryUrl") or images[0].get("url") or images[0].get("web_optimized")
-        # Create a File record for the external URL so ERPNext can reference it
-        doc.website_image = create_file_for_external_url(
-            image_url,
-            doctype="Website Item",
-            docname=doc.name,
-            filename=images[0].get("fileName")
-        )
+        doc.website_image = images[0].get("cloudinaryUrl") or images[0].get("url") or images[0].get("web_optimized")
 
     # Custom fields
     if catalogue:
         doc.custom_repository_path = catalogue.folder_path
         doc.custom_index_key = catalogue.index_key
-
-    # SEO custom fields - store directly on Website Item
-    if seo_data:
-        doc.custom_seo_title = seo_data.get("title", "")
-        doc.custom_seo_description = seo_data.get("description", "")
-        # Convert keywords array to comma-separated string
-        keywords = seo_data.get("keywords", [])
-        if isinstance(keywords, list):
-            doc.custom_seo_keywords = ", ".join(keywords)
-        else:
-            doc.custom_seo_keywords = keywords or ""
-
-    # Additional content fields
-    doc.custom_marketing_headline = content.get("marketing_headline", "")
-    doc.custom_luxury_score = content.get("luxury_score", 0)
-
-    # General product line description (shared across variants)
-    if content.get("general_description"):
-        doc.website_content = content.get("general_description")
-
-    # Image alt text from first image
-    if images:
-        first_image_name = images[0].get("fileName", "")
-        image_alts = content.get("image_alts", {})
-        alt_text = image_alts.get(first_image_name, "") or images[0].get("description", "")
-        # Truncate to 140 chars max to avoid ERPNext field limit error
-        doc.custom_image_alt_text = alt_text[:140] if alt_text else ""
 
     # Update specifications table
     specs = content.get("specifications", {})
@@ -536,9 +444,6 @@ def receive_publish_callback(item_code, content, status="success", folder_id=Non
 
     doc.save(ignore_permissions=True)
 
-    # Reload to get auto-generated route
-    doc.reload()
-
     # Update SEO via Website Route Meta
     if not seo_data:
         seo_data = {
@@ -546,20 +451,11 @@ def receive_publish_callback(item_code, content, status="success", folder_id=Non
             "description": content.get("seo_description", ""),
             "keywords": content.get("seo_keywords", [])
         }
-
-    # If route still not available, generate one based on web_item_name
-    route = doc.route
-    if not route:
-        from frappe.website.utils import cleanup_page_name
-        route = cleanup_page_name(doc.web_item_name)
-        doc.route = route
-        doc.save(ignore_permissions=True)
-
-    if route and seo_data:
-        create_website_route_meta(route, seo_data)
+    if doc.route:
+        create_website_route_meta(doc.route, seo_data)
 
     frappe.db.commit()
-    return {"success": True, "website_item": doc.name, "route": doc.route, "created": not existing}
+    return {"success": True, "website_item": doc.name, "created": not existing}
 
 
 @frappe.whitelist()
@@ -677,128 +573,6 @@ def receive_generation_callback(task_id, content, images=None, seo_data=None, it
     return {"success": True, "message": "Content stored for preview"}
 
 
-@frappe.whitelist(allow_guest=True)
-def get_published_website_items():
-    """Return all published Website Items with custom fields for the shop page.
-
-    This endpoint bypasses guest API restrictions that prevent querying custom fields.
-    Returns all fields including custom_index_key for product routing.
-    """
-    items = frappe.get_all(
-        "Website Item",
-        filters={"published": 1},
-        fields=[
-            "name",
-            "item_code",
-            "web_item_name",
-            "website_image",
-            "short_description",
-            "web_long_description",
-            "item_group",
-            "route",
-            "slideshow",
-            "custom_index_key",
-            "custom_repository_path"
-        ]
-    )
-    return items
-
-
-@frappe.whitelist(allow_guest=True)
-def get_website_item_by_index_key(index_key):
-    """Get a single Website Item by its custom_index_key.
-
-    Args:
-        index_key: The index key like {F-CR-AK-AC}
-
-    Returns:
-        Website Item data or None
-    """
-    if not index_key:
-        return None
-
-    items = frappe.get_all(
-        "Website Item",
-        filters={
-            "published": 1,
-            "custom_index_key": index_key
-        },
-        fields=[
-            "name",
-            "item_code",
-            "web_item_name",
-            "website_image",
-            "short_description",
-            "web_long_description",
-            "item_group",
-            "route",
-            "slideshow",
-            "custom_index_key",
-            "custom_repository_path"
-        ],
-        limit=1
-    )
-
-    if not items:
-        return None
-
-    item = items[0]
-
-    # Get specifications table
-    specs = frappe.get_all(
-        "Website Item Website Specification",
-        filters={"parent": item.name},
-        fields=["label", "description"]
-    )
-    item["specifications"] = specs
-
-    # Get slideshow images if exists
-    if item.get("slideshow"):
-        slideshow_items = frappe.get_all(
-            "Website Slideshow Item",
-            filters={"parent": item.slideshow},
-            fields=["image", "heading", "description"],
-            order_by="idx"
-        )
-        item["slideshow_images"] = slideshow_items
-
-    return item
-
-
-@frappe.whitelist(allow_guest=True)
-def get_general_description_for_product(template_key):
-    """Find any sibling variant's general description for this product line.
-
-    Searches Website Items where custom_index_key starts with template_key
-    and has a non-empty website_content (Advanced Display Content).
-
-    Args:
-        template_key: The template index key like {F-CR-AK}
-
-    Returns:
-        dict with general_description or None
-    """
-    if not template_key:
-        return {"general_description": None}
-
-    # Build LIKE pattern: {F-CR-AK% matches {F-CR-AK}, {F-CR-AK-M}, {F-CR-AK-AC}, etc.
-    pattern = template_key.rstrip('}') + '%}'
-
-    result = frappe.db.sql("""
-        SELECT website_content
-        FROM `tabWebsite Item`
-        WHERE custom_index_key LIKE %s
-        AND website_content IS NOT NULL
-        AND website_content != ''
-        ORDER BY creation ASC
-        LIMIT 1
-    """, pattern, as_dict=True)
-
-    if result:
-        return {"general_description": result[0].get("website_content")}
-    return {"general_description": None}
-
-
 @frappe.whitelist()
 def publish_website_item(folder_id, item_code, content, images=None, seo_data=None, item_group_data=None):
     """Create/update Website Item from previewed content"""
@@ -854,48 +628,22 @@ def publish_website_item(folder_id, item_code, content, images=None, seo_data=No
         # Set primary image with alt text
         if images:
             primary_img = images[0]
-            image_url = primary_img.get("cloudinaryUrl") or primary_img.get("url") or primary_img.get("web_optimized")
-            # Create a File record for the external URL so ERPNext can reference it
-            doc.website_image = create_file_for_external_url(
-                image_url,
-                doctype="Website Item",
-                docname=doc.name,
-                filename=primary_img.get("fileName")
-            )
-            # Store alt text in image alt field if available
+            img_url = primary_img.get("cloudinaryUrl") or primary_img.get("url") or primary_img.get("web_optimized")
+            doc.website_image = img_url
+            # Store alt text in image alt field if available (truncate to 140 chars)
             if hasattr(doc, "website_image_alt"):
-                doc.website_image_alt = primary_img.get("alt") or content.get("image_alts", {}).get(primary_img.get("fileName"), "")
+                alt_text = primary_img.get("alt") or content.get("image_alts", {}).get(primary_img.get("fileName"), "")
+                doc.website_image_alt = alt_text[:140] if alt_text else ""
+
+            # Create slideshow for image gallery
+            slideshow_name = create_or_update_slideshow(item_code, images)
+            if slideshow_name:
+                doc.slideshow = slideshow_name
 
         # Custom fields
         if catalogue:
             doc.custom_repository_path = catalogue.folder_path
             doc.custom_index_key = catalogue.index_key
-
-        # SEO custom fields - store directly on Website Item
-        if seo_data:
-            doc.custom_seo_title = seo_data.get("title", "")
-            doc.custom_seo_description = seo_data.get("description", "")
-            # Convert keywords array to comma-separated string
-            keywords = seo_data.get("keywords", [])
-            if isinstance(keywords, list):
-                doc.custom_seo_keywords = ", ".join(keywords)
-            else:
-                doc.custom_seo_keywords = keywords or ""
-
-        # Additional content fields
-        doc.custom_marketing_headline = content.get("marketing_headline", "")
-        doc.custom_luxury_score = content.get("luxury_score", 0)
-
-        # General product line description (shared across variants)
-        if content.get("general_description"):
-            doc.website_content = content.get("general_description")
-
-        # Image alt text from first image
-        if images:
-            primary_img = images[0]
-            first_image_name = primary_img.get("fileName", "")
-            image_alts = content.get("image_alts", {})
-            doc.custom_image_alt_text = image_alts.get(first_image_name, "") or primary_img.get("description", "")
 
         # Update specifications table
         specs = content.get("specifications", {})
@@ -921,27 +669,16 @@ def publish_website_item(folder_id, item_code, content, images=None, seo_data=No
                 "description": json.dumps(image_alts)
             })
 
+        # Skip validation for external image URLs (Cloudinary)
+        doc.flags.ignore_validate = True
         doc.save(ignore_permissions=True)
 
-        # Reload to get auto-generated route
-        doc.reload()
-
         # Create SEO meta tags
-        if seo_data:
-            # If route still not available, generate one based on web_item_name
-            route = doc.route
-            if not route:
-                # Generate route from web_item_name (same logic ERPNext uses)
-                from frappe.website.utils import cleanup_page_name
-                route = cleanup_page_name(doc.web_item_name)
-                doc.route = route
-                doc.save(ignore_permissions=True)
-
-            if route:
-                create_website_route_meta(route, seo_data)
+        if seo_data and doc.route:
+            create_website_route_meta(doc.route, seo_data)
 
         frappe.db.commit()
-        return {"success": True, "website_item": doc.name, "route": doc.route, "created": not existing}
+        return {"success": True, "website_item": doc.name, "created": not existing}
 
     except Exception as e:
         frappe.log_error(f"Error publishing website item: {str(e)}")
