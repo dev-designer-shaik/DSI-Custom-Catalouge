@@ -946,3 +946,155 @@ def publish_website_item(folder_id, item_code, content, images=None, seo_data=No
     except Exception as e:
         frappe.log_error(f"Error publishing website item: {str(e)}")
         return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
+def get_product_images_by_index_key(index_key_prefix=None):
+    """Get product images for items matching an index key prefix.
+
+    Searches Website Items, Slideshows, and File attachments.
+
+    Args:
+        index_key_prefix: Partial index key like "{P-DQ-FP}" to match items starting with it.
+
+    Returns:
+        List of image dicts: [{id, url, alt, fileName, sharedType, variantCode, isHero, qualityScore}]
+    """
+    if not index_key_prefix:
+        return []
+
+    images = []
+    seen_urls = set()
+
+    # 1. Find matching Website Items by index key prefix
+    website_items = frappe.get_all(
+        "Website Item",
+        filters=[
+            ["published", "=", 1],
+            ["custom_index_key", "like", f"{index_key_prefix}%"]
+        ],
+        fields=["name", "item_code", "web_item_name", "website_image",
+                "slideshow", "custom_index_key"],
+        order_by="custom_index_key asc"
+    )
+
+    for idx, wi in enumerate(website_items):
+        index_key = wi.get("custom_index_key") or ""
+
+        # Extract variant code from index key: {F-CR-AK-AC} -> last segment = AC
+        variant_code = ""
+        if index_key:
+            parts = index_key.strip("{}").split("-")
+            # Variant code is everything after the prefix parts
+            prefix_parts = index_key_prefix.strip("{}").split("-")
+            if len(parts) > len(prefix_parts):
+                variant_code = "-".join(parts[len(prefix_parts):])
+
+        # Add website_image if available
+        if wi.website_image and wi.website_image not in seen_urls:
+            seen_urls.add(wi.website_image)
+            file_name = wi.website_image.split("/")[-1] if "/" in wi.website_image else wi.website_image
+            images.append({
+                "id": f"wi-{wi.name}-hero",
+                "url": wi.website_image,
+                "alt": wi.web_item_name or file_name,
+                "fileName": file_name,
+                "sharedType": "variant" if variant_code else "inclusive",
+                "variantCode": variant_code,
+                "isHero": idx == 0,
+                "qualityScore": 100 - idx,
+            })
+
+        # 2. Get slideshow images if available
+        if wi.slideshow:
+            slideshow_images = frappe.get_all(
+                "Website Slideshow Item",
+                filters={"parent": wi.slideshow},
+                fields=["image", "heading", "description"],
+                order_by="idx asc"
+            )
+            for si_idx, si in enumerate(slideshow_images):
+                if si.image and si.image not in seen_urls:
+                    seen_urls.add(si.image)
+                    file_name = si.image.split("/")[-1] if "/" in si.image else si.image
+                    images.append({
+                        "id": f"ss-{wi.name}-{si_idx}",
+                        "url": si.image,
+                        "alt": si.heading or si.description or file_name,
+                        "fileName": file_name,
+                        "sharedType": "variant" if variant_code else "inclusive",
+                        "variantCode": variant_code,
+                        "isHero": False,
+                        "qualityScore": 80 - si_idx,
+                    })
+
+        # 3. Get attached File images
+        file_images = frappe.get_all(
+            "File",
+            filters={
+                "attached_to_doctype": "Website Item",
+                "attached_to_name": wi.name,
+                "is_private": 0,
+            },
+            fields=["file_url", "file_name"],
+            order_by="creation asc"
+        )
+        for fi_idx, fi in enumerate(file_images):
+            url = fi.file_url or ""
+            if url and url.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")) and url not in seen_urls:
+                seen_urls.add(url)
+                # Make absolute URL if relative
+                if not url.startswith("http"):
+                    url = frappe.utils.get_url() + url
+                images.append({
+                    "id": f"file-{wi.name}-{fi_idx}",
+                    "url": url,
+                    "alt": fi.file_name or "",
+                    "fileName": fi.file_name or "",
+                    "sharedType": "variant" if variant_code else "inclusive",
+                    "variantCode": variant_code,
+                    "isHero": False,
+                    "qualityScore": 60 - fi_idx,
+                })
+
+    # 4. Also check Product Catalogue if it has data
+    catalogue_items = frappe.get_all(
+        "Product Catalogue",
+        filters=[["index_key", "like", f"{index_key_prefix}%"]],
+        fields=["name", "index_key", "cloudinary_images", "hero_image"],
+    )
+    for cat in catalogue_items:
+        if cat.hero_image and cat.hero_image not in seen_urls:
+            seen_urls.add(cat.hero_image)
+            images.append({
+                "id": f"cat-hero-{cat.name}",
+                "url": cat.hero_image,
+                "alt": cat.name,
+                "fileName": cat.hero_image.split("/")[-1] if "/" in cat.hero_image else "",
+                "sharedType": "inclusive",
+                "variantCode": "",
+                "isHero": True,
+                "qualityScore": 95,
+            })
+        if cat.cloudinary_images:
+            try:
+                cloud_imgs = json.loads(cat.cloudinary_images) if isinstance(cat.cloudinary_images, str) else cat.cloudinary_images
+                if isinstance(cloud_imgs, list):
+                    for ci_idx, ci in enumerate(cloud_imgs):
+                        url = ci.get("url") or ci.get("secure_url") or ""
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            images.append({
+                                "id": ci.get("public_id") or f"cloud-{cat.name}-{ci_idx}",
+                                "url": url,
+                                "alt": ci.get("alt") or ci.get("public_id") or "",
+                                "fileName": url.split("/")[-1] if "/" in url else "",
+                                "sharedType": ci.get("sharedType") or "inclusive",
+                                "variantCode": ci.get("variantCode") or "",
+                                "isHero": ci.get("isHero") or False,
+                                "qualityScore": ci.get("qualityScore") or (90 - ci_idx),
+                            })
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    return images
