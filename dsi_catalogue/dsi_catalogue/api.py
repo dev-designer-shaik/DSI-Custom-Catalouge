@@ -1098,3 +1098,129 @@ def get_product_images_by_index_key(index_key_prefix=None):
                 pass
 
     return images
+
+
+@frappe.whitelist(allow_guest=True)
+def get_general_description(template_key=None):
+    """Alias for get_general_description_for_product (n8n calls this name)."""
+    return get_general_description_for_product(template_key)
+
+
+# =====================================================================
+# P1: server-side decoding + gallery/shop-filter APIs (dsi_catalogue)
+# Reuses the existing get_product_images_by_index_key aggregation; adds
+# decoder-driven grouping + cached shop facets so the website runs minimal code.
+# =====================================================================
+
+def website_item_precompute(doc, method=None):
+    """doc_event (Website Item validate): populate decoded fields from custom_index_key."""
+    from dsi_catalogue import index_key as ik
+    key = doc.get("custom_index_key")
+    if not key:
+        return
+    try:
+        fields = ik.decode_for_website_item(key)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "website_item_precompute decode failed")
+        return
+    for k, v in fields.items():
+        if doc.meta.has_field(k):
+            doc.set(k, v)
+    frappe.cache().delete_value("dsi_shop_filters")
+
+
+@frappe.whitelist()
+def backfill_precompute_fields(limit=None):
+    """One-off: populate the precompute fields on all published Website Items.
+    Uses db.set_value (no full save) for speed; run via bench execute."""
+    from dsi_catalogue import index_key as ik
+    names = frappe.get_all("Website Item", filters={"published": 1}, pluck="name")
+    if limit:
+        names = names[: int(limit)]
+    updated = 0
+    for nm in names:
+        key = frappe.db.get_value("Website Item", nm, "custom_index_key")
+        if not key:
+            continue
+        fields = ik.decode_for_website_item(key)
+        if fields:
+            frappe.db.set_value("Website Item", nm, fields, update_modified=False)
+            updated += 1
+    frappe.db.commit()
+    frappe.cache().delete_value("dsi_shop_filters")
+    return {"updated": updated, "total": len(names)}
+
+
+@frappe.whitelist(allow_guest=True)
+def get_product_gallery(item_code=None, index_key=None):
+    """Ranked gallery for a product (template + its variants), in the website's
+    ProductImage shape. Wraps get_product_images_by_index_key using the decoder's
+    grouping key so variant matching is correct. Returns {gallery_images:[...]}."""
+    from dsi_catalogue import index_key as ik
+    key = index_key
+    if not key and item_code:
+        key = frappe.db.get_value("Website Item", {"item_code": item_code}, "custom_index_key") \
+            or frappe.db.get_value("Item", item_code, "custom_index_key")
+    if not key:
+        return {"gallery_images": []}
+    grouping = ik.get_product_grouping_key(key) or ik.get_template_index_key(key) or key
+    imgs = get_product_images_by_index_key(grouping)
+    # hero first, then by qualityScore desc (stable)
+    imgs.sort(key=lambda x: (0 if x.get("isHero") else 1, -(x.get("qualityScore") or 0)))
+    return {"gallery_images": imgs}
+
+
+@frappe.whitelist(allow_guest=True)
+def get_shop_filters(palace=None):
+    """Cached facet counts for the shop sidebar, computed server-side from
+    custom_index_key (mirrors the website's getShopFilterOptions). Cache busted
+    on any Website Item save via website_item_precompute."""
+    from dsi_catalogue import index_key as ik
+    cache_key = "dsi_shop_filters"
+    cached = frappe.cache().get_value(cache_key)
+    if cached and not palace:
+        return cached
+
+    items = frappe.get_all("Website Item", filters={"published": 1},
+                           fields=["custom_index_key"])
+    palace_counts, range_counts, vtype_counts, material_counts, size_counts = {}, {}, {}, {}, {}
+    for it in items:
+        d = ik.decode_index_key(it.get("custom_index_key") or "")
+        if not d:
+            continue
+        if palace and d["palace"]["code"] != palace:
+            continue
+        palace_counts[d["palace"]["code"]] = palace_counts.get(d["palace"]["code"], 0) + 1
+        if d["range"]:
+            range_counts[d["range"]["code"]] = range_counts.get(d["range"]["code"], 0) + 1
+        for v in d["variants"]:
+            vt = ik.get_variant_type(v)
+            if vt == "size":
+                size_counts[v] = size_counts.get(v, 0) + 1
+            elif vt in ("gender", "product_subtype"):
+                vtype_counts[v] = vtype_counts.get(v, 0) + 1
+            elif vt == "material":
+                material_counts[v] = material_counts.get(v, 0) + 1
+        mat = ik.get_accessory_material_code(d["productCode"])
+        if mat:
+            material_counts[mat] = material_counts.get(mat, 0) + 1
+
+    def opts(counts, label_map=None):
+        out = []
+        for code, count in counts.items():
+            label = (label_map.get(code) if label_map else None) or ik.VARIANT_CODES.get(code, code)
+            out.append({"value": code, "label": label, "count": count})
+        return sorted(out, key=lambda o: -o["count"])
+
+    palace_labels = {c: p["displayName"] for c, p in ik.PALACE_MAP.items()}
+    range_labels = {c: r["name"] for c, r in ik.RANGE_MAP.items()}
+    result = {
+        "palaces": [o for o in opts(palace_counts, palace_labels)],
+        "ranges": [o for o in opts(range_counts, range_labels)],
+        "variantTypes": opts(vtype_counts),
+        "materials": opts(material_counts),
+        "sizes": opts(size_counts),
+    }
+    if not palace:
+        frappe.cache().set_value(cache_key, result)
+    return result

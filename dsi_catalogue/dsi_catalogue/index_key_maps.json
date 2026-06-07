@@ -1,0 +1,110 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for index-key decoding. Mirrored to the website at lib/erpnext/index_key_maps.json; a CI/parity test must keep them identical. Values mirror lib/erpnext/index-key-decoder.ts + types.ts.",
+  "palace_map": {
+    "F": { "code": "F", "name": "Palace-of-Fragrances", "slug": "fragrance", "displayName": "Fragrances" },
+    "S": { "code": "S", "name": "Palace-of-Style", "slug": "style", "displayName": "Style" },
+    "P": { "code": "P", "name": "Palace-of-Precision", "slug": "precision", "displayName": "Precision" },
+    "G": { "code": "G", "name": "Gift-Sets", "slug": "gift-sets", "displayName": "Gift Sets" }
+  },
+  "range_map": {
+    "PR": { "code": "PR", "name": "PRECIOUS RANGE", "slug": "precious" },
+    "CR": { "code": "CR", "name": "CLASSIC RANGE", "slug": "classic" },
+    "BK": { "code": "BK", "name": "Bespoke", "slug": "bespoke" },
+    "AA": { "code": "AA", "name": "Astro Automatic", "slug": "astro-automatic" },
+    "AQ": { "code": "AQ", "name": "Astro Quartz", "slug": "astro-quartz" },
+    "DQ": { "code": "DQ", "name": "Desert Quill", "slug": "desert-quill" },
+    "AX": { "code": "AX", "name": "Watch Accessories", "slug": "watch-accessories" }
+  },
+  "products": {
+    "fragrance": {
+      "ODA-R": "OBJET d'ART - REGAL - for Lovers",
+      "ODA-OPG": "OBJET d'ART - OPTIMUM PRECIOUS GOLD",
+      "ODA-LSS": "OBJET d'ART - LUXURY STERLING SILVER",
+      "OSA": "OPULENT SHAIK AMETHYST Gold Edition",
+      "OSS": "OPULENT SHAIK SAPPHIRE",
+      "CSE": "CHIC SHAIK EMERALD",
+      "SO": "SOCHI ONYX",
+      "AK": "Amber Kroud",
+      "PC": "PETITE COLLECTION",
+      "GD": "OBJET d'ART - OPTIMUM PRECIOUS GOLD",
+      "SV": "OBJET d'ART - LUXURY STERLING SILVER"
+    },
+    "style": {
+      "PCL": "Precious Cufflinks",
+      "PS-NRE": "Precious Set - Necklace - Ring - Earring",
+      "CTS": "Cufflinks & Tie Pin Set",
+      "CL": "Cufflinks",
+      "NHS": "Necktie & Handkerchief Set",
+      "PES": "Pendant & Earring Set",
+      "ECS": "Earrings Compact Set",
+      "PNCS": "Pendant Necklace Compact Set",
+      "RCS": "Ring Compact Set",
+      "OR": "Opulent Ring",
+      "SSS": "Silk Scarf Set",
+      "SSRS": "Silk Scarf & Ring Set",
+      "FC": "Fashion Caps"
+    },
+    "precision": {
+      "BJ": "Bespoke Jewels",
+      "AT1": "AstroTime MKI",
+      "AD1": "Astro Duo MKI",
+      "AD2": "Astro Duo MKII",
+      "ASC": "AstroSculpt",
+      "BP": "Ballpoint Pen",
+      "FP": "Fountain Pen"
+    },
+    "accessory": {
+      "LS": "Leather Strap Set",
+      "RS": "Rubber Strap Set",
+      "STRAP-LVIN": "Vino Leather Strap Set",
+      "STRAP-LDSA": "Deep Sapphire Leather Strap Set",
+      "STRAP-LIVO": "Ivory Leather Strap Set",
+      "STRAP-LONX": "Onyx Leather Strap Set",
+      "STRAP-LTAN": "Tan Leather Strap Set",
+      "STRAP-LAMB": "Amber Leather Strap Set",
+      "STRAP-LRPY": "Red Python Leather Strap Set",
+      "STRAP-LBTE": "Blue Teju Leather Strap Set",
+      "STRAP-RONX": "Onyx Rubber Strap Set",
+      "STRAP-RDSA": "Deep Sapphire Rubber Strap Set",
+      "STRAP-RAMB": "Amber Rubber Strap Set",
+      "STRAP-RAME": "Amethyst Rubber Strap Set",
+      "STRAP-RSTO": "Stone Rubber Strap Set",
+      "STRAP-RSNO": "Snow Rubber Strap Set",
+      "WALLET": "Strap Wallet",
+      "WINDER": "Watch Winder"
+    },
+    "gift_set": {
+      "OSA-IGS": "OPULENT SHAIK AMETHYST - International Classic Gift Set",
+      "OSS-IGS": "OPULENT SHAIK SAPPHIRE - International Gift Set",
+      "OSS-TGS": "OPULENT SHAIK SAPPHIRE - Traditional Gift Set"
+    }
+  },
+  "variants": {
+    "gender_type": { "M": "Men", "W": "Women", "UP": "Unisex Parfum", "AC": "Aromatic Candle", "AS": "Aromatic Soap" },
+    "size": { "100": "100ml", "80": "80ml", "40": "40ml", "PT": "Petite", "RF": "Refill" },
+    "watch": {
+      "IG": "Ivory Gold", "LO": "Lustrous Onyx", "SS": "Sapphire Steel", "ISG": "Ivory Steel Gold",
+      "ISS": "Ivory Steel Sapphire", "ISB": "Ivory Steel Blue", "DS": "Deep Sapphire", "MO": "Matte Onyx",
+      "AS": "Amber Steel", "DSS": "Deep Sapphire Steel", "SNS": "Snow Steel", "GD": "Gold", "SV": "Silver", "RG": "Rose Gold"
+    },
+    "pen": { "ON": "Onyx", "RR": "Royal Red", "IV": "Ivory", "LU": "Lustrous", "MA": "Matte", "AN": "Antique" },
+    "style": {
+      "RC": "Rose Capri", "WC": "White Capri", "BL": "Blue", "MV": "Mauve", "TN": "Tan", "SAT": "Satin",
+      "CHF": "Chiffon", "SM": "Silk Mauve", "SB": "Silk Blue", "ST": "Silk Turquoise", "CB": "Cotton Black"
+    },
+    "gift_set": { "IGS": "International Gift Set", "TGS": "Traditional Gift Set" },
+    "material": { "LEA": "Leather", "RUB": "Rubber" },
+    "strap_colour": {
+      "VIN": "Vino", "DSP": "Deep Sapphire", "IVO": "Ivory", "ONX": "Onyx", "TAN": "Tan", "AMB": "Amber",
+      "BTE": "Blue Teju", "RPY": "Red Python", "AME": "Amethyst", "STO": "Stone", "SNO": "Snow"
+    }
+  },
+  "gender_identity_codes": ["M", "W"],
+  "product_type_codes": ["UP", "AC", "AS"],
+  "watch_product_codes": ["AT1", "AD1", "AD2", "ASC"],
+  "size_codes_for_type": ["100", "80", "40", "PT", "RF"],
+  "_merge_order": {
+    "product_codes": ["fragrance", "style", "precision", "accessory", "gift_set"],
+    "variant_codes": ["gender_type", "size", "watch", "pen", "style", "gift_set", "material", "strap_colour"]
+  }
+}
