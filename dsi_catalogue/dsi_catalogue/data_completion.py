@@ -264,3 +264,70 @@ def forward_fill_media_bulk(dry_run=1, palace=None):
                          "changes": [c["field"] for c in r["changes"]]})
     return {"scanned": len(wis), "with_changes": touched, "dry_run": bool(dry_run),
             "items": done}
+
+
+# ----------------------------------------------------------------- backward fill
+@frappe.whitelist()
+def backward_fill(item_code=None, website_item=None, dry_run=1):
+    """Website Item curated copy -> Product Catalogue ai_metadata.curated_marketing,
+    so the repository becomes the complete upstream source. Updates the matching
+    Catalogue folder, or creates a PENDING placeholder when none exists (the 24 items
+    whose Drive folders were never synced) so Phase B can push it to Drive."""
+    dry_run = int(dry_run)
+    wi = frappe.db.get_value(
+        "Website Item", {"item_code": item_code} if item_code else {"name": website_item},
+        ["name", "item_code", "web_item_name", "custom_index_key", "custom_grouping_key",
+         "website_content", "web_long_description", "short_description"], as_dict=True,
+    ) if (item_code or website_item) else None
+    if not wi:
+        frappe.throw("Website Item not found")
+    specs = frappe.get_all("Item Website Specification",
+                           filters={"parent": wi.name}, fields=["label", "description"])
+    curated = {
+        "website_content": wi.website_content or "",
+        "web_long_description": wi.web_long_description or "",
+        "short_description": wi.short_description or "",
+        "specs": [{"label": s.label, "value": s.description} for s in specs],
+        "updated_on": frappe.utils.now(),
+        "source": "website-item-curated",
+    }
+    if not any([curated["website_content"], curated["web_long_description"],
+                curated["short_description"], curated["specs"]]):
+        return {"website_item": wi.name, "skipped": "no curated content"}
+
+    grp = wi.custom_grouping_key or wi.custom_index_key
+    like = grp.rstrip("}")
+    cats = frappe.get_all("Product Catalogue",
+                          filters=[["index_key", "like", like + "%"]], pluck="name")
+    target = cats[0] if cats else None
+    created = False
+    result = {"website_item": wi.name, "grouping": grp, "applied": False}
+    if not target:
+        folder_id = "PENDING:%s" % wi.custom_index_key
+        result["action"] = "create_placeholder"
+        result["folder_id"] = folder_id
+        if not dry_run:
+            doc = frappe.get_doc({
+                "doctype": "Product Catalogue", "folder_id": folder_id,
+                "index_key": wi.custom_index_key, "display_name": wi.web_item_name,
+                "ai_metadata": json.dumps({"curated_marketing": curated,
+                                           "_pending_drive_sync": True}),
+            })
+            doc.insert(ignore_permissions=True)
+            created = True
+            target = doc.name
+    else:
+        result["action"] = "update"
+        result["catalogue"] = target
+        if not dry_run:
+            md = _load(frappe.db.get_value("Product Catalogue", target, "ai_metadata")) or {}
+            if not isinstance(md, dict):
+                md = {}
+            md["curated_marketing"] = curated
+            frappe.db.set_value("Product Catalogue", target, "ai_metadata",
+                                json.dumps(md), update_modified=False)
+    if not dry_run:
+        frappe.db.commit()
+        result["applied"] = True
+        result["created_placeholder"] = created
+    return result
