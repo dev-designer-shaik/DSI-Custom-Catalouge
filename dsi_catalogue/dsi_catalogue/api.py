@@ -963,6 +963,12 @@ def get_product_images_by_index_key(index_key_prefix=None):
     if not index_key_prefix:
         return []
 
+    # Normalize: callers may pass a complete key like "{F-PR-ODA-LSS}" (closing
+    # brace included). The closing brace would force LIKE to require it mid-string,
+    # so a grouping/template key never matches its variants ("{F-PR-ODA-LSS-W}").
+    # Strip a single trailing "}" so the prefix matches the template AND its variants.
+    like_prefix = index_key_prefix[:-1] if index_key_prefix.endswith("}") else index_key_prefix
+
     images = []
     seen_urls = set()
 
@@ -971,7 +977,7 @@ def get_product_images_by_index_key(index_key_prefix=None):
         "Website Item",
         filters=[
             ["published", "=", 1],
-            ["custom_index_key", "like", f"{index_key_prefix}%"]
+            ["custom_index_key", "like", f"{like_prefix}%"]
         ],
         fields=["name", "item_code", "web_item_name", "website_image",
                 "slideshow", "custom_index_key"],
@@ -1060,7 +1066,7 @@ def get_product_images_by_index_key(index_key_prefix=None):
     # 4. Also check Product Catalogue if it has data
     catalogue_items = frappe.get_all(
         "Product Catalogue",
-        filters=[["index_key", "like", f"{index_key_prefix}%"]],
+        filters=[["index_key", "like", f"{like_prefix}%"]],
         fields=["name", "index_key", "cloudinary_images", "hero_image"],
     )
     for cat in catalogue_items:
