@@ -1,5 +1,6 @@
 import frappe
 import json
+import re
 import requests
 import uuid
 from frappe import _
@@ -1191,7 +1192,12 @@ def get_shop_filters(palace=None):
                            fields=["custom_index_key"])
     palace_counts, range_counts, vtype_counts, material_counts, size_counts = {}, {}, {}, {}, {}
     for it in items:
-        d = ik.decode_index_key(it.get("custom_index_key") or "")
+        key = it.get("custom_index_key") or ""
+        # Exclude refill variants — they aren't standalone shop cards, so the shop
+        # sidebar facets must not count them (mirrors website isRefillVariant: /-RF[-}]/).
+        if re.search(r"-RF[-}]", key):
+            continue
+        d = ik.decode_index_key(key)
         if not d:
             continue
         if palace and d["palace"]["code"] != palace:
