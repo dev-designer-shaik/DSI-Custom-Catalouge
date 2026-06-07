@@ -1161,8 +1161,12 @@ def backfill_precompute_fields(limit=None):
 @frappe.whitelist(allow_guest=True)
 def get_product_gallery(item_code=None, index_key=None):
     """Ranked gallery for a product (template + its variants), in the website's
-    ProductImage shape. Wraps get_product_images_by_index_key using the decoder's
-    grouping key so variant matching is correct. Returns {gallery_images:[...]}."""
+    ProductImage shape. Returns {gallery_images:[...]}.
+
+    Prefers the authored ranking model (custom_gallery_images rows on the template
+    + variant Website Items); falls back to the legacy get_product_images_by_index_key
+    aggregation (website_image / slideshow / File) when no rows have been authored yet.
+    """
     from dsi_catalogue import index_key as ik
     key = index_key
     if not key and item_code:
@@ -1171,10 +1175,98 @@ def get_product_gallery(item_code=None, index_key=None):
     if not key:
         return {"gallery_images": []}
     grouping = ik.get_product_grouping_key(key) or ik.get_template_index_key(key) or key
-    imgs = get_product_images_by_index_key(grouping)
+
+    imgs = _collect_authored_gallery(grouping)
+    if not imgs:
+        imgs = get_product_images_by_index_key(grouping)
     # hero first, then by qualityScore desc (stable)
     imgs.sort(key=lambda x: (0 if x.get("isHero") else 1, -(x.get("qualityScore") or 0)))
     return {"gallery_images": imgs}
+
+
+def _collect_authored_gallery(grouping):
+    """Aggregate custom_gallery_images rows across the template + variant Website
+    Items in a grouping, mapped to the website's ProductImage shape. Returns []
+    when nothing has been authored (so the caller falls back to the legacy path)."""
+    like_prefix = grouping[:-1] if grouping.endswith("}") else grouping
+    names = frappe.get_all(
+        "Website Item",
+        filters=[["published", "=", 1], ["custom_index_key", "like", f"{like_prefix}%"]],
+        pluck="name",
+    )
+    images, seen = [], set()
+    for nm in names:
+        rows = frappe.get_all(
+            "Website Item Gallery Image",
+            filters={"parent": nm, "parentfield": "custom_gallery_images"},
+            fields=["name", "image", "alt_text", "file_name", "shared_type",
+                    "variant_code", "is_hero", "rank"],
+            order_by="rank asc, idx asc",
+        )
+        for r in rows:
+            url = r.get("image")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            fname = r.get("file_name") or (url.split("/")[-1] if "/" in url else url)
+            images.append({
+                "id": f"gal-{r['name']}",
+                "url": url,
+                "alt": r.get("alt_text") or fname,
+                "fileName": fname,
+                "sharedType": r.get("shared_type") or "variant",
+                "variantCode": r.get("variant_code") or "",
+                "isHero": bool(r.get("is_hero")),
+                # rank ascending = better; map to a descending qualityScore so the
+                # caller's (isHero, -qualityScore) sort keeps rank order.
+                "qualityScore": 1000 - int(r.get("rank") or 0),
+            })
+    return images
+
+
+@frappe.whitelist()
+def save_website_item_gallery(item_code=None, website_item=None, gallery=None):
+    """Replace the custom_gallery_images rows on a Website Item (Desk-auth, no guest).
+    gallery = JSON list of {image, alt_text, file_name, shared_type, variant_code,
+    is_hero, rank}. Backs the wizard picture-step and the P3 inline editor."""
+    name = website_item
+    if not name and item_code:
+        name = frappe.db.get_value("Website Item", {"item_code": item_code}, "name")
+    if not name or not frappe.db.exists("Website Item", name):
+        frappe.throw(_("Website Item not found for {0}").format(item_code or website_item))
+    if isinstance(gallery, str):
+        gallery = json.loads(gallery or "[]")
+
+    # Update the child table directly (delete + insert) instead of a full parent
+    # doc.save(): saving a variant Website Item triggers webshop's on_update ->
+    # update_template_item -> make_website_item, which throws when the template item
+    # already has a Website Item. We only need to rewrite the gallery child rows.
+    frappe.db.delete("Website Item Gallery Image",
+                     {"parent": name, "parentfield": "custom_gallery_images"})
+    saved = 0
+    for i, g in enumerate(gallery or []):
+        if not g.get("image"):
+            continue
+        rank = g.get("rank")
+        url = g.get("image")
+        child = frappe.get_doc({
+            "doctype": "Website Item Gallery Image",
+            "parent": name,
+            "parenttype": "Website Item",
+            "parentfield": "custom_gallery_images",
+            "idx": i + 1,
+            "image": url,
+            "alt_text": g.get("alt_text") or "",
+            "file_name": g.get("file_name") or (url.split("/")[-1] if "/" in url else url),
+            "shared_type": g.get("shared_type") or "variant",
+            "variant_code": g.get("variant_code") or "",
+            "is_hero": 1 if g.get("is_hero") else 0,
+            "rank": int(rank) if rank not in (None, "") else i,
+        })
+        child.insert(ignore_permissions=True)
+        saved += 1
+    frappe.db.commit()
+    return {"saved": saved, "website_item": name}
 
 
 @frappe.whitelist(allow_guest=True)

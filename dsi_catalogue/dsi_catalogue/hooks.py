@@ -51,6 +51,8 @@ fixtures = [
             "Website Item-custom_selectable_variant_codes",
             "Website Item-custom_sibling_gender_slug",
             "Website Item-custom_is_template",
+            "Website Item-custom_gallery_section",
+            "Website Item-custom_gallery_images",
         ]]],
     }
 ]

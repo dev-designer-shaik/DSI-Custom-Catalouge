@@ -1,0 +1,77 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-06-07 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "image",
+  "is_hero",
+  "rank",
+  "shared_type",
+  "variant_code",
+  "alt_text",
+  "file_name"
+ ],
+ "fields": [
+  {
+   "fieldname": "image",
+   "fieldtype": "Attach Image",
+   "in_list_view": 1,
+   "label": "Image",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_hero",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Hero"
+  },
+  {
+   "default": "0",
+   "fieldname": "rank",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Rank"
+  },
+  {
+   "default": "variant",
+   "fieldname": "shared_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Shared Type",
+   "options": "variant\ninclusive\nexclusive"
+  },
+  {
+   "description": "Raw variant code incl. gender (e.g. M, W, LO, 100). Empty for product-level shared images.",
+   "fieldname": "variant_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Variant Code"
+  },
+  {
+   "fieldname": "alt_text",
+   "fieldtype": "Data",
+   "label": "Alt Text"
+  },
+  {
+   "fieldname": "file_name",
+   "fieldtype": "Data",
+   "label": "File Name"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-07 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "dsi_catalogue",
+ "name": "Website Item Gallery Image",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
