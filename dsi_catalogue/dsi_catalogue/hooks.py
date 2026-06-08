@@ -24,6 +24,9 @@ doc_events = {
         # Precompute decoded index-key fields (palace/range/product/slugs/grouping/
         # sibling) so the website reads columns instead of decoding 500 items per page.
         "validate": "dsi_catalogue.api.website_item_precompute",
+        # On-demand storefront cache invalidation (no-op unless website_revalidate_url
+        # + website_revalidate_secret are set in site_config).
+        "on_update": "dsi_catalogue.api.notify_revalidate",
     }
 }
 

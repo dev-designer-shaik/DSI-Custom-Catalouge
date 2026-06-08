@@ -128,48 +128,45 @@ def get_shop_listing(palace=None):
     items = frappe.get_all(
         "Website Item", filters=filters,
         fields=["item_code", "web_item_name", "website_image", "website_image_alt",
-                "custom_index_key", "custom_palace_code", "custom_palace_slug",
+                "short_description", "custom_index_key", "custom_palace_code", "custom_palace_slug",
                 "custom_range_code", "custom_range_slug", "custom_product_slug",
-                "custom_grouping_key", "custom_selectable_variant_codes"],
+                "custom_grouping_key"],
         order_by="custom_palace_slug, custom_grouping_key",
     )
     items = [i for i in items if not re.search(r"-RF[-}]", i.get("custom_index_key") or "")]
     codes = [i.item_code for i in items if i.get("item_code")]
     prices = _prices_for(codes)
 
+    # Emit the website's exact ShopProduct shape so the client maps 1:1 (no re-decode).
     cards = []
     for it in items:
         d = ik.decode_index_key(it.get("custom_index_key") or "")
+        if not d:
+            continue
         p = prices.get(it.item_code, {})
-        tags = []
-        if d:
-            tags.append(d["palace"]["code"])
-            if d["range"]:
-                tags.append(d["range"]["code"])
-            tags.extend(d["variants"])
-            mat = ik.get_accessory_material_code(d["productCode"])
-            if mat:
-                tags.append(mat)
-        try:
-            vcodes = json.loads(it.get("custom_selectable_variant_codes") or "[]")
-        except (ValueError, TypeError):
-            vcodes = []
+        variants = d["variants"]
+        has_variants = len(variants) > 0
+        mat = ik.get_accessory_material_code(d["productCode"])
         cards.append({
             "itemCode": it.item_code,
             "name": it.get("web_item_name"),
+            "slug": it.get("custom_product_slug") or ik.generate_product_slug(d),
             "image": it.get("website_image") or "",
             "imageAlt": it.get("website_image_alt") or "",
-            "indexKey": it.get("custom_index_key"),
-            "palace": it.get("custom_palace_slug"),
-            "palaceCode": it.get("custom_palace_code"),
-            "range": it.get("custom_range_slug"),
-            "rangeCode": it.get("custom_range_code"),
-            "slug": it.get("custom_product_slug"),
+            "palace": it.get("custom_palace_slug") or d["palace"]["slug"],
+            "palaceCode": it.get("custom_palace_code") or d["palace"]["code"],
+            "range": it.get("custom_range_slug") or ((d["range"] or {}).get("slug") or ""),
+            "rangeCode": it.get("custom_range_code") or ((d["range"] or {}).get("code") or ""),
+            "indexKey": it.get("custom_index_key") or "",
             "grouping": it.get("custom_grouping_key"),
+            "shortDescription": it.get("short_description"),
+            "variantCount": 1,
+            "variantDisplay": "-".join(variants) if has_variants else None,
+            "variantName": " ".join(d["variantNames"]) if has_variants else None,
+            "variantCodes": variants if has_variants else None,
+            "filterTags": [mat] if mat else None,
             "price": p.get("price"),
             "currency": p.get("currency", "USD"),
-            "variantCodes": vcodes,
-            "filterTags": tags,
         })
 
     from dsi_catalogue.api import get_shop_filters

@@ -1136,6 +1136,26 @@ def website_item_precompute(doc, method=None):
     frappe.cache().delete_value("dsi_shop_filters")
 
 
+def notify_revalidate(doc, method=None):
+    """doc_event (Website Item on_update): best-effort on-demand cache invalidation on the
+    storefront so a publish reflects immediately instead of after the 300s ISR TTL.
+    No-op unless site_config has website_revalidate_url + website_revalidate_secret."""
+    url = frappe.conf.get("website_revalidate_url")
+    secret = frappe.conf.get("website_revalidate_secret")
+    if not url or not secret:
+        return
+    tags = ["catalogue"]
+    grp = doc.get("custom_grouping_key")
+    if grp:
+        tags.append("product:" + grp)
+    try:
+        requests.post(url, json={"tags": tags},
+                      headers={"Content-Type": "application/json", "x-revalidate-secret": secret},
+                      timeout=5)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "notify_revalidate failed")
+
+
 @frappe.whitelist()
 def backfill_precompute_fields(limit=None):
     """One-off: populate the precompute fields on all published Website Items.
