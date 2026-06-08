@@ -331,3 +331,60 @@ def backward_fill(item_code=None, website_item=None, dry_run=1):
         result["applied"] = True
         result["created_placeholder"] = created
     return result
+
+
+# ----------------------------------------------------------------- reliable-hybrid seed
+@frappe.whitelist()
+def seed_catalogue_from_items(item_codes=None, dry_run=1):
+    """Reliable hybrid: create Product Catalogue entries straight from the Website
+    Item's website_image + custom_index_key, using OUR validated decoder for
+    palace/range — bypassing the opaque n8n path->index_key mapper (which uses crude
+    prefixes and risks mis-keying). One entry per item keyed by its full index_key, so
+    catalogue_images_for_grouping() aggregates the colour/variant heroes into the
+    product gallery. Idempotent (folder_id 'WISEED:<index_key>'). Run forward_fill_media
+    afterwards to populate custom_gallery_images."""
+    from dsi_catalogue import index_key as ik
+    dry_run = int(dry_run)
+    if isinstance(item_codes, str):
+        item_codes = json.loads(item_codes)
+    if not item_codes:
+        # auto: published items that have a website_image but whose grouping has no
+        # Catalogue media yet (the never-synced products)
+        item_codes = []
+        for wi in frappe.get_all("Website Item", filters={"published": 1},
+                                 fields=["item_code", "custom_index_key", "custom_grouping_key", "website_image"]):
+            grp = wi.get("custom_grouping_key") or wi.get("custom_index_key")
+            if grp and wi.get("website_image") and not catalogue_images_for_grouping(grp):
+                item_codes.append(wi["item_code"])
+    created, skipped = [], []
+    for ic in item_codes:
+        wi = frappe.db.get_value("Website Item", {"item_code": ic},
+                                 ["web_item_name", "custom_index_key", "website_image"], as_dict=True)
+        if not wi or not wi.website_image or not wi.custom_index_key:
+            skipped.append(ic)
+            continue
+        folder_id = "WISEED:%s" % wi.custom_index_key
+        if frappe.db.exists("Product Catalogue", folder_id):
+            skipped.append(ic)
+            continue
+        d = ik.decode_index_key(wi.custom_index_key)
+        img = wi.website_image
+        cloud = [{"url": img, "fileName": img.split("/")[-1], "isHero": True,
+                  "sharedType": "variant", "qualityScore": 90, "source": "website_image_seed"}]
+        palace_name = d["palace"]["name"] if d else None
+        range_name = d["range"]["name"] if d and d.get("range") else None
+        folder_path = "/".join([p for p in [palace_name, range_name, wi.web_item_name] if p])
+        created.append({"item": ic, "folder_id": folder_id, "index_key": wi.custom_index_key})
+        if not dry_run:
+            frappe.get_doc({
+                "doctype": "Product Catalogue", "folder_id": folder_id,
+                "folder_path": folder_path or wi.custom_index_key,
+                "index_key": wi.custom_index_key, "display_name": wi.web_item_name,
+                "palace": palace_name, "product_range": range_name,
+                "hero_image": img, "cloudinary_images": json.dumps(cloud),
+                "ai_metadata": json.dumps({"_seeded_from_website_item": True}),
+            }).insert(ignore_permissions=True)
+    if not dry_run:
+        frappe.db.commit()
+    return {"created": len(created), "skipped": len(skipped), "dry_run": bool(dry_run),
+            "items": created}
