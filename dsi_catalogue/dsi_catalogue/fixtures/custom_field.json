@@ -180,5 +180,19 @@
   "insert_after": "custom_gallery_section",
   "no_copy": 1,
   "module": "Dsi Catalogue"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Sales Order-custom_idempotency_key",
+  "dt": "Sales Order",
+  "fieldname": "custom_idempotency_key",
+  "label": "Idempotency Key",
+  "fieldtype": "Data",
+  "insert_after": "order_type",
+  "read_only": 1,
+  "no_copy": 1,
+  "unique": 1,
+  "search_index": 1,
+  "module": "Dsi Catalogue"
  }
 ]

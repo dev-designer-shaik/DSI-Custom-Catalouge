@@ -56,6 +56,7 @@ fixtures = [
             "Website Item-custom_is_template",
             "Website Item-custom_gallery_section",
             "Website Item-custom_gallery_images",
+            "Sales Order-custom_idempotency_key",
         ]]],
     }
 ]
