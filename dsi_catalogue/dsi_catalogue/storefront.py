@@ -28,6 +28,7 @@ _WI_FIELDS = [
     "custom_palace_code", "custom_palace_slug", "custom_range_code", "custom_range_slug",
     "custom_product_code", "custom_product_slug", "custom_variant_slug", "custom_grouping_key",
     "custom_selectable_variant_codes", "custom_sibling_gender_slug", "custom_is_template",
+    "custom_show_website_description",
 ]
 
 
@@ -89,10 +90,13 @@ def get_pdp_bundle(palace=None, slug=None, index_key=None):
     if not grouping:
         return {"grouping": None, "items": [], "gallery": [], "sibling_gender": None, "price_list": PRICE_LIST}
 
-    like = grouping.rstrip("}")
+    # Group membership is custom_grouping_key EQUALITY, never an index-key
+    # prefix. Watches carry their full key as the grouping key, so
+    # {P-AQ-AD2-DS} and {P-AQ-AD2-DSS} are two products — a prefix match on the
+    # index key would swallow the second into the first's bundle (and gallery).
     items = frappe.get_all(
         "Website Item",
-        filters=[["published", "=", 1], ["custom_index_key", "like", like + "%"]],
+        filters=[["published", "=", 1], ["custom_grouping_key", "=", grouping]],
         fields=_WI_FIELDS, order_by="custom_index_key asc",
     )
     codes = [i.item_code for i in items if i.get("item_code")]
@@ -106,6 +110,9 @@ def get_pdp_bundle(palace=None, slug=None, index_key=None):
         it["stock"] = s.get("stock", 0)
         it["available"] = bool(s.get("available", False))
         it["specifications"] = specs.get(it.name, [])
+        if not it.get("custom_show_website_description"):
+            # OFF by default: Website Description only ships to the storefront when opted in.
+            it["web_long_description"] = ""
 
     from dsi_catalogue.api import get_product_gallery
     gallery = get_product_gallery(index_key=grouping).get("gallery_images", [])

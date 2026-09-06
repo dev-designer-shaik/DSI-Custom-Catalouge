@@ -973,12 +973,19 @@ def get_product_images_by_index_key(index_key_prefix=None):
     images = []
     seen_urls = set()
 
-    # 1. Find matching Website Items by index key prefix
+    # 1. Group members by grouping-key equality (callers pass a grouping/template
+    # key). A prefix match would pull a neighbouring product whose key merely
+    # extends this one ({P-AQ-AD2-DS} vs {P-AQ-AD2-DSS}).
+    grouping = (
+        frappe.db.get_value("Website Item", {"custom_index_key": index_key_prefix}, "custom_grouping_key")
+        if index_key_prefix.endswith("}")
+        else None
+    ) or index_key_prefix
     website_items = frappe.get_all(
         "Website Item",
         filters=[
             ["published", "=", 1],
-            ["custom_index_key", "like", f"{like_prefix}%"]
+            ["custom_grouping_key", "=", grouping]
         ],
         fields=["name", "item_code", "web_item_name", "website_image",
                 "slideshow", "custom_index_key"],
@@ -1065,11 +1072,18 @@ def get_product_images_by_index_key(index_key_prefix=None):
                 })
 
     # 4. Also check Product Catalogue if it has data
+    from dsi_catalogue import index_key as _ik
     catalogue_items = frappe.get_all(
         "Product Catalogue",
         filters=[["index_key", "like", f"{like_prefix}%"]],
         fields=["name", "index_key", "cloudinary_images", "hero_image"],
     )
+    # Exact group check: catalogue rows are keyed by stem OR full item key, so
+    # decode each row's own grouping key instead of trusting the LIKE prefix.
+    catalogue_items = [
+        c for c in catalogue_items
+        if (_ik.get_product_grouping_key(c.index_key) or _ik.get_template_index_key(c.index_key) or c.index_key) == grouping
+    ]
     for cat in catalogue_items:
         if cat.hero_image and cat.hero_image not in seen_urls:
             seen_urls.add(cat.hero_image)
@@ -1208,14 +1222,17 @@ def _collect_authored_gallery(grouping):
     """Aggregate custom_gallery_images rows across the template + variant Website
     Items in a grouping, mapped to the website's ProductImage shape. Returns []
     when nothing has been authored (so the caller falls back to the legacy path)."""
-    like_prefix = grouping[:-1] if grouping.endswith("}") else grouping
-    names = frappe.get_all(
+    # Group members by grouping-key equality (see get_pdp_bundle) — an index-key
+    # prefix would pull a neighbouring product whose key extends this grouping
+    # ({P-AQ-AD2-DS} vs {P-AQ-AD2-DSS}).
+    members = frappe.get_all(
         "Website Item",
-        filters=[["published", "=", 1], ["custom_index_key", "like", f"{like_prefix}%"]],
-        pluck="name",
+        filters=[["published", "=", 1], ["custom_grouping_key", "=", grouping]],
+        fields=["name", "item_code"],
     )
     images, seen = [], set()
-    for nm in names:
+    for m in members:
+        nm = m.name
         rows = frappe.get_all(
             "Website Item Gallery Image",
             filters={"parent": nm, "parentfield": "custom_gallery_images"},
@@ -1234,6 +1251,9 @@ def _collect_authored_gallery(grouping):
                 "url": url,
                 "alt": r.get("alt_text") or fname,
                 "fileName": fname,
+                # Attribution so the storefront can attribute images to items
+                # and contain any future grouping slip to one product.
+                "itemCode": m.item_code,
                 "sharedType": r.get("shared_type") or "variant",
                 "variantCode": r.get("variant_code") or "",
                 "isHero": bool(r.get("is_hero")),
