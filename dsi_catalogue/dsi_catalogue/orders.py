@@ -244,7 +244,6 @@ def _validate_so_passthrough(so):
     so["doctype"] = "Sales Order"
 
 
-@frappe.whitelist()
 def _record_payment(so, payment):
     """Post the captured Tap charge as a submitted Payment Entry against the SO.
 
@@ -292,6 +291,7 @@ def _record_payment(so, payment):
         return None
 
 
+@frappe.whitelist()
 def create_order_atomic(payload=None):
     """One transactional, idempotent order — parity with the website's legacy
     multi-call path (see module docstring). Returns
