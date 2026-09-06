@@ -1,5 +1,21 @@
 import frappe
 import json
+def _pipeline_authorized() -> bool:
+    """Gate for machine-to-machine endpoints exposed to guests.
+    
+    Passes for any authenticated Frappe user (the storefront authenticates
+    with token auth, n8n sends basic auth) or for the shared pipeline token
+    sent as the X-DSI-Token header (site_config: dsi_pipeline_token).
+    Anonymous guests are refused. Guards the catalogue WRITE endpoints so
+    an unauthenticated caller can no longer overwrite product copy.
+    """
+    import hmac as _hmac
+    
+    if frappe.session and frappe.session.user and frappe.session.user != "Guest":
+        return True
+    supplied = frappe.get_request_header("X-DSI-Token", "")
+    expected = (frappe.conf or {}).get("dsi_pipeline_token") or ""
+    return bool(supplied and expected and _hmac.compare_digest(supplied, expected))
 import re
 import requests
 import uuid
@@ -359,6 +375,8 @@ def sync_product_catalogue(folder_tree, synced_at, clear_existing=False):
         clear_existing: If True, completely clears the Product Catalogue table before syncing
                        This ensures a clean overwrite with no stale entries
     """
+    if not _pipeline_authorized():
+        frappe.throw("Pipeline token required", frappe.AuthenticationError)
     # Convert ISO datetime to MySQL format
     from frappe.utils import get_datetime
     synced_at = get_datetime(synced_at).strftime("%Y-%m-%d %H:%M:%S") if synced_at else None
@@ -420,6 +438,8 @@ def sync_product_catalogue(folder_tree, synced_at, clear_existing=False):
 @frappe.whitelist(allow_guest=True)
 def receive_publish_callback(item_code, content, status="success", folder_id=None, images=None, item_group_data=None, seo_data=None):
     """Receive callback from n8n after content generation - creates or updates Website Item"""
+    if not _pipeline_authorized():
+        frappe.throw("Pipeline token required", frappe.AuthenticationError)
     content = json.loads(content) if isinstance(content, str) else content
     images = json.loads(images) if isinstance(images, str) else (images or [])
     item_group_data = json.loads(item_group_data) if isinstance(item_group_data, str) else (item_group_data or {})
@@ -649,6 +669,8 @@ def get_generation_status(task_id):
 @frappe.whitelist(allow_guest=True)
 def receive_generation_callback(task_id, content, images=None, seo_data=None, item_group_data=None, status="success", error=None):
     """Receive generated content from n8n - store for preview, don't create item"""
+    if not _pipeline_authorized():
+        frappe.throw("Pipeline token required", frappe.AuthenticationError)
     # Parse JSON strings
     content = json.loads(content) if isinstance(content, str) else content
     images = json.loads(images) if isinstance(images, str) else (images or [])
@@ -779,6 +801,8 @@ def get_general_description_for_product(template_key):
     Returns:
         dict with general_description or None
     """
+    if not _pipeline_authorized():
+        frappe.throw("Pipeline token required", frappe.AuthenticationError)
     if not template_key:
         return {"general_description": None}
 
@@ -1072,7 +1096,6 @@ def get_product_images_by_index_key(index_key_prefix=None):
                 })
 
     # 4. Also check Product Catalogue if it has data
-    from dsi_catalogue import index_key as _ik
     catalogue_items = frappe.get_all(
         "Product Catalogue",
         filters=[["index_key", "like", f"{like_prefix}%"]],
@@ -1080,6 +1103,7 @@ def get_product_images_by_index_key(index_key_prefix=None):
     )
     # Exact group check: catalogue rows are keyed by stem OR full item key, so
     # decode each row's own grouping key instead of trusting the LIKE prefix.
+    from dsi_catalogue import index_key as _ik
     catalogue_items = [
         c for c in catalogue_items
         if (_ik.get_product_grouping_key(c.index_key) or _ik.get_template_index_key(c.index_key) or c.index_key) == grouping
