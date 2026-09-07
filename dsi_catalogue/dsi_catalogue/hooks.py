@@ -39,6 +39,28 @@ fixtures = [
     # Precompute custom fields on Website Item (decoded index-key columns).
     # Scoped to exactly our fields so re-export never touches custom_index_key etc.
     {
+        # Lead custom fields for the web-leads sync (abandoned carts +
+        # inquiries land as Leads; see dsi_catalogue/leads.py).
+        "dt": "Custom Field",
+        "filters": [["name", "in", [
+            "Lead-data_source",
+            "Lead-cart_value",
+            "Lead-cart_items_json",
+            "Lead-cart_item_count",
+            "Lead-cart_first_added",
+            "Lead-cart_last_activity",
+            "Lead-typed_address_json",
+            "Lead-website_user_id",
+            "Lead-guest_session_id",
+            "Lead-recovery_token",
+            "Lead-recovered",
+            "Lead-recovered_order",
+            "Lead-linked_customer",
+            "Lead-marketing_consent",
+            "Lead-inquiry_message",
+        ]]],
+    },
+    {
         "dt": "Custom Field",
         "filters": [["name", "in", [
             "Website Item-custom_decoded_section",
