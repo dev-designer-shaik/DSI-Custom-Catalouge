@@ -26,6 +26,7 @@ Payload v2:
 """
 import frappe
 import json
+import re
 
 PRICE_LIST = "USD - Online"
 DEFAULT_COMPANY = "DESIGNER SHAIK INC. WLL"
@@ -52,23 +53,37 @@ def _valid_link(doctype, preferred, leaf=None):
 
 
 def _find_customer_by_email(email):
-    """Port of the website's findCustomerByEmail (orders.ts:219-250): email → Contact
-    (via the Contact Email child) → Dynamic Link → Customer. This is the lookup that
-    finds legacy customers whose email lives only on the Contact, which a plain
-    Customer.email_id query would miss."""
+    """Port of the website's findCustomerByEmail (lib/erpnext/orders.ts): email →
+    Contact (via the Contact Email child) → Dynamic Link → Customer. This is the
+    lookup that finds legacy customers whose email lives only on the Contact,
+    which a plain Customer.email_id query would miss.
+
+    It answers ONLY when the chain is unambiguous. The old form took `limit 1`
+    with no ordering, so an email carried by several offline-entered Contacts
+    resolved to whichever row MySQL happened to return — that is how a website
+    account came to be filed under an unrelated imported Customer. An ambiguous
+    match now returns None and the caller creates a fresh Customer: a duplicate
+    customer is a bookkeeping annoyance, the wrong customer is someone else's
+    order."""
     if not email:
         return None
     rows = frappe.db.sql(
-        """select dl.link_name
+        """select distinct dl.link_name
            from `tabDynamic Link` dl
            join `tabContact Email` ce on ce.parent = dl.parent and ce.parenttype = 'Contact'
            where dl.parenttype = 'Contact' and dl.link_doctype = 'Customer'
              and lower(ce.email_id) = lower(%(email)s)
-           limit 1""",
+           limit 10""",
         {"email": email},
     )
-    if rows and frappe.db.exists("Customer", rows[0][0]):
-        return rows[0][0]
+    matches = [r[0] for r in (rows or []) if r[0] and frappe.db.exists("Customer", r[0])]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        frappe.logger().warning(
+            "create_order_atomic: {0} resolves to {1} customers ({2}) — refusing to "
+            "guess an identity".format(email, len(matches), ", ".join(matches))
+        )
     return None
 
 
@@ -175,10 +190,86 @@ def _ensure_country(country_input):
     return like or aliased
 
 
-def _resolve_address(customer, addr, addr_type, email=None, phone=None):
-    """Port of ensureAddressExists (orders.ts:689-778): dedupe by
-    address_title '{customer} - {type}' + Customer link; UPDATE on match; Billing sets
-    is_primary_address, Shipping sets is_shipping_address."""
+# The informal country spellings this pipeline actually receives, folded onto one
+# form. Paired with COUNTRY_SYNONYMS in lib/erpnext/address-identity.ts — a country
+# that disagreed between the two would split one address into two documents, which
+# is the bug this whole mechanism exists to stop.
+COUNTRY_SYNONYMS = {
+    "uae": "united arab emirates",
+    "ae": "united arab emirates",
+    "ksa": "saudi arabia",
+    "sa": "saudi arabia",
+    "usa": "united states",
+    "us": "united states",
+    "uk": "united kingdom",
+    "gb": "united kingdom",
+    "bh": "bahrain",
+    "kw": "kuwait",
+    "kwt": "kuwait",
+    "om": "oman",
+    "qa": "qatar",
+    "in": "india",
+}
+
+
+def _norm(value):
+    """Paired with norm() in lib/erpnext/address-identity.ts. Change both or neither."""
+    text = (value if value is not None else "")
+    if not isinstance(text, str):
+        text = str(text)
+    text = re.sub(r"[^a-z0-9؀-ۿ]+", " ", text.lower(), flags=re.UNICODE)
+    return " ".join(text.split())
+
+
+def _normalize_address_key(a):
+    """The address fingerprint. Deliberately excludes `state` (some writers send it,
+    some don't) and every label-ish field, so one physical address hashes the same
+    however it arrived. Paired with normalizeAddressKey in address-identity.ts."""
+    country = _norm(a.get("country"))
+    return "|".join([
+        _norm(a.get("address_line1")),
+        _norm(a.get("address_line2")),
+        _norm(a.get("city")),
+        _norm(a.get("pincode")),
+        COUNTRY_SYNONYMS.get(country, country),
+    ])
+
+
+def _list_customer_addresses(customer):
+    """Every Address linked to this customer, disabled ones included — a soft-deleted
+    match should be revived, not duplicated. Ordered oldest-first so the survivor of a
+    historical duplicate pair is stable."""
+    return frappe.db.sql(
+        """select da.name, da.address_line1, da.address_line2, da.city, da.state,
+                  da.country, da.pincode, da.is_primary_address, da.is_shipping_address,
+                  da.disabled
+           from `tabDynamic Link` dl
+           join `tabAddress` da on da.name = dl.parent
+           where dl.parenttype = 'Address' and dl.link_doctype = 'Customer'
+             and dl.link_name = %(customer)s
+           order by da.creation asc
+           limit 100""",
+        {"customer": customer},
+        as_dict=True,
+    ) or []
+
+
+def _resolve_address(customer, addr, addr_type, email=None, phone=None, rows=None):
+    """One Address document per physical address, per customer. Billing and Shipping
+    are FLAGS on that one document, not two documents — a Sales Order may point
+    `customer_address` and `shipping_address_name` at the same doc, and the website's
+    readers already select on the flags.
+
+    Identity is the ERP docname the caller sent (scoped to this customer's own links,
+    which doubles as the ownership check), then the content fingerprint. The old form
+    deduped on an invented `address_title` of '{customer} - {type}', so the Billing
+    call and the Shipping call could never match each other and one address became two
+    documents in the same second. `address_title` is now a label and never decides
+    identity.
+
+    `rows` is a working set: pass the same list to the Billing and Shipping calls and
+    the second sees what the first created. Paired with upsertCustomerAddress in
+    lib/erpnext/address-identity.ts."""
     if not addr:
         return None
     line1 = addr.get("line1") or addr.get("address_line1") or addr.get("address") or ""
@@ -189,40 +280,87 @@ def _resolve_address(customer, addr, addr_type, email=None, phone=None):
     country = _ensure_country(
         addr.get("countryCode") or addr.get("country_code") or addr.get("country") or "AE"
     )
-    address_title = "{0} - {1}".format(customer, addr_type)
     values = {
-        "address_title": address_title,
-        "address_type": addr_type,
         "address_line1": line1,
         "address_line2": line2 or "",
         "city": city,
         "state": state or "",
         "country": country,
         "pincode": pincode or "",
-        "is_primary_address": 1 if addr_type == "Billing" else 0,
-        "is_shipping_address": 1 if addr_type == "Shipping" else 0,
         "email_id": email or "",
         "phone": phone or "",
     }
-    existing = frappe.db.sql(
-        """select dl.parent from `tabDynamic Link` dl
-           join `tabAddress` da on da.name = dl.parent
-           where dl.parenttype = 'Address' and dl.link_doctype = 'Customer'
-             and dl.link_name = %(customer)s and da.address_title = %(title)s
-           limit 1""",
-        {"customer": customer, "title": address_title},
-    )
+
+    if rows is None:
+        rows = _list_customer_addresses(customer)
+
+    wanted_name = addr.get("name") or addr.get("address_name")
+    existing = None
+    if wanted_name:
+        existing = next((r for r in rows if r.get("name") == wanted_name), None)
+        if not existing:
+            frappe.logger().warning(
+                "create_order_atomic: address {0} is not linked to {1} — falling back "
+                "to a content match".format(wanted_name, customer)
+            )
+    if not existing:
+        key = _normalize_address_key(values)
+        # An all-empty fingerprint must never match anything.
+        if key.replace("|", "").strip():
+            matches = [r for r in rows if _normalize_address_key(r) == key]
+            existing = next((r for r in matches if not r.get("disabled")), None) or (
+                matches[0] if matches else None)
+
+    want_billing = addr_type == "Billing"
+    want_shipping = addr_type == "Shipping"
+
     if existing:
-        doc = frappe.get_doc("Address", existing[0][0])
+        # OR the roles: a document serving both is the whole point. Forcing the other
+        # flag off is what made a saved billing address stop being offered for
+        # shipping the moment an order touched it.
+        is_billing = 1 if (want_billing or existing.get("is_primary_address")) else 0
+        is_shipping = 1 if (want_shipping or existing.get("is_shipping_address")) else 0
+        doc = frappe.get_doc("Address", existing["name"])
         doc.update(values)
+        # address_title is left alone — it is a label, and rewriting it churns the doc.
+        doc.is_primary_address = is_billing
+        doc.is_shipping_address = is_shipping
+        doc.disabled = 0
         doc.save(ignore_permissions=True)
+
+        # Keep the working set truthful for the follow-up call in this request.
+        existing.update(values)
+        existing["is_primary_address"] = is_billing
+        existing["is_shipping_address"] = is_shipping
+        existing["disabled"] = 0
         return doc.name
+
+    title = ", ".join([p for p in [line1, city] if p]).strip() or customer
     values.update({
         "doctype": "Address",
+        # A label, nothing more. Frappe appends -1/-2 on collision, which is fine now
+        # that nothing reads the title to decide identity.
+        "address_title": title,
+        "address_type": addr_type,
+        "is_primary_address": 1 if want_billing else 0,
+        "is_shipping_address": 1 if want_shipping else 0,
         "links": [{"link_doctype": "Customer", "link_name": customer}],
     })
     doc = frappe.get_doc(values)
     doc.insert(ignore_permissions=True)
+
+    rows.append({
+        "name": doc.name,
+        "address_line1": line1,
+        "address_line2": line2 or "",
+        "city": city,
+        "state": state or "",
+        "country": country,
+        "pincode": pincode or "",
+        "is_primary_address": 1 if want_billing else 0,
+        "is_shipping_address": 1 if want_shipping else 0,
+        "disabled": 0,
+    })
     return doc.name
 
 
@@ -326,9 +464,17 @@ def create_order_atomic(payload=None):
         customer, customer_created = _resolve_customer(
             email, payload.get("customer_name") or email, phone)
     contact = _resolve_contact(customer, payload.get("contact") or {}, email, phone)
-    billing = _resolve_address(customer, payload.get("billing_address") or {}, "Billing", email, phone)
+    # One shared working set, so the shipping call sees the document the billing call
+    # just created or updated. When both addresses are the same physical place they
+    # converge on one document carrying both role flags — instead of the pair of
+    # '{customer} - Billing' / '{customer} - Shipping' records this used to mint on
+    # every single order.
+    address_rows = _list_customer_addresses(customer)
+    billing = _resolve_address(customer, payload.get("billing_address") or {},
+                               "Billing", email, phone, rows=address_rows)
     shipping = _resolve_address(customer, payload.get("shipping_address")
-                                or payload.get("billing_address") or {}, "Shipping", email, phone)
+                                or payload.get("billing_address") or {},
+                                "Shipping", email, phone, rows=address_rows)
 
     _validate_so_passthrough(so_payload)
     so_payload["customer"] = customer
