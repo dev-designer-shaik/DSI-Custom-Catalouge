@@ -1,6 +1,8 @@
 import json
 
 import frappe
+from dsi_core.errors import N8NError
+from dsi_core.n8n import post_sync
 
 
 def _pipeline_authorized() -> bool:
@@ -12,19 +14,20 @@ def _pipeline_authorized() -> bool:
 	Anonymous guests are refused. Guards the catalogue WRITE endpoints so
 	an unauthenticated caller can no longer overwrite product copy.
 	"""
-	import hmac as _hmac
-
 	if frappe.session and frappe.session.user and frappe.session.user != "Guest":
 		return True
-	supplied = frappe.get_request_header("X-DSI-Token", "")
-	expected = (frappe.conf or {}).get("dsi_pipeline_token") or ""
-	return bool(supplied and expected and _hmac.compare_digest(supplied, expected))
+
+	# Pure, hermetically-pinned comparison in dsi_catalogue.auth
+	from dsi_catalogue.auth import token_matches
+
+	return token_matches(
+		frappe.get_request_header("X-DSI-Token", ""), (frappe.conf or {}).get("dsi_pipeline_token")
+	)
 
 
 import re
 import uuid
 
-import requests
 from frappe import _
 
 # Cache keys for generation tasks
@@ -79,7 +82,7 @@ def create_file_for_external_url(url, doctype=None, docname=None, filename=None)
 		frappe.db.commit()
 		return url
 	except Exception as e:
-		frappe.log_error(f"Error creating file record for URL {url}: {e!s}")
+		frappe.log_error(f"{url}: {e!s}", "dsi_catalogue file record creation failed")
 		return url  # Return the URL anyway, it might still work
 
 
@@ -272,15 +275,14 @@ def create_website_route_meta(route, seo_data):
 def publish_to_website(folder_id, item_code, generate_content=True):
 	"""Trigger n8n workflow and create Website Item"""
 	catalogue = frappe.get_doc("Product Catalogue", folder_id)
-	# n8n webhook base URL (without path)
-	n8n_base_url = frappe.conf.get("n8n_webhook_url", "https://shaikh.world/webhook")
 
 	try:
 		if generate_content:
-			# Trigger n8n webhook
-			response = requests.post(
-				f"{n8n_base_url}/erp-publish-product",
-				json={
+			# Request-response: we NEED n8n's answer (task id or content).
+			# post_sync raises typed errors — no silent wrong-box default.
+			response = post_sync(
+				"erp-publish-product",
+				{
 					"folder_id": folder_id,
 					"folder_path": catalogue.folder_path,
 					"item_code": item_code,
@@ -289,7 +291,7 @@ def publish_to_website(folder_id, item_code, generate_content=True):
 				},
 				timeout=120,
 			)
-			result = response.json()
+			result = response.json if isinstance(response.json, dict) else {}
 			if result.get("status") == "processing":
 				return {
 					"success": True,
@@ -302,8 +304,11 @@ def publish_to_website(folder_id, item_code, generate_content=True):
 
 		# Create/Update Website Item
 		return create_website_item(item_code, catalogue, content)
+	except N8NError as e:
+		frappe.log_error(f"{e}", "dsi_catalogue n8n publish trigger failed")
+		return {"success": False, "error": f"n8n unreachable/rejected: {e}"}
 	except Exception as e:
-		frappe.log_error(f"Error publishing to website: {e!s}")
+		frappe.log_error(frappe.get_traceback(), "dsi_catalogue publish_to_website failed")
 		return {"success": False, "error": str(e)}
 
 
@@ -463,7 +468,9 @@ def receive_publish_callback(
 	seo_data = json.loads(seo_data) if isinstance(seo_data, str) else (seo_data or {})
 
 	if status != "success":
-		frappe.log_error(f"Publish callback failed for {item_code}: {content.get('error', 'Unknown error')}")
+		frappe.log_error(
+			f"{item_code}: {content.get('error', 'Unknown error')}", "dsi_catalogue publish callback failed"
+		)
 		return {"success": False}
 
 	# Get catalogue data if folder_id provided
@@ -625,14 +632,11 @@ def start_content_generation(folder_id, item_code, temperature=0.7):
 		expires_in_sec=GENERATION_CACHE_TTL,
 	)
 
-	# Get n8n webhook URL
-	n8n_base_url = frappe.conf.get("n8n_webhook_url", "https://shaikh.world/webhook")
-
 	try:
-		# Trigger n8n webhook with task_id and temperature
-		response = requests.post(
-			f"{n8n_base_url}/erp-publish-product",
-			json={
+		# Request-response: n8n acks the task id, then calls back with content.
+		post_sync(
+			"erp-publish-product",
+			{
 				"task_id": task_id,
 				"folder_id": folder_id,
 				"folder_path": catalogue.folder_path,
@@ -643,30 +647,21 @@ def start_content_generation(folder_id, item_code, temperature=0.7):
 			},
 			timeout=30,  # Short timeout - n8n will callback
 		)
-		if response.status_code >= 400:
-			# The task row is already cached as "generating"; the poller would
-			# spin until TTL with no signal. Record the measured rejection.
-			frappe.cache.set_value(
-				cache_key,
-				{
-					"status": "error",
-					"error": f"n8n rejected generation trigger: HTTP {response.status_code} {(response.text or '')[:200]}",
-				},
-				expires_in_sec=GENERATION_CACHE_TTL,
-			)
-			frappe.log_error(
-				f"{n8n_base_url}/erp-publish-product -> HTTP {response.status_code}: {(response.text or '')[:500]}",
-				"dsi_catalogue n8n generation trigger rejected",
-			)
-			return {"success": False, "error": f"n8n returned HTTP {response.status_code}"}
-
 		return {"success": True, "task_id": task_id, "message": "Content generation started"}
+	except N8NError as e:
+		# The task row is already cached as "generating"; the poller would spin
+		# until TTL with no signal. Record the measured rejection (typed kind).
+		frappe.cache.set_value(
+			cache_key,
+			{"status": "error", "error": f"generation trigger failed: {e}"},
+			expires_in_sec=GENERATION_CACHE_TTL,
+		)
+		frappe.log_error(f"{e}", f"dsi_catalogue n8n generation trigger {e.kind}")
+		return {"success": False, "error": str(e)}
 	except Exception as e:
-		# Update cache with error
 		frappe.cache.set_value(
 			cache_key, {"status": "error", "error": str(e)}, expires_in_sec=GENERATION_CACHE_TTL
 		)
-
 		frappe.log_error(frappe.get_traceback(), "dsi_catalogue n8n generation trigger failed")
 		return {"success": False, "error": str(e)}
 
@@ -827,26 +822,21 @@ def get_general_description_for_product(template_key):
 	if not template_key:
 		return {"general_description": None}
 
-	# Build LIKE pattern: {F-CR-AK% matches {F-CR-AK}, {F-CR-AK-M}, {F-CR-AK-AC}, etc.
-	pattern = template_key.rstrip("}") + "%}"
+	# Group membership is custom_grouping_key EQUALITY, never an index-key
+	# prefix — the sibling bug of b7def79 lived here: {P-AQ-AD2-DS}%
+	# matched {P-AQ-AD2-DSS} and one product's copy answered for another.
+	from dsi_catalogue import index_key as _ik
 
-	result = frappe.db.sql(
-		"""
-        SELECT website_content
-        FROM `tabWebsite Item`
-        WHERE custom_index_key LIKE %s
-        AND website_content IS NOT NULL
-        AND website_content != ''
-        ORDER BY creation ASC
-        LIMIT 1
-    """,
-		pattern,
-		as_dict=True,
+	grouping = (
+		_ik.get_product_grouping_key(template_key) or _ik.get_template_index_key(template_key) or template_key
 	)
-
-	if result:
-		return {"general_description": result[0].get("website_content")}
-	return {"general_description": None}
+	content = frappe.db.get_value(
+		"Website Item",
+		{"custom_grouping_key": grouping, "website_content": ("is", "set")},
+		"website_content",
+		order_by="creation asc",
+	)
+	return {"general_description": content}
 
 
 @frappe.whitelist()
@@ -994,7 +984,7 @@ def publish_website_item(folder_id, item_code, content, images=None, seo_data=No
 		return {"success": True, "website_item": doc.name, "route": doc.route, "created": not existing}
 
 	except Exception as e:
-		frappe.log_error(f"Error publishing website item: {e!s}")
+		frappe.log_error(f"{e!s}", "dsi_catalogue publish_website_item failed")
 		return {"success": False, "error": str(e)}
 
 
@@ -1040,14 +1030,14 @@ def get_product_images_by_index_key(index_key_prefix=None):
 	for idx, wi in enumerate(website_items):
 		index_key = wi.get("custom_index_key") or ""
 
-		# Extract variant code from index key: {F-CR-AK-AC} -> last segment = AC
-		variant_code = ""
-		if index_key:
-			parts = index_key.strip("{}").split("-")
-			# Variant code is everything after the prefix parts
-			prefix_parts = index_key_prefix.strip("{}").split("-")
-			if len(parts) > len(prefix_parts):
-				variant_code = "-".join(parts[len(prefix_parts) :])
+		# Variant code via the decoder, not prefix arithmetic on the CALLER'S
+		# string — the arithmetic re-derives membership from an input we just
+		# stopped trusting (a template key with a trailing "}" stripped one
+		# char at a time drifts the split point).
+		from dsi_catalogue import index_key as _ik
+
+		decoded = _ik.decode_index_key(index_key) if index_key else {}
+		variant_code = "-".join(decoded.get("variants") or [])
 
 		# Add website_image if available
 		if wi.website_image and wi.website_image not in seen_urls:
@@ -1191,12 +1181,6 @@ def get_product_images_by_index_key(index_key_prefix=None):
 	return images
 
 
-@frappe.whitelist(allow_guest=True)
-def get_general_description(template_key=None):
-	"""Alias for get_general_description_for_product (n8n calls this name)."""
-	return get_general_description_for_product(template_key)
-
-
 # =====================================================================
 # P1: server-side decoding + gallery/shop-filter APIs (dsi_catalogue)
 # Reuses the existing get_product_images_by_index_key aggregation; adds
@@ -1223,23 +1207,23 @@ def website_item_precompute(doc, method=None):
 
 
 def notify_revalidate(doc, method=None):
-	"""doc_event (Website Item on_update): best-effort on-demand cache invalidation on the
-	storefront so a publish reflects immediately instead of after the 300s ISR TTL.
-	No-op unless site_config has website_revalidate_url + website_revalidate_secret."""
-	url = frappe.conf.get("website_revalidate_url")
-	secret = frappe.conf.get("website_revalidate_secret")
-	if not url or not secret:
-		return
+	"""doc_event (Website Item on_update): durable cache invalidation on the
+	storefront so a publish reflects immediately instead of after the 300s ISR
+	TTL. Queued in the dsi_core outbox — a down Netlify/Next instance no longer
+	swallows the invalidation. Dedup key carries the document version: the same
+	save enqueues once, a later save supersedes with a fresh key."""
+	from dsi_core import outbox
+
 	tags = ["catalogue"]
 	grp = doc.get("custom_grouping_key")
 	if grp:
 		tags.append("product:" + grp)
 	try:
-		requests.post(
-			url,
-			json={"tags": tags},
-			headers={"Content-Type": "application/json", "x-revalidate-secret": secret},
-			timeout=5,
+		outbox.enqueue(
+			"website-revalidate",
+			{"tags": tags},
+			dedup_key=f"revalidate|{doc.name}|{doc.modified}"[:140],
+			source=("Website Item", doc.name),
 		)
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "notify_revalidate failed")

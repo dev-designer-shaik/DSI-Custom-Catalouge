@@ -443,7 +443,7 @@ def _record_payment(so, payment):
 		return pe.name
 	except Exception:
 		frappe.db.rollback(save_point="tap_payment_entry")
-		frappe.log_error(frappe.get_traceback(), f"create_order_atomic: Payment Entry failed for {so.name}")
+		frappe.log_error(f"{so.name}: {frappe.get_traceback()}", "create_order_atomic: Payment Entry failed")
 		frappe.get_doc(
 			{
 				"doctype": "Comment",

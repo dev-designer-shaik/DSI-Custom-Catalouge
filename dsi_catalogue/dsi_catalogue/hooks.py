@@ -5,6 +5,12 @@ app_description = "Manage product catalogue sync and website publishing"
 app_email = "dev@designershaik.com"
 app_license = "MIT"
 
+# Shared plumbing (outbox, config contract, patrol, health).
+required_apps = ["dsi_core"]
+
+# dsi_core validates this schema at migrate + hourly + first read.
+dsi_core_config_schema = "dsi_catalogue.config_schema.SCHEMA"
+
 # Include JS/CSS globally
 app_include_js = "/assets/dsi_catalogue/js/item_publish.js"
 app_include_css = "/assets/dsi_catalogue/css/publish_modal.css"

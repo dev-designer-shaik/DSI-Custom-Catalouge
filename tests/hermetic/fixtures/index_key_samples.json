@@ -1,0 +1,128 @@
+[
+ {
+  "key": "{F-PR-ODA-LSS}",
+  "decoded": {
+   "palace": {
+    "code": "F",
+    "name": "Palace-of-Fragrances",
+    "slug": "fragrance",
+    "displayName": "Fragrances"
+   },
+   "range": {
+    "code": "PR",
+    "name": "PRECIOUS RANGE",
+    "slug": "precious"
+   },
+   "productCode": "ODA-LSS",
+   "variants": [],
+   "isTemplate": true
+  },
+  "grouping_key": "{F-PR-ODA-LSS}"
+ },
+ {
+  "key": "{F-CR-AK}",
+  "decoded": {
+   "palace": {
+    "code": "F",
+    "name": "Palace-of-Fragrances",
+    "slug": "fragrance",
+    "displayName": "Fragrances"
+   },
+   "range": {
+    "code": "CR",
+    "name": "CLASSIC RANGE",
+    "slug": "classic"
+   },
+   "productCode": "AK",
+   "variants": [],
+   "isTemplate": true
+  },
+  "grouping_key": "{F-CR-AK}"
+ },
+ {
+  "key": "{P-AQ-AD2-DS}",
+  "decoded": {
+   "palace": {
+    "code": "P",
+    "name": "Palace-of-Precision",
+    "slug": "precision",
+    "displayName": "Precision"
+   },
+   "range": {
+    "code": "AQ",
+    "name": "Astro Quartz",
+    "slug": "astro-quartz"
+   },
+   "productCode": "AD2",
+   "variants": [
+    "DS"
+   ],
+   "isTemplate": false
+  },
+  "grouping_key": "{P-AQ-AD2-DS}"
+ },
+ {
+  "key": "{P-AQ-AD2-DSS}",
+  "decoded": {
+   "palace": {
+    "code": "P",
+    "name": "Palace-of-Precision",
+    "slug": "precision",
+    "displayName": "Precision"
+   },
+   "range": {
+    "code": "AQ",
+    "name": "Astro Quartz",
+    "slug": "astro-quartz"
+   },
+   "productCode": "AD2",
+   "variants": [
+    "DSS"
+   ],
+   "isTemplate": false
+  },
+  "grouping_key": "{P-AQ-AD2-DSS}"
+ },
+ {
+  "key": "{S-CL-BLT-M-40}",
+  "decoded": {
+   "palace": {
+    "code": "S",
+    "name": "Palace-of-Style",
+    "slug": "style",
+    "displayName": "Style"
+   },
+   "range": null,
+   "productCode": "CL",
+   "variants": [
+    "BLT",
+    "M",
+    "40"
+   ],
+   "isTemplate": false
+  },
+  "grouping_key": "{S-CL}"
+ },
+ {
+  "key": "{F-PR-ODA-LSS-RF}",
+  "decoded": {
+   "palace": {
+    "code": "F",
+    "name": "Palace-of-Fragrances",
+    "slug": "fragrance",
+    "displayName": "Fragrances"
+   },
+   "range": {
+    "code": "PR",
+    "name": "PRECIOUS RANGE",
+    "slug": "precious"
+   },
+   "productCode": "ODA-LSS",
+   "variants": [
+    "RF"
+   ],
+   "isTemplate": false
+  },
+  "grouping_key": "{F-PR-ODA-LSS}"
+ }
+]

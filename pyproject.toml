@@ -47,3 +47,9 @@ typing-modules = ["frappe.types.DF"]
 quote-style = "double"
 indent-style = "tab"
 docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests/hermetic"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/hermetic/*" = ["RUF059"]
