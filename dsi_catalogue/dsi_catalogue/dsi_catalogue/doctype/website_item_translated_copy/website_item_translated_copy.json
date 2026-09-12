@@ -1,0 +1,158 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-29 09:20:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "language",
+  "review_status",
+  "source",
+  "col_meta",
+  "is_stale",
+  "base_en_fingerprint",
+  "sec_copy",
+  "web_item_name",
+  "website_image_alt",
+  "website_content",
+  "short_description",
+  "web_long_description",
+  "care_instructions",
+  "item_format",
+  "sec_specs",
+  "specifications_json",
+  "sec_seo",
+  "seo_title",
+  "seo_description",
+  "seo_keywords"
+ ],
+ "fields": [
+  {
+   "fieldname": "language",
+   "fieldtype": "Select",
+   "label": "Language",
+   "options": "ar\nes\nfr\nru",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "review_status",
+   "fieldtype": "Select",
+   "label": "Review Status",
+   "options": "Machine (unreviewed)\nReviewed\nApproved",
+   "default": "Machine (unreviewed)",
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "label": "Source",
+   "options": "Human\nMachine\nImported",
+   "default": "Human"
+  },
+  {
+   "fieldname": "col_meta",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "is_stale",
+   "fieldtype": "Check",
+   "label": "English Has Changed Since",
+   "read_only": 1
+  },
+  {
+   "fieldname": "base_en_fingerprint",
+   "fieldtype": "Data",
+   "label": "Authored Against (fingerprint)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_copy",
+   "fieldtype": "Section Break",
+   "label": "Page Copy"
+  },
+  {
+   "fieldname": "web_item_name",
+   "fieldtype": "Data",
+   "label": "Website Item Name"
+  },
+  {
+   "fieldname": "website_image_alt",
+   "fieldtype": "Data",
+   "label": "Image Description"
+  },
+  {
+   "fieldname": "website_content",
+   "fieldtype": "HTML Editor",
+   "label": "Website Content (main)"
+  },
+  {
+   "fieldname": "short_description",
+   "fieldtype": "Text Editor",
+   "label": "Product Details (this variant)"
+  },
+  {
+   "fieldname": "web_long_description",
+   "fieldtype": "Text Editor",
+   "label": "Website Description"
+  },
+  {
+   "fieldname": "care_instructions",
+   "fieldtype": "Text Editor",
+   "label": "Care Instructions"
+  },
+  {
+   "fieldname": "item_format",
+   "fieldtype": "Data",
+   "label": "Format"
+  },
+  {
+   "fieldname": "sec_specs",
+   "fieldtype": "Section Break",
+   "label": "Specifications"
+  },
+  {
+   "fieldname": "specifications_json",
+   "fieldtype": "Long Text",
+   "label": "Specifications (JSON)",
+   "hidden": 1,
+   "description": "[{\"idx\":1,\"label\":\"...\",\"description\":\"...\"}] - written by the translation editor, never by hand."
+  },
+  {
+   "fieldname": "sec_seo",
+   "fieldtype": "Section Break",
+   "label": "Search and SEO"
+  },
+  {
+   "fieldname": "seo_title",
+   "fieldtype": "Data",
+   "label": "SEO Title"
+  },
+  {
+   "fieldname": "seo_description",
+   "fieldtype": "Small Text",
+   "label": "SEO Meta Description"
+  },
+  {
+   "fieldname": "seo_keywords",
+   "fieldtype": "Small Text",
+   "label": "SEO Keywords"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-29 09:20:00.000000",
+ "modified_by": "Administrator",
+ "module": "DSI Catalogue",
+ "name": "Website Item Translated Copy",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

@@ -11,7 +11,11 @@ app_include_css = "/assets/dsi_catalogue/css/publish_modal.css"
 
 # DocType JS - This is important for form scripts
 doctype_js = {
-    "Item": "public/js/item_publish.js"
+    "Item": "public/js/item_publish.js",
+    # In-place language switching on the Website Item form. Lives in app code
+    # (not a Client Script record) so it survives a rebuild, matching the
+    # doctype it drives.
+    "Website Item": "public/js/website_item_i18n.js"
 }
 
 # Whitelisted methods for API
@@ -21,12 +25,33 @@ doctype_js = {
 # ---------------
 doc_events = {
     "Website Item": {
+        # Authored translations (2026-08-29). before_validate is the PRIMARY seat:
+        # run_before_save_methods runs before_validate BEFORE the
+        # flags.ignore_validate early return, so validate/before_save are both
+        # skippable with one flag and this is not. Keeps canonical English English.
+        "before_validate": "dsi_catalogue.website_item_events.i18n_guard",
         # Precompute decoded index-key fields (palace/range/product/slugs/grouping/
         # sibling) so the website reads columns instead of decoding 500 items per page.
         "validate": "dsi_catalogue.api.website_item_precompute",
         # On-demand storefront cache invalidation (no-op unless website_revalidate_url
         # + website_revalidate_secret are set in site_config).
-        "on_update": "dsi_catalogue.api.notify_revalidate",
+        "on_update": [
+            "dsi_catalogue.api.notify_revalidate",
+            # Ported from Server Script "Website Item Variant Content Sync" (After Save), 2026-08-06.
+            "dsi_catalogue.website_item_events.variant_content_sync",
+            # LAST: must observe the sibling saves variant_content_sync just made.
+            "dsi_catalogue.website_item_events.i18n_mark_stale",
+        ],
+        # Ported from Server Scripts (Before Save), 2026-08-06 - see website_item_events.py.
+        "before_save": [
+            # FIRST: catches anything in the validate stage that touched a
+            # protected field. Must precede publish_gate so the publish decision
+            # is taken against the restored doc, and precede gallery_gender_stamp
+            # because that hook swallows its own exceptions.
+            "dsi_catalogue.website_item_events.i18n_guard_assert",
+            "dsi_catalogue.website_item_events.publish_gate",
+            "dsi_catalogue.website_item_events.gallery_gender_stamp",
+        ],
     }
 }
 
@@ -36,8 +61,6 @@ doc_events = {
 # Fixtures
 # --------
 fixtures = [
-    # Precompute custom fields on Website Item (decoded index-key columns).
-    # Scoped to exactly our fields so re-export never touches custom_index_key etc.
     {
         # Lead custom fields for the web-leads sync (abandoned carts +
         # inquiries land as Leads; see dsi_catalogue/leads.py).
@@ -60,6 +83,8 @@ fixtures = [
             "Lead-inquiry_message",
         ]]],
     },
+    # Precompute custom fields on Website Item (decoded index-key columns).
+    # Scoped to exactly our fields so re-export never touches custom_index_key etc.
     {
         "dt": "Custom Field",
         "filters": [["name", "in", [
