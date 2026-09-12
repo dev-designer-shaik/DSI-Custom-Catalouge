@@ -13,168 +13,219 @@ a pre-joined bundle.
 
 All reads, guest-allowed, idempotent.
 """
-import frappe
+
 import json
 import re
+
+import frappe
 
 from dsi_catalogue import index_key as ik
 
 PRICE_LIST = "USD - Online"
 
 _WI_FIELDS = [
-    "name", "item_code", "item_name", "web_item_name", "website_image", "website_image_alt",
-    "short_description", "web_long_description", "item_group", "route", "slideshow",
-    "website_content", "custom_index_key", "custom_repository_path",
-    "custom_palace_code", "custom_palace_slug", "custom_range_code", "custom_range_slug",
-    "custom_product_code", "custom_product_slug", "custom_variant_slug", "custom_grouping_key",
-    "custom_selectable_variant_codes", "custom_sibling_gender_slug", "custom_is_template",
-    "custom_show_website_description",
+	"name",
+	"item_code",
+	"item_name",
+	"web_item_name",
+	"website_image",
+	"website_image_alt",
+	"short_description",
+	"web_long_description",
+	"item_group",
+	"route",
+	"slideshow",
+	"website_content",
+	"custom_index_key",
+	"custom_repository_path",
+	"custom_palace_code",
+	"custom_palace_slug",
+	"custom_range_code",
+	"custom_range_slug",
+	"custom_product_code",
+	"custom_product_slug",
+	"custom_variant_slug",
+	"custom_grouping_key",
+	"custom_selectable_variant_codes",
+	"custom_sibling_gender_slug",
+	"custom_is_template",
+	"custom_show_website_description",
 ]
 
 
 # ----------------------------------------------------------------- batched lookups
 def _prices_for(item_codes):
-    if not item_codes:
-        return {}
-    rows = frappe.get_all(
-        "Item Price",
-        filters=[["item_code", "in", item_codes], ["selling", "=", 1], ["price_list", "=", PRICE_LIST]],
-        fields=["item_code", "price_list_rate", "currency"],
-    )
-    out = {}
-    for r in rows:
-        if r.item_code not in out:
-            out[r.item_code] = {"price": r.price_list_rate, "currency": r.currency or "USD"}
-    return out
+	if not item_codes:
+		return {}
+	rows = frappe.get_all(
+		"Item Price",
+		filters=[["item_code", "in", item_codes], ["selling", "=", 1], ["price_list", "=", PRICE_LIST]],
+		fields=["item_code", "price_list_rate", "currency"],
+	)
+	out = {}
+	for r in rows:
+		if r.item_code not in out:
+			out[r.item_code] = {"price": r.price_list_rate, "currency": r.currency or "USD"}
+	return out
 
 
 def _stock_for(item_codes):
-    if not item_codes:
-        return {}
-    rows = frappe.get_all("Bin", filters=[["item_code", "in", item_codes]],
-                          fields=["item_code", "actual_qty"])
-    agg = {}
-    for r in rows:
-        agg[r.item_code] = agg.get(r.item_code, 0) + (r.actual_qty or 0)
-    return {ic: {"stock": q, "available": q > 0} for ic, q in agg.items()}
+	if not item_codes:
+		return {}
+	rows = frappe.get_all(
+		"Bin", filters=[["item_code", "in", item_codes]], fields=["item_code", "actual_qty"]
+	)
+	agg = {}
+	for r in rows:
+		agg[r.item_code] = agg.get(r.item_code, 0) + (r.actual_qty or 0)
+	return {ic: {"stock": q, "available": q > 0} for ic, q in agg.items()}
 
 
 def _specs_for(wi_names):
-    out = {n: [] for n in wi_names}
-    if wi_names:
-        for s in frappe.get_all(
-            "Item Website Specification",
-            filters=[["parent", "in", wi_names]],
-            fields=["parent", "label", "description"], order_by="idx asc",
-        ):
-            out.setdefault(s.parent, []).append({"label": s.label, "value": s.description})
-    return out
+	out = {n: [] for n in wi_names}
+	if wi_names:
+		for s in frappe.get_all(
+			"Item Website Specification",
+			filters=[["parent", "in", wi_names]],
+			fields=["parent", "label", "description"],
+			order_by="idx asc",
+		):
+			out.setdefault(s.parent, []).append({"label": s.label, "value": s.description})
+	return out
 
 
 # ----------------------------------------------------------------- PDP bundle
 @frappe.whitelist(allow_guest=True)
 def get_pdp_bundle(palace=None, slug=None, index_key=None):
-    """One call: every Website Item in the product grouping, each enriched with price,
-    stock, and specifications (all batched), plus the ranked gallery and sibling-gender."""
-    grouping = None
-    if index_key:
-        grouping = ik.get_product_grouping_key(index_key) or ik.get_template_index_key(index_key) or index_key
-    elif palace and slug:
-        cand = frappe.get_all(
-            "Website Item",
-            filters={"published": 1, "custom_palace_slug": palace, "custom_product_slug": slug},
-            fields=["custom_index_key", "custom_grouping_key"], limit_page_length=1,
-        )
-        if cand:
-            grouping = cand[0].get("custom_grouping_key") or cand[0].get("custom_index_key")
-    if not grouping:
-        return {"grouping": None, "items": [], "gallery": [], "sibling_gender": None, "price_list": PRICE_LIST}
+	"""One call: every Website Item in the product grouping, each enriched with price,
+	stock, and specifications (all batched), plus the ranked gallery and sibling-gender."""
+	grouping = None
+	if index_key:
+		grouping = ik.get_product_grouping_key(index_key) or ik.get_template_index_key(index_key) or index_key
+	elif palace and slug:
+		cand = frappe.get_all(
+			"Website Item",
+			filters={"published": 1, "custom_palace_slug": palace, "custom_product_slug": slug},
+			fields=["custom_index_key", "custom_grouping_key"],
+			limit_page_length=1,
+		)
+		if cand:
+			grouping = cand[0].get("custom_grouping_key") or cand[0].get("custom_index_key")
+	if not grouping:
+		return {
+			"grouping": None,
+			"items": [],
+			"gallery": [],
+			"sibling_gender": None,
+			"price_list": PRICE_LIST,
+		}
 
-    # Group membership is custom_grouping_key EQUALITY, never an index-key
-    # prefix. Watches carry their full key as the grouping key, so
-    # {P-AQ-AD2-DS} and {P-AQ-AD2-DSS} are two products — a prefix match on the
-    # index key would swallow the second into the first's bundle (and gallery).
-    items = frappe.get_all(
-        "Website Item",
-        filters=[["published", "=", 1], ["custom_grouping_key", "=", grouping]],
-        fields=_WI_FIELDS, order_by="custom_index_key asc",
-    )
-    codes = [i.item_code for i in items if i.get("item_code")]
-    names = [i.name for i in items]
-    prices, stock, specs = _prices_for(codes), _stock_for(codes), _specs_for(names)
-    for it in items:
-        p = prices.get(it.item_code, {})
-        s = stock.get(it.item_code, {})
-        it["price"] = p.get("price")
-        it["currency"] = p.get("currency", "USD")
-        it["stock"] = s.get("stock", 0)
-        it["available"] = bool(s.get("available", False))
-        it["specifications"] = specs.get(it.name, [])
-        if not it.get("custom_show_website_description"):
-            # OFF by default: Website Description only ships to the storefront when opted in.
-            it["web_long_description"] = ""
+	# Group membership is custom_grouping_key EQUALITY, never an index-key
+	# prefix. Watches carry their full key as the grouping key, so
+	# {P-AQ-AD2-DS} and {P-AQ-AD2-DSS} are two products — a prefix match on the
+	# index key would swallow the second into the first's bundle (and gallery).
+	items = frappe.get_all(
+		"Website Item",
+		filters=[["published", "=", 1], ["custom_grouping_key", "=", grouping]],
+		fields=_WI_FIELDS,
+		order_by="custom_index_key asc",
+	)
+	codes = [i.item_code for i in items if i.get("item_code")]
+	names = [i.name for i in items]
+	prices, stock, specs = _prices_for(codes), _stock_for(codes), _specs_for(names)
+	for it in items:
+		p = prices.get(it.item_code, {})
+		s = stock.get(it.item_code, {})
+		it["price"] = p.get("price")
+		it["currency"] = p.get("currency", "USD")
+		it["stock"] = s.get("stock", 0)
+		it["available"] = bool(s.get("available", False))
+		it["specifications"] = specs.get(it.name, [])
+		if not it.get("custom_show_website_description"):
+			# OFF by default: Website Description only ships to the storefront when opted in.
+			it["web_long_description"] = ""
 
-    from dsi_catalogue.api import get_product_gallery
-    gallery = get_product_gallery(index_key=grouping).get("gallery_images", [])
-    sib = ik.get_sibling_gender_product(items[0].custom_index_key) if items else None
-    return {"grouping": grouping, "items": items, "gallery": gallery,
-            "sibling_gender": sib, "price_list": PRICE_LIST}
+	from dsi_catalogue.api import get_product_gallery
+
+	gallery = get_product_gallery(index_key=grouping).get("gallery_images", [])
+	sib = ik.get_sibling_gender_product(items[0].custom_index_key) if items else None
+	return {
+		"grouping": grouping,
+		"items": items,
+		"gallery": gallery,
+		"sibling_gender": sib,
+		"price_list": PRICE_LIST,
+	}
 
 
 # ----------------------------------------------------------------- shop listing
 @frappe.whitelist(allow_guest=True)
 def get_shop_listing(palace=None):
-    """The shop grid in one call: one card per published non-refill Website Item, built
-    from precomputed columns, with batched price + facet tags + the cached filter counts."""
-    filters = [["published", "=", 1]]
-    palace_code = None
-    if palace:
-        filters.append(["custom_palace_slug", "=", palace])
-        pp = ik.get_palace_by_slug(palace)
-        palace_code = pp["code"] if pp else palace
-    items = frappe.get_all(
-        "Website Item", filters=filters,
-        fields=["item_code", "web_item_name", "website_image", "website_image_alt",
-                "short_description", "custom_index_key", "custom_palace_code", "custom_palace_slug",
-                "custom_range_code", "custom_range_slug", "custom_product_slug",
-                "custom_grouping_key"],
-        order_by="custom_palace_slug, custom_grouping_key",
-    )
-    items = [i for i in items if not re.search(r"-RF[-}]", i.get("custom_index_key") or "")]
-    codes = [i.item_code for i in items if i.get("item_code")]
-    prices = _prices_for(codes)
+	"""The shop grid in one call: one card per published non-refill Website Item, built
+	from precomputed columns, with batched price + facet tags + the cached filter counts."""
+	filters = [["published", "=", 1]]
+	palace_code = None
+	if palace:
+		filters.append(["custom_palace_slug", "=", palace])
+		pp = ik.get_palace_by_slug(palace)
+		palace_code = pp["code"] if pp else palace
+	items = frappe.get_all(
+		"Website Item",
+		filters=filters,
+		fields=[
+			"item_code",
+			"web_item_name",
+			"website_image",
+			"website_image_alt",
+			"short_description",
+			"custom_index_key",
+			"custom_palace_code",
+			"custom_palace_slug",
+			"custom_range_code",
+			"custom_range_slug",
+			"custom_product_slug",
+			"custom_grouping_key",
+		],
+		order_by="custom_palace_slug, custom_grouping_key",
+	)
+	items = [i for i in items if not re.search(r"-RF[-}]", i.get("custom_index_key") or "")]
+	codes = [i.item_code for i in items if i.get("item_code")]
+	prices = _prices_for(codes)
 
-    # Emit the website's exact ShopProduct shape so the client maps 1:1 (no re-decode).
-    cards = []
-    for it in items:
-        d = ik.decode_index_key(it.get("custom_index_key") or "")
-        if not d:
-            continue
-        p = prices.get(it.item_code, {})
-        variants = d["variants"]
-        has_variants = len(variants) > 0
-        mat = ik.get_accessory_material_code(d["productCode"])
-        cards.append({
-            "itemCode": it.item_code,
-            "name": it.get("web_item_name"),
-            "slug": it.get("custom_product_slug") or ik.generate_product_slug(d),
-            "image": it.get("website_image") or "",
-            "imageAlt": it.get("website_image_alt") or "",
-            "palace": it.get("custom_palace_slug") or d["palace"]["slug"],
-            "palaceCode": it.get("custom_palace_code") or d["palace"]["code"],
-            "range": it.get("custom_range_slug") or ((d["range"] or {}).get("slug") or ""),
-            "rangeCode": it.get("custom_range_code") or ((d["range"] or {}).get("code") or ""),
-            "indexKey": it.get("custom_index_key") or "",
-            "grouping": it.get("custom_grouping_key"),
-            "shortDescription": it.get("short_description"),
-            "variantCount": 1,
-            "variantDisplay": "-".join(variants) if has_variants else None,
-            "variantName": " ".join(d["variantNames"]) if has_variants else None,
-            "variantCodes": variants if has_variants else None,
-            "filterTags": [mat] if mat else None,
-            "price": p.get("price"),
-            "currency": p.get("currency", "USD"),
-        })
+	# Emit the website's exact ShopProduct shape so the client maps 1:1 (no re-decode).
+	cards = []
+	for it in items:
+		d = ik.decode_index_key(it.get("custom_index_key") or "")
+		if not d:
+			continue
+		p = prices.get(it.item_code, {})
+		variants = d["variants"]
+		has_variants = len(variants) > 0
+		mat = ik.get_accessory_material_code(d["productCode"])
+		cards.append(
+			{
+				"itemCode": it.item_code,
+				"name": it.get("web_item_name"),
+				"slug": it.get("custom_product_slug") or ik.generate_product_slug(d),
+				"image": it.get("website_image") or "",
+				"imageAlt": it.get("website_image_alt") or "",
+				"palace": it.get("custom_palace_slug") or d["palace"]["slug"],
+				"palaceCode": it.get("custom_palace_code") or d["palace"]["code"],
+				"range": it.get("custom_range_slug") or ((d["range"] or {}).get("slug") or ""),
+				"rangeCode": it.get("custom_range_code") or ((d["range"] or {}).get("code") or ""),
+				"indexKey": it.get("custom_index_key") or "",
+				"grouping": it.get("custom_grouping_key"),
+				"shortDescription": it.get("short_description"),
+				"variantCount": 1,
+				"variantDisplay": "-".join(variants) if has_variants else None,
+				"variantName": " ".join(d["variantNames"]) if has_variants else None,
+				"variantCodes": variants if has_variants else None,
+				"filterTags": [mat] if mat else None,
+				"price": p.get("price"),
+				"currency": p.get("currency", "USD"),
+			}
+		)
 
-    from dsi_catalogue.api import get_shop_filters
-    return {"products": cards, "filters": get_shop_filters(palace=palace_code), "count": len(cards)}
+	from dsi_catalogue.api import get_shop_filters
+
+	return {"products": cards, "filters": get_shop_filters(palace=palace_code), "count": len(cards)}
