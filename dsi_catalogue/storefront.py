@@ -30,6 +30,11 @@ _WI_FIELDS = [
 	"web_item_name",
 	"website_image",
 	"website_image_alt",
+	"custom_seo_title",
+	"custom_seo_description",
+	"custom_seo_keywords",
+	"custom_user_guide",
+	"custom_swatch_image",
 	"short_description",
 	"web_long_description",
 	"item_group",
@@ -73,7 +78,7 @@ def _stock_for(item_codes):
 	if not item_codes:
 		return {}
 	rows = frappe.get_all(
-		"Bin", filters=[["item_code", "in", item_codes]], fields=["item_code", "actual_qty"]
+		"Bin", filters=[["item_code", "in", item_codes], ["warehouse", "=", frappe.conf.get("erp_default_warehouse") or "HQFinished Goods Store - 40"]], fields=["item_code", "actual_qty"]
 	)
 	agg = {}
 	for r in rows:
@@ -127,7 +132,7 @@ def get_pdp_bundle(palace=None, slug=None, index_key=None):
 	items = frappe.get_all(
 		"Website Item",
 		filters=[["published", "=", 1], ["custom_grouping_key", "=", grouping]],
-		fields=_WI_FIELDS,
+		fields=[f for f in _WI_FIELDS if frappe.get_meta("Website Item").has_field(f) or f == "name"],
 		order_by="custom_index_key asc",
 	)
 	codes = [i.item_code for i in items if i.get("item_code")]
@@ -148,8 +153,17 @@ def get_pdp_bundle(palace=None, slug=None, index_key=None):
 	from dsi_catalogue.api import get_product_gallery
 
 	gallery = get_product_gallery(index_key=grouping).get("gallery_images", [])
+	tabs = {name: [] for name in names}
+	for row in frappe.get_all("Website Item Tabbed Section", filters=[["parent", "in", names]], fields=["parent", "label", "content", "idx"], order_by="idx asc", limit_page_length=0) if names else []:
+		tabs[row.parent].append(dict(row))
+	ranks = frappe.get_all("Website Item Gallery Image", filters=[["parent", "in", names]], fields=["file_name", "rank", "is_hero", "idx", "image"], limit_page_length=0) if names else []
+	shipping = frappe.db.get_single_value("Website Settings", "custom_shipping_delivery") if frappe.get_meta("Website Settings").has_field("custom_shipping_delivery") else ""
 	sib = ik.get_sibling_gender_product(items[0].custom_index_key) if items else None
 	return {
+		"version": 2,
+		"tabs": tabs,
+		"ranks": ranks,
+		"shipping_html": shipping or "",
 		"grouping": grouping,
 		"items": items,
 		"gallery": gallery,

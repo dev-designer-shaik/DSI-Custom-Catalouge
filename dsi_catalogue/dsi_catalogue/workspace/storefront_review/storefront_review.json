@@ -1,0 +1,36 @@
+{
+  "doctype": "Workspace",
+  "name": "Storefront Review",
+  "label": "Storefront Review",
+  "title": "Storefront Review",
+  "module": "DSI Catalogue",
+  "public": 1,
+  "is_hidden": 0,
+  "icon": "website",
+  "content": "[{\"id\": \"heading\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\">Website Content Review</span>\", \"col\": 12}}, {\"id\": \"link0\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Review Queue\", \"col\": 4}}, {\"id\": \"link1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Crawler Files and Domains\", \"col\": 4}}, {\"id\": \"link2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Website Items\", \"col\": 4}}]",
+  "shortcuts": [
+    {
+      "label": "Review Queue",
+      "type": "DocType",
+      "link_to": "Storefront Review"
+    },
+    {
+      "label": "Crawler Files and Domains",
+      "type": "DocType",
+      "link_to": "Storefront Settings"
+    },
+    {
+      "label": "Website Items",
+      "type": "DocType",
+      "link_to": "Website Item"
+    }
+  ],
+  "roles": [
+    {
+      "role": "Storefront Reviewer"
+    },
+    {
+      "role": "System Manager"
+    }
+  ]
+}

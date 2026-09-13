@@ -383,3 +383,35 @@ Object.keys(dsi.i18n.FIELDS).forEach((field) => {
 		},
 	});
 });
+
+// Carla-only website approval controls
+frappe.ui.form.on('Website Item', {
+  async refresh(frm) {
+    if (frappe.session.user !== 'carla@designershaik.com') {
+      frm.disable_save();
+      frm.dashboard.set_headline('Website content is edited and published by Carla.');
+      return;
+    }
+    if (frm.is_new()) return;
+    const {message:review} = await frappe.call({method:'dsi_catalogue.website_item_review.get_item_review',args:{website_item:frm.doc.name}});
+    if (!review) return;
+    frm.add_custom_button('Open Content Review',()=>frappe.set_route('Form','Storefront Review',review.name));
+    if (review.status !== 'Approved') {
+      frm.dashboard.set_headline('Draft awaiting your approval. Published copy remains available on the website.');
+      let draft;
+      try { draft=typeof review.draft_json==='string'?JSON.parse(review.draft_json):review.draft_json; } catch { draft=null; }
+      if (draft && !frm.is_dirty()) {
+        for (const [field,value] of Object.entries(draft)) {
+          if (frm.fields_dict[field] && !['published','custom_translations'].includes(field)) frm.doc[field]=value;
+        }
+        frm.refresh_fields();
+      }
+    }
+    frm.add_custom_button('Approve and Publish Website Item',async()=>{
+      if (frm.is_dirty()) await frm.save();
+      const {message:latest}=await frappe.call({method:'dsi_catalogue.website_item_review.get_item_review',args:{website_item:frm.doc.name}});
+      await frappe.call({method:'dsi_catalogue.storefront_review.approve',args:{name:latest.name,modified:latest.modified},freeze:true});
+      await frm.reload_doc();
+    }).addClass('btn-primary');
+  }
+});

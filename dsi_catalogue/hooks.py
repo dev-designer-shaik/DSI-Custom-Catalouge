@@ -17,6 +17,7 @@ app_include_css = "/assets/dsi_catalogue/css/publish_modal.css"
 
 # DocType JS - This is important for form scripts
 doctype_js = {
+	"Storefront Review": "public/js/storefront_review.js",
 	"Item": "public/js/item_publish.js",
 	# In-place language switching on the Website Item form. Lives in app code
 	# (not a Client Script record) so it survives a rebuild, matching the
@@ -30,12 +31,14 @@ doctype_js = {
 # Document Events
 # ---------------
 doc_events = {
+	"Storefront Settings": {"before_validate": "dsi_catalogue.website_item_review.guard", "validate": "dsi_catalogue.storefront_review.validate_settings", "on_update": "dsi_catalogue.storefront_review.invalidate"},
+	"Storefront Review": {"before_validate": "dsi_catalogue.website_item_review.guard", "on_trash": "dsi_catalogue.website_item_review.guard", "validate": "dsi_catalogue.storefront_review.validate_review", "on_update": "dsi_catalogue.storefront_review.review_updated"},
 	"Website Item": {
 		# Authored translations (2026-08-29). before_validate is the PRIMARY seat:
 		# run_before_save_methods runs before_validate BEFORE the
 		# flags.ignore_validate early return, so validate/before_save are both
 		# skippable with one flag and this is not. Keeps canonical English English.
-		"before_validate": "dsi_catalogue.website_item_events.i18n_guard",
+		"before_validate": ["dsi_catalogue.website_item_review.guard", "dsi_catalogue.website_item_events.i18n_guard", "dsi_catalogue.website_item_review.stage"],
 		# Precompute decoded index-key fields (palace/range/product/slugs/grouping/
 		# sibling) so the website reads columns instead of decoding 500 items per page.
 		"validate": "dsi_catalogue.api.website_item_precompute",
@@ -44,7 +47,7 @@ doc_events = {
 		"on_update": [
 			"dsi_catalogue.api.notify_revalidate",
 			# Ported from Server Script "Website Item Variant Content Sync" (After Save), 2026-08-06.
-			"dsi_catalogue.website_item_events.variant_content_sync",
+			# Shared edits require individual Website Item approval.
 			# LAST: must observe the sibling saves variant_content_sync just made.
 			"dsi_catalogue.website_item_events.i18n_mark_stale",
 		],
@@ -125,3 +128,7 @@ fixtures = [
 		],
 	},
 ]
+
+has_permission = {dt: "dsi_catalogue.website_item_review.has_permission" for dt in ("Website Item", "Storefront Review", "Storefront Settings")}
+
+override_doctype_class = {"Website Item": "dsi_catalogue.website_item_controller.ReviewedWebsiteItem"}

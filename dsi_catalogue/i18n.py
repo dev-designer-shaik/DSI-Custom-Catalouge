@@ -184,6 +184,9 @@ def put_copy(
 		frappe.throw(_("Unsupported language {0}").format(language))
 
 	data = json.loads(payload) if isinstance(payload, str) else (payload or {})
+	from dsi_catalogue.website_item_review import stage_translation
+	return stage_translation(website_item, language, data)
+
 	parent_fp = frappe.db.get_value("Website Item", website_item, "custom_en_fingerprint") or ""
 
 	values = {mirror: (data.get(mirror) or "") for mirror in TRANSLATED_FIELDS.values()}

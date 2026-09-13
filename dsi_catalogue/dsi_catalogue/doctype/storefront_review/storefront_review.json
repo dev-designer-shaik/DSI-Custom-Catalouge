@@ -1,0 +1,190 @@
+{
+  "doctype": "DocType",
+  "name": "Storefront Review",
+  "module": "DSI Catalogue",
+  "issingle": 0,
+  "autoname": "hash",
+  "fields": [
+    {
+      "fieldname": "review_key",
+      "fieldtype": "Data",
+      "label": "Review Key",
+      "unique": 1,
+      "read_only": 1
+    },
+    {
+      "fieldname": "kind",
+      "fieldtype": "Select",
+      "label": "Review Type",
+      "options": "Website Item\nPage SEO\nImage\nDefault OG\nTranslation",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "target",
+      "fieldtype": "Small Text",
+      "label": "Page / Image / Item",
+      "reqd": 1
+    },
+    {
+      "fieldname": "locale",
+      "fieldtype": "Select",
+      "label": "Language",
+      "options": "en\nar\nfr\nru\nes",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "website_item",
+      "fieldtype": "Link",
+      "label": "Website Item",
+      "options": "Website Item"
+    },
+    {
+      "fieldname": "image_url",
+      "fieldtype": "Small Text",
+      "label": "Image Preview URL"
+    },
+    {
+      "fieldname": "preview",
+      "fieldtype": "HTML",
+      "label": "Image and Social Preview"
+    },
+    {
+      "fieldname": "candidate_title",
+      "fieldtype": "Small Text",
+      "label": "Page Title"
+    },
+    {
+      "fieldname": "candidate_description",
+      "fieldtype": "Small Text",
+      "label": "Meta Description"
+    },
+    {
+      "fieldname": "candidate_image",
+      "fieldtype": "Small Text",
+      "label": "Social Image URL"
+    },
+    {
+      "fieldname": "candidate_image_alt",
+      "fieldtype": "Small Text",
+      "label": "Social Image Description"
+    },
+    {
+      "fieldname": "candidate_alt",
+      "fieldtype": "Small Text",
+      "label": "Image Description"
+    },
+    {
+      "fieldname": "candidate_decorative",
+      "fieldtype": "Check",
+      "label": "Decorative Image"
+    },
+    {
+      "fieldname": "source_json",
+      "fieldtype": "JSON",
+      "label": "English Source / Existing Copy",
+      "read_only": 1
+    },
+    {
+      "fieldname": "draft_json",
+      "fieldtype": "JSON",
+      "label": "Candidate Values"
+    },
+    {
+      "fieldname": "review_notes",
+      "fieldtype": "Small Text",
+      "label": "Review Notes"
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Review Status",
+      "options": "Needs Review\nApproved\nChanges Requested",
+      "default": "Needs Review",
+      "read_only": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "is_stale",
+      "fieldtype": "Check",
+      "label": "Source Has Changed",
+      "read_only": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "source_hash",
+      "fieldtype": "Data",
+      "label": "Source Fingerprint",
+      "read_only": 1
+    },
+    {
+      "fieldname": "published_json",
+      "fieldtype": "JSON",
+      "label": "Last Published Values",
+      "read_only": 1
+    },
+    {
+      "fieldname": "approved_by",
+      "fieldtype": "Link",
+      "label": "Approved By",
+      "options": "User",
+      "read_only": 1
+    },
+    {
+      "fieldname": "approved_on",
+      "fieldtype": "Datetime",
+      "label": "Approved On",
+      "read_only": 1
+    }
+  ],
+  "field_order": [
+    "review_key",
+    "kind",
+    "target",
+    "locale",
+    "website_item",
+    "image_url",
+    "preview",
+    "candidate_title",
+    "candidate_description",
+    "candidate_image",
+    "candidate_image_alt",
+    "candidate_alt",
+    "candidate_decorative",
+    "source_json",
+    "draft_json",
+    "review_notes",
+    "status",
+    "is_stale",
+    "source_hash",
+    "published_json",
+    "approved_by",
+    "approved_on"
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "report": 1,
+      "export": 1,
+      "print": 1
+    },
+    {
+      "role": "Storefront Reviewer",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 0,
+      "report": 1,
+      "export": 1,
+      "print": 1
+    }
+  ],
+  "track_changes": 1,
+  "sort_field": "modified",
+  "sort_order": "DESC"
+}

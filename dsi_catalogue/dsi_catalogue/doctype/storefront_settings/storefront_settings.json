@@ -1,0 +1,78 @@
+{
+  "doctype": "DocType",
+  "name": "Storefront Settings",
+  "module": "DSI Catalogue",
+  "issingle": 1,
+  "autoname": null,
+  "fields": [
+    {
+      "fieldname": "active_domain",
+      "fieldtype": "Data",
+      "label": "Current Website",
+      "default": "https://dsi-web-n.netlify.app"
+    },
+    {
+      "fieldname": "production_domain",
+      "fieldtype": "Data",
+      "label": "Future Production Domain",
+      "default": "https://designershaik.com"
+    },
+    {
+      "fieldname": "robots_text",
+      "fieldtype": "Code",
+      "label": "robots.txt",
+      "options": "Plain Text"
+    },
+    {
+      "fieldname": "llm_text",
+      "fieldtype": "Code",
+      "label": "llm.txt / llms.txt",
+      "options": "Markdown"
+    },
+    {
+      "fieldname": "published_default_og_image",
+      "fieldtype": "Small Text",
+      "label": "Published Default OG Image",
+      "read_only": 1
+    },
+    {
+      "fieldname": "published_default_og_alt",
+      "fieldtype": "Small Text",
+      "label": "Published Default OG Description",
+      "read_only": 1
+    }
+  ],
+  "field_order": [
+    "active_domain",
+    "production_domain",
+    "robots_text",
+    "llm_text",
+    "published_default_og_image",
+    "published_default_og_alt"
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "report": 1,
+      "export": 1,
+      "print": 1
+    },
+    {
+      "role": "Storefront Reviewer",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 0,
+      "report": 1,
+      "export": 1,
+      "print": 1
+    }
+  ],
+  "track_changes": 1,
+  "sort_field": "modified",
+  "sort_order": "DESC"
+}

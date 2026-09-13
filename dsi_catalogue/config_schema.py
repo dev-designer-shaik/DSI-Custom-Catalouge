@@ -3,7 +3,6 @@
 from dsi_core.config_schema import Key
 
 SCHEMA: tuple[Key, ...] = (
-	Key("n8n_webhook_url", "url", description="base URL of the n8n instance holding the publish pipeline"),
 	Key("dsi_pipeline_token", "secret", description="X-DSI-Token on the three guest n8n callbacks"),
 	Key(
 		"website_revalidate_url",

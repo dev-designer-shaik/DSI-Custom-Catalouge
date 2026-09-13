@@ -274,6 +274,8 @@ def create_website_route_meta(route, seo_data):
 @frappe.whitelist()
 def publish_to_website(folder_id, item_code, generate_content=True):
 	"""Trigger n8n workflow and create Website Item"""
+	from dsi_catalogue.website_item_review import only_editor
+	only_editor()
 	catalogue = frappe.get_doc("Product Catalogue", folder_id)
 
 	try:
@@ -314,6 +316,8 @@ def publish_to_website(folder_id, item_code, generate_content=True):
 
 def create_website_item(item_code, catalogue, content):
 	"""Create or update Website Item from catalogue - using standard fields"""
+	from dsi_catalogue.website_item_review import only_editor
+	only_editor()
 	images = json.loads(catalogue.cloudinary_images or "[]")
 
 	# Get or create Item Group
@@ -458,6 +462,8 @@ def receive_publish_callback(
 	item_code, content, status="success", folder_id=None, images=None, item_group_data=None, seo_data=None
 ):
 	"""Receive callback from n8n after content generation - creates or updates Website Item"""
+	from dsi_catalogue.website_item_review import only_editor
+	only_editor()
 	if not _pipeline_authorized():
 		frappe.throw("Pipeline token required", frappe.AuthenticationError)
 	content = json.loads(content) if isinstance(content, str) else content
@@ -609,6 +615,8 @@ def get_publish_status(task_id):
 def start_content_generation(folder_id, item_code, temperature=0.7):
 	"""Start async content generation, return task_id for polling"""
 	# Generate unique task ID
+	from dsi_catalogue.website_item_review import only_editor
+	only_editor()
 	task_id = str(uuid.uuid4())
 
 	# Get catalogue data
@@ -843,6 +851,8 @@ def get_general_description_for_product(template_key):
 def publish_website_item(folder_id, item_code, content, images=None, seo_data=None, item_group_data=None):
 	"""Create/update Website Item from previewed content"""
 	# Parse JSON strings
+	from dsi_catalogue.website_item_review import only_editor
+	only_editor()
 	content = json.loads(content) if isinstance(content, str) else content
 	images = json.loads(images) if isinstance(images, str) else (images or [])
 	seo_data = json.loads(seo_data) if isinstance(seo_data, str) else (seo_data or {})
@@ -1315,48 +1325,21 @@ def _collect_authored_gallery(grouping):
 
 @frappe.whitelist()
 def save_website_item_gallery(item_code=None, website_item=None, gallery=None):
-	"""Replace the custom_gallery_images rows on a Website Item (Desk-auth, no guest).
-	gallery = JSON list of {image, alt_text, file_name, shared_type, variant_code,
-	is_hero, rank}. Backs the wizard picture-step and the P3 inline editor."""
-	name = website_item
-	if not name and item_code:
-		name = frappe.db.get_value("Website Item", {"item_code": item_code}, "name")
-	if not name or not frappe.db.exists("Website Item", name):
-		frappe.throw(_("Website Item not found for {0}").format(item_code or website_item))
-	if isinstance(gallery, str):
-		gallery = json.loads(gallery or "[]")
-
-	# Update the child table directly (delete + insert) instead of a full parent
-	# doc.save(): saving a variant Website Item triggers webshop's on_update ->
-	# update_template_item -> make_website_item, which throws when the template item
-	# already has a Website Item. We only need to rewrite the gallery child rows.
-	frappe.db.delete("Website Item Gallery Image", {"parent": name, "parentfield": "custom_gallery_images"})
-	saved = 0
-	for i, g in enumerate(gallery or []):
-		if not g.get("image"):
-			continue
-		rank = g.get("rank")
-		url = g.get("image")
-		child = frappe.get_doc(
-			{
-				"doctype": "Website Item Gallery Image",
-				"parent": name,
-				"parenttype": "Website Item",
-				"parentfield": "custom_gallery_images",
-				"idx": i + 1,
-				"image": url,
-				"alt_text": g.get("alt_text") or "",
-				"file_name": g.get("file_name") or (url.split("/")[-1] if "/" in url else url),
-				"shared_type": g.get("shared_type") or "variant",
-				"variant_code": g.get("variant_code") or "",
-				"is_hero": 1 if g.get("is_hero") else 0,
-				"rank": int(rank) if rank not in (None, "") else i,
-			}
-		)
-		child.insert(ignore_permissions=True)
-		saved += 1
-	frappe.db.commit()
-	return {"saved": saved, "website_item": name}
+	from dsi_catalogue.website_item_review import only_editor, content
+	from dsi_catalogue.storefront_review import upsert_draft
+	only_editor()
+	name = website_item or frappe.db.get_value("Website Item", {"item_code":item_code}, "name")
+	if not name:
+		frappe.throw("Website Item not found")
+	doc = frappe.get_doc("Website Item",name)
+	rows = json.loads(gallery) if isinstance(gallery,str) else gallery or []
+	if not isinstance(rows,list):
+		frappe.throw("Gallery must be a list of image rows")
+	previous = content(doc)
+	candidate = dict(previous, custom_gallery_images=rows)
+	review = upsert_draft("Website Item",name,"en",candidate,previous,website_item=name,image_url=doc.website_image or "")
+	frappe.db.set_value("Website Item",name,"custom_storefront_review_status","Needs Review",update_modified=False)
+	return {"saved":len(rows),"website_item":name,"review_name":review.name,"review_status":"Needs Review"}
 
 
 @frappe.whitelist(allow_guest=True)
