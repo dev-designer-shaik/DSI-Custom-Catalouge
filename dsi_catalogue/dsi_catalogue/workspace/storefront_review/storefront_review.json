@@ -3,7 +3,7 @@
   "name": "Storefront Review",
   "label": "Storefront Review",
   "title": "Storefront Review",
-  "module": "DSI Catalogue",
+  "module": "dsi_catalogue",
   "public": 1,
   "is_hidden": 0,
   "icon": "website",

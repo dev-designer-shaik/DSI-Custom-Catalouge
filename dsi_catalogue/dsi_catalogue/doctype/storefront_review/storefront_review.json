@@ -1,7 +1,7 @@
 {
   "doctype": "DocType",
   "name": "Storefront Review",
-  "module": "DSI Catalogue",
+  "module": "dsi_catalogue",
   "issingle": 0,
   "autoname": "hash",
   "fields": [

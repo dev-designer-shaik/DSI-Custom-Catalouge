@@ -1,7 +1,7 @@
 {
   "doctype": "DocType",
   "name": "Storefront Settings",
-  "module": "DSI Catalogue",
+  "module": "dsi_catalogue",
   "issingle": 1,
   "autoname": null,
   "fields": [
