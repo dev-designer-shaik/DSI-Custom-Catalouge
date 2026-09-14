@@ -27,6 +27,13 @@ def has_permission(doc, user=None, permission_type=None, ptype=None):
 def guard(doc, method=None):
     only_editor()
 
+def guard_child(doc, method=None):
+    if doc.get('parenttype') != 'Website Item' or not doc.meta.istable:
+        return
+    only_editor()
+    if not frappe.flags.get('dsi_storefront_bootstrap') and not frappe.flags.get('dsi_storefront_approving'):
+        frappe.throw('Edit this content through its Website Item so it is saved for approval.')
+
 def content(doc):
     from dsi_catalogue.storefront_review import payload
     result = {}

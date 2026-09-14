@@ -31,9 +31,11 @@ doctype_js = {
 # Document Events
 # ---------------
 doc_events = {
+	"*": {"before_validate": "dsi_catalogue.website_item_review.guard_child", "on_trash": "dsi_catalogue.website_item_review.guard_child"},
 	"Storefront Settings": {"before_validate": "dsi_catalogue.website_item_review.guard", "validate": "dsi_catalogue.storefront_review.validate_settings", "on_update": "dsi_catalogue.storefront_review.invalidate"},
 	"Storefront Review": {"before_validate": "dsi_catalogue.website_item_review.guard", "on_trash": "dsi_catalogue.website_item_review.guard", "validate": "dsi_catalogue.storefront_review.validate_review", "on_update": "dsi_catalogue.storefront_review.review_updated"},
 	"Website Item": {
+		"on_trash": "dsi_catalogue.website_item_review.guard",
 		# Authored translations (2026-08-29). before_validate is the PRIMARY seat:
 		# run_before_save_methods runs before_validate BEFORE the
 		# flags.ignore_validate early return, so validate/before_save are both
