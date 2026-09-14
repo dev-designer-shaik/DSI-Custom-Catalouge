@@ -17,10 +17,12 @@ def only_editor():
     if frappe.session.user != EDITOR and not frappe.flags.get('dsi_storefront_bootstrap'):
         frappe.throw('Only Carla can edit or publish website content.', frappe.PermissionError)
 
-def has_permission(doc, user=None, permission_type=None):
-    if permission_type in ('write', 'create', 'delete', 'submit', 'cancel', 'amend') and (user or frappe.session.user) != EDITOR:
+def has_permission(doc, user=None, permission_type=None, ptype=None):
+    if (ptype or permission_type) in ('write', 'create', 'delete', 'submit', 'cancel', 'amend') and (user or frappe.session.user) != EDITOR:
         return False
-    return None
+    # Frappe controller hooks can only deny; returning None also denies reads.
+    # True preserves the role permissions that Frappe has already checked.
+    return True
 
 def guard(doc, method=None):
     only_editor()
