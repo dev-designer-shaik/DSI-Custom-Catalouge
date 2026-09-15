@@ -9,12 +9,11 @@ Idempotency: keyed by custom_idempotency_key on Sales Order. A repeat call with 
 key returns the already-created order instead of duplicating it — so checkout retries and
 Tap payment-webhook retries are safe.
 
-PARITY CONTRACT (2026-09-02): this endpoint replicates the website's legacy multi-call
-path field-for-field — lib/erpnext/orders.ts (getOrCreateGuestCustomer,
-createOrUpdateContact, ensureAddressExists, createSalesOrderManual) is the spec. The
-website sends its OWN Sales Order payload under `sales_order` (passthrough); ERP only
-overlays the resolver outputs (customer, addresses, contact, idempotency key). The
-drift harness (tools/orders/drift-check.ts) proves old ≡ new before each deploy.
+THE one definition of a web Sales Order (since 2026-09-13): the website's legacy
+multi-call path and its ERP_ATOMIC_ORDERS rollback flag were deleted — this endpoint
+is the only order path. The website sends its OWN Sales Order payload under
+`sales_order` (passthrough); ERP only overlays the resolver outputs (customer,
+addresses, contact, idempotency key, notify channel).
 
 Payload v2:
 { idempotency_key (req), customer?: str,           # explicit Customer docname — bypasses resolution
@@ -42,16 +41,20 @@ SO_CHILD_DOCTYPES = {"Sales Order Item", "Sales Taxes and Charges"}
 
 
 def _valid_link(doctype, preferred, leaf=None):
-	"""Return `preferred` if it exists, else a leaf/any valid record — so names that
-	differ between erp1 and the erp2 mirror (Customer Group, Territory, Company, Price
-	List) all resolve."""
+	"""Return `preferred` if it exists, else the named leaf. NO silent fallback to
+	'any record' (2026-09-13): the old tail booked orders to an arbitrary Company
+	or Price List when the preferred one was missing — a silent misfiling. If the
+	fallback also misses, throw loudly and fix the site's data."""
 	if preferred and frappe.db.exists(doctype, preferred):
 		return preferred
 	if leaf:
 		v = frappe.db.get_value(doctype, leaf, "name")
 		if v:
 			return v
-	return frappe.db.get_value(doctype, {}, "name")
+	frappe.throw(
+		f"create_order_atomic: no usable {doctype} found (wanted {preferred or leaf!r}) — create it "
+		"on this site before taking web orders"
+	)
 
 
 def _find_customer_by_email(email):
@@ -90,13 +93,78 @@ def _find_customer_by_email(email):
 	return None
 
 
+_PHONE_MIN_DIGITS = 8  # below this a trailing-digit match is chance, not evidence
+_PHONE_MAX_PREFIX = 3  # one country code, 1-3 digits; trunk 0 is stripped separately
+
+
+def _phone_digits(value):
+	return re.sub(r"^00", "", re.sub(r"\D+", "", value or ""))
+
+
+def _phones_match(a, b):
+	"""Same number in a different format? Port of the website's phonesMatch
+	(lib/utils/identity-match.ts): equal digits, or one is the other with a
+	1-3 digit country prefix in front, trunk-0 variants included. Accepts
+	+97335066012 <-> 35066012; rejects +17827444784 <-> +447827444784."""
+
+	def variants(d):
+		out = {d}
+		if d.startswith("0"):
+			out.add(d.lstrip("0"))
+		return [v for v in out if v]
+
+	for x in variants(_phone_digits(a)):
+		for y in variants(_phone_digits(b)):
+			if x == y:
+				return True
+			longer, shorter = (x, y) if len(x) >= len(y) else (y, x)
+			if (
+				len(shorter) >= _PHONE_MIN_DIGITS
+				and 0 < len(longer) - len(shorter) <= _PHONE_MAX_PREFIX
+				and longer.endswith(shorter)
+			):
+				return True
+	return False
+
+
+def _find_customer_by_phone(phone):
+	"""Phone evidence: no SQL filter expresses "same number, different format",
+	so read the Customers that carry a mobile and compare in process (the
+	website does the same in findCustomerByHardEvidence). One hit adopts;
+	several = refuse to guess, like the email path."""
+	wanted = _phone_digits(phone)
+	if len(wanted) < _PHONE_MIN_DIGITS:
+		return None
+	rows = frappe.db.get_all(
+		"Customer",
+		filters={"mobile_no": ["!=", ""]},
+		fields=["name", "mobile_no"],
+		limit_page_length=2000,
+		order_by="creation asc",
+	)
+	hits = [r.name for r in rows if _phones_match(r.mobile_no, phone)]
+	if len(hits) == 1:
+		return hits[0]
+	if len(hits) > 1:
+		frappe.log_error(
+			title="create_order_atomic: ambiguous phone identity",
+			message="phone {} matches {} customers ({}) - refusing to guess".format(
+				phone, len(hits), ", ".join(hits)
+			),
+		)
+	return None
+
+
 def _resolve_customer(email, customer_name, phone, customer_group=None, territory=None, company=None):
-	"""Resolution order (parity with the webhook): explicit caller-supplied docname is
-	handled by the caller; here: Contact-email chain → Customer.email_id → exact name →
-	create. Returns (name, created)."""
+	"""Resolution order: explicit caller-supplied docname is handled by the caller;
+	here: Contact-email chain -> Customer.email_id -> Customer.mobile_no (format-
+	insensitive; the live web accounts are phone-only and used to mint a fresh
+	Customer per order) -> exact name -> create. Returns (name, created)."""
 	name = _find_customer_by_email(email)
 	if not name and email:
 		name = frappe.db.get_value("Customer", {"email_id": email}, "name")
+	if not name and phone:
+		name = _find_customer_by_phone(phone)
 	if not name and customer_name:
 		name = frappe.db.get_value("Customer", {"customer_name": customer_name}, "name")
 	if name:
@@ -126,7 +194,7 @@ def _resolve_customer(email, customer_name, phone, customer_group=None, territor
 
 
 def _resolve_contact(customer, contact, email, phone):
-	"""Port of createOrUpdateContact (orders.ts:580-682): dedupe by (Contact Email =
+	"""Port of the website's createOrUpdateContact (lib/erpnext/orders.ts): dedupe by (Contact Email =
 	email) AND (Dynamic Link → this customer); UPDATE an existing contact (refresh
 	email/phone rows and the link) rather than returning it untouched."""
 	if not (email or phone):
@@ -404,6 +472,46 @@ def _validate_so_passthrough(so):
 	so["doctype"] = "Sales Order"
 
 
+def _order_remarks(items):
+	"""The one-line "what is this sale" note, in the estate's own register.
+
+	Live ERP fills `remarks` by hand on Sales Invoices — "Against Customer Order
+	3694777", "For Emirates order" — so a human scanning a document knows what it
+	is without opening the item table. Web orders arrived with the field empty and
+	read as anonymous next to them.
+
+	The label is the alias product code (`Item.custom_alias_product_code`), not the
+	ERP item code, because the alias is what the catalogue, the warehouse and the
+	old system all call the product. An item without one falls back to its item
+	code — a remark naming the wrong thing is worse than a plain one, and a remark
+	reading "for item None" is worse than both.
+
+	One query for the whole cart, deduped, order preserved.
+	"""
+	codes = []
+	for row in items or []:
+		code = ((row or {}).get("item_code") or "").strip()
+		if code and code not in codes:
+			codes.append(code)
+	if not codes:
+		return ""
+
+	alias = {
+		r.name: (r.custom_alias_product_code or "").strip()
+		for r in frappe.db.get_all(
+			"Item", filters={"name": ["in", codes]}, fields=["name", "custom_alias_product_code"]
+		)
+	}
+	labels = []
+	for code in codes:
+		label = alias.get(code) or code
+		if label not in labels:
+			labels.append(label)
+
+	noun = "item" if len(labels) == 1 else "items"
+	return "Online purchase for {} {}".format(noun, ", ".join(labels))
+
+
 def _record_payment(so, payment):
 	"""Post the captured Tap charge as a submitted Payment Entry against the SO.
 
@@ -443,7 +551,12 @@ def _record_payment(so, payment):
 		return pe.name
 	except Exception:
 		frappe.db.rollback(save_point="tap_payment_entry")
-		frappe.log_error(f"{so.name}: {frappe.get_traceback()}", "create_order_atomic: Payment Entry failed")
+		# Title first, body second: Frappe truncates the TITLE, so the traceback
+		# belongs in the body or the useful half of the log is what gets cut.
+		frappe.log_error(
+			f"{so.name}: {frappe.get_traceback()}",
+			"create_order_atomic: Payment Entry failed",
+		)
 		frappe.get_doc(
 			{
 				"doctype": "Comment",
@@ -471,16 +584,33 @@ def create_order_atomic(payload=None):
 	if not so_payload.get("items"):
 		frappe.throw("sales_order.items are required")
 
+	payment = payload.get("payment")
+	if payment and (payment.get("charge_id") or "").strip() != key:
+		# The SO dedupes on custom_idempotency_key while the Payment Entry dedupes
+		# on reference_no == charge_id. They only coincide by caller convention —
+		# enforce it here or a mismatched caller books one order's payment against
+		# another order.
+		frappe.throw("create_order_atomic: payment.charge_id must equal idempotency_key")
+
 	# Idempotency short-circuit — never create a second order for the same key.
 	existing = frappe.db.get_value(
 		"Sales Order", {"custom_idempotency_key": key}, ["name", "customer", "grand_total"], as_dict=True
 	)
 	if existing:
+		# The first attempt may have created the SO but failed its Payment Entry
+		# (missing site_config, accounting error) — _record_payment swallows the
+		# failure into a comment by design, so a retry MUST re-attempt it or the
+		# order stays unpaid forever with everything reporting success.
+		pe = None
+		if payment:
+			existing_so = frappe.get_doc("Sales Order", existing.name)
+			pe = _record_payment(existing_so, payment)
 		return {
 			"sales_order": existing.name,
 			"customer": existing.customer,
 			"customer_created": False,
 			"grand_total": existing.grand_total,
+			"payment_entry": pe,
 			"created": False,
 			"idempotent": True,
 		}
@@ -517,6 +647,28 @@ def create_order_atomic(payload=None):
 	_validate_so_passthrough(so_payload)
 	so_payload["customer"] = customer
 	so_payload["custom_idempotency_key"] = key
+	# Shipping-update channel the customer chose at checkout — drives whether
+	# tracking notifications go by email, SMS or WhatsApp. Stored in the
+	# Select's display casing; anything unknown (including wrong casing) reads
+	# as the default. The Custom Field ships as a dsi_catalogue fixture; writing
+	# it on a site that lacks it would be silently dropped by db_insert, so the
+	# field's presence is verified, loudly, first.
+	_channel = {"email": "Email", "sms": "SMS", "whatsapp": "WhatsApp"}.get(
+		str(payload.get("notify_channel") or "").strip().lower(), "Email"
+	)
+	if not frappe.get_meta("Sales Order").has_field("custom_notify_channel"):
+		frappe.throw(
+			"Sales Order is missing the custom_notify_channel field — "
+			"run bench --site <site> migrate with the dsi_catalogue "
+			"fixtures before taking web orders"
+		)
+	so_payload["custom_notify_channel"] = _channel
+	# Only when the caller left it empty: a remark the website sent on purpose
+	# outranks a generated one.
+	if not (so_payload.get("remarks") or "").strip():
+		remarks = _order_remarks(so_payload.get("items"))
+		if remarks:
+			so_payload["remarks"] = remarks
 	if billing:
 		so_payload["customer_address"] = billing
 	if shipping:

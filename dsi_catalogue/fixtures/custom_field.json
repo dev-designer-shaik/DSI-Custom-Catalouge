@@ -186,13 +186,31 @@
   "name": "Sales Order-custom_idempotency_key",
   "dt": "Sales Order",
   "fieldname": "custom_idempotency_key",
-  "label": "Idempotency Key",
+  "label": "Payment Reference (Tap charge)",
   "fieldtype": "Data",
   "insert_after": "order_type",
   "read_only": 1,
   "no_copy": 1,
   "unique": 1,
   "search_index": 1,
-  "module": "Dsi Catalogue"
+  "module": "Dsi Catalogue",
+  "description": "Tap charge id. Unique: the webhook's duplicate-order probe and the race handling key off it. One source of truth — po_no deliberately stays empty on web orders.",
+  "hidden": 1
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Sales Order",
+  "label": "Notify Channel",
+  "fieldname": "custom_notify_channel",
+  "insert_after": "custom_idempotency_key",
+  "fieldtype": "Select",
+  "options": "\nEmail\nSMS\nWhatsApp",
+  "default": "Email",
+  "read_only": 0,
+  "hidden": 0,
+  "print_hide": 1,
+  "no_copy": 1,
+  "allow_on_submit": 1,
+  "description": "Channel the customer chose at checkout for shipping updates. Drives the n8n notification fan-out (email/SMS/WhatsApp); unknown values read as Email."
  }
 ]
