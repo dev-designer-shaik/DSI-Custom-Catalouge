@@ -384,34 +384,72 @@ Object.keys(dsi.i18n.FIELDS).forEach((field) => {
 	});
 });
 
-// Carla-only website approval controls
-frappe.ui.form.on('Website Item', {
-  async refresh(frm) {
-    if (frappe.session.user !== 'carla@designershaik.com') {
-      frm.disable_save();
-      frm.dashboard.set_headline('Website content is edited and published by Carla.');
-      return;
-    }
-    if (frm.is_new()) return;
-    const {message:review} = await frappe.call({method:'dsi_catalogue.website_item_review.get_item_review',args:{website_item:frm.doc.name}});
-    if (!review) return;
-    frm.add_custom_button('Open Content Review',()=>frappe.set_route('Form','Storefront Review',review.name));
-    if (review.status !== 'Approved') {
-      frm.dashboard.set_headline('Draft awaiting your approval. Published copy remains available on the website.');
-      let draft;
-      try { draft=typeof review.draft_json==='string'?JSON.parse(review.draft_json):review.draft_json; } catch { draft=null; }
-      if (draft && !frm.is_dirty()) {
-        for (const [field,value] of Object.entries(draft)) {
-          if (frm.fields_dict[field] && !['published','custom_translations'].includes(field)) frm.doc[field]=value;
+// Website approval controls.
+// Saving a Website Item stages the edit as a draft and keeps the published copy, so the
+// form is topped up with the pending draft (and says so) instead of looking like the save
+// was lost. Carla publishes; the other reviewers can see what is waiting.
+(() => {
+  const EDITOR = 'carla@designershaik.com';
+  const READERS = ['Storefront Reviewer', 'Website Manager', 'System Manager'];
+  const SKIP_ROW = new Set(['name', 'parent', 'parenttype', 'parentfield', 'idx', 'docstatus', 'doctype', 'owner', 'creation', 'modified', 'modified_by']);
+  const parse = v => { try { return typeof v === 'string' ? JSON.parse(v || '{}') : (v || {}); } catch { return {}; } };
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const fieldLabel = (frm, f) => (frm.fields_dict[f] && frm.fields_dict[f].df.label) || f;
+  const pendingFields = (draft, source) => Object.keys(draft).filter(f => !['published', 'workflow_state'].includes(f) && !same(draft[f], source[f]));
+
+  // Put the draft's values into the open form. Tables are rebuilt row by row; assigning the
+  // draft's raw row objects leaves rows the grid cannot render.
+  const showDraft = (frm, draft, fields) => {
+    for (const f of fields) {
+      const df = frm.fields_dict[f] && frm.fields_dict[f].df;
+      if (!df || ['published', 'custom_translations'].includes(f)) continue;
+      const value = draft[f];
+      if (Array.isArray(value)) {
+        frappe.model.clear_table(frm.doc, f);
+        for (const row of value) {
+          const child = frappe.model.add_child(frm.doc, df.options, f);
+          for (const [k, v] of Object.entries(row)) if (!SKIP_ROW.has(k)) child[k] = v;
         }
-        frm.refresh_fields();
+      } else {
+        frm.doc[f] = value;
       }
     }
-    frm.add_custom_button('Approve and Publish Website Item',async()=>{
-      if (frm.is_dirty()) await frm.save();
-      const {message:latest}=await frappe.call({method:'dsi_catalogue.website_item_review.get_item_review',args:{website_item:frm.doc.name}});
-      await frappe.call({method:'dsi_catalogue.storefront_review.approve',args:{name:latest.name,modified:latest.modified},freeze:true});
-      await frm.reload_doc();
-    }).addClass('btn-primary');
-  }
-});
+    frm.refresh_fields();
+  };
+
+  frappe.ui.form.on('Website Item', {
+    async refresh(frm) {
+      const isEditor = frappe.session.user === EDITOR;
+      const canRead = isEditor || READERS.some(r => frappe.user.has_role(r));
+      if (!isEditor) {
+        frm.disable_save();
+        frm.dashboard.set_headline('Website content is edited and published by Carla.');
+      }
+      if (frm.is_new() || !canRead) return;
+
+      const {message: review} = await frappe.call({method: 'dsi_catalogue.website_item_review.get_item_review', args: {website_item: frm.doc.name}});
+      if (!review) return;
+      frm.add_custom_button('Open Content Review', () => frappe.set_route('Form', 'Storefront Review', review.name));
+
+      const draft = parse(review.draft_json);
+      const pending = review.status !== 'Approved' ? pendingFields(draft, parse(review.source_json)) : [];
+      if (pending.length) {
+        const names = pending.map(f => frappe.utils.escape_html(fieldLabel(frm, f))).join(', ');
+        frm.dashboard.set_headline(isEditor
+          ? `<b>Saved, not published yet.</b> Waiting for your approval: ${names}. The values below are your saved draft; the website still shows the published copy. Click <b>Approve and Publish Website Item</b> to make them live.`
+          : `<b>Pending edits by Carla:</b> ${names}. Open Content Review to see exactly what changes.`);
+        if (isEditor && !frm.is_dirty()) showDraft(frm, draft, pending);
+      } else if (isEditor) {
+        frm.dashboard.clear_headline();
+      }
+      if (!isEditor) return;
+
+      frm.add_custom_button('Approve and Publish Website Item', async () => {
+        if (frm.is_dirty()) await frm.save();
+        const {message: latest} = await frappe.call({method: 'dsi_catalogue.website_item_review.get_item_review', args: {website_item: frm.doc.name}});
+        await frappe.call({method: 'dsi_catalogue.storefront_review.approve', args: {name: latest.name, modified: latest.modified}, freeze: true});
+        await frm.reload_doc();
+      }).addClass('btn-primary');
+    }
+  });
+})();

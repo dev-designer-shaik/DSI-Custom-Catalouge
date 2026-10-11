@@ -13,6 +13,24 @@ CONTENT_FIELDS = (
     'website_item_groups', 'custom_gallery_images', 'custom_translations',
 )
 
+# Roles that may READ a pending review. Publishing stays with the editor (only_editor).
+REVIEW_READERS = {'Storefront Reviewer', 'Website Manager', 'System Manager'}
+
+def only_reviewer_readers():
+    if not set(frappe.get_roles()) & REVIEW_READERS:
+        frappe.throw('Website review access required', frappe.PermissionError)
+
+def changed_fields(candidate, previous):
+    """The content fields this draft actually changes, against what it was written from.
+
+    Approval used to compare the WHOLE item with the snapshot and then overwrite every
+    field with the draft. Translation rows are touched in the background (is_stale
+    flags, fingerprints), so an untouched translation made any draft unapprovable
+    ("The Website Item changed"), and approving would have overwritten concurrent edits
+    to fields the draft never meant to change.
+    """
+    return {f: v for f, v in candidate.items() if f in CONTENT_FIELDS and v != (previous or {}).get(f)}
+
 def only_editor():
     if frappe.session.user != EDITOR and not frappe.flags.get('dsi_storefront_bootstrap'):
         frappe.throw('Only Carla can edit or publish website content.', frappe.PermissionError)
@@ -78,13 +96,17 @@ def approve_item(review, candidate):
     from dsi_catalogue.storefront_review import payload
     doc = frappe.get_doc('Website Item', review.website_item)
     previous = payload(review.source_json)
-    if previous and content(doc) != previous:
-        frappe.throw('The Website Item changed. Refresh this review before publishing.')
+    changed = changed_fields(candidate, previous) if previous else {f: v for f, v in candidate.items() if f in CONTENT_FIELDS}
+    if previous:
+        live = content(doc)
+        clash = [f for f in changed if live.get(f) != previous.get(f)]
+        if clash:
+            frappe.throw('Refresh this review before publishing. These fields changed on the Website Item after the draft was saved: ' + ', '.join(clash))
     previous_flag = frappe.flags.get('dsi_storefront_approving')
     frappe.flags.dsi_storefront_approving = True
     try:
-        for field, value in candidate.items():
-            if field in CONTENT_FIELDS and doc.meta.has_field(field):
+        for field, value in changed.items():
+            if doc.meta.has_field(field):
                 doc.set(field, value)
         image = doc.get('website_image') or ''
         if image:
@@ -113,6 +135,6 @@ def stage_translation(website_item, language, data):
 
 @frappe.whitelist()
 def get_item_review(website_item):
-    only_editor()
-    rows = frappe.get_all('Storefront Review',filters={'kind':'Website Item','website_item':website_item},fields=['name','modified','status','draft_json'],limit_page_length=1)
+    only_reviewer_readers()
+    rows = frappe.get_all('Storefront Review',filters={'kind':'Website Item','website_item':website_item},fields=['name','modified','status','draft_json','source_json','is_stale'],limit_page_length=1)
     return rows[0] if rows else None
