@@ -1,8 +1,8 @@
 {
   "doctype": "Workspace",
-  "name": "Storefront Review",
-  "label": "Storefront Review",
-  "title": "Storefront Review",
+  "name": "Website Content Review",
+  "label": "Website Content Review",
+  "title": "Website Content Review",
   "module": "dsi_catalogue",
   "public": 1,
   "is_hidden": 0,
@@ -32,5 +32,6 @@
     {
       "role": "System Manager"
     }
-  ]
+  ],
+  "type": "Workspace"
 }
