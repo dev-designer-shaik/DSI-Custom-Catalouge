@@ -1,0 +1,13 @@
+=== item sync -> erptest25 2026-10-22T16:08:32+03:00 | HEAD fc6607a
+prod files == 702a036
+hooks.py.orig
+website_item_review.py.orig
+installed + md5-checked
+frappe_docker-backend-1
+frappe_docker-frontend-1
+frappe_docker-queue-short-1
+frappe_docker-queue-long-1
+frappe_docker-scheduler-1
+ping: 200
+##### PROBE (rolled back)
+invalid container name or ID: value is empty
