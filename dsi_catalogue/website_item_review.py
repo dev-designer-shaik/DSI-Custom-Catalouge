@@ -35,14 +35,71 @@ def only_editor():
     if frappe.session.user != EDITOR and not frappe.flags.get('dsi_storefront_bootstrap'):
         frappe.throw('Only Carla can edit or publish website content.', frappe.PermissionError)
 
+# --- Item -> Website Item copy -------------------------------------------------------------------
+# webshop's Item on_update hook copies these Item fields onto the item's Website Item and saves it AS
+# WHOEVER SAVED THE ITEM.  With "only Carla writes a Website Item" that made every other user's Item edit
+# fail ("You need the 'write' permission on Website Item") on all items that have a Website Item.
+# Item.validate opens a window naming the ONE Item being saved; inside it the copy may write the fields
+# below to THAT item's Website Item, and nothing else (guard() refuses anything more).  Published can
+# only go DOWN: disabling an item unpublishes it at once, enabling it never republishes -- that stays
+# Carla's review.
+ITEM_SYNC_FIELDS = frozenset(('item_name', 'item_group', 'stock_uom', 'brand', 'description'))
+_STD_FIELDS = frozenset(('name', 'owner', 'creation', 'modified', 'modified_by', 'docstatus', 'idx',
+                         'parent', 'parentfield', 'parenttype', 'doctype'))
+
+def item_sync_begin(doc, method=None):
+    """Item validate: webshop is about to copy this Item onto its Website Item."""
+    if not doc.is_new() and frappe.db.exists('Website Item', {'item_code': doc.name}):
+        frappe.flags.dsi_item_sync = doc.name
+
+def item_sync_end(doc, method=None):
+    """Item on_change (after every on_update): close the window."""
+    frappe.flags.pop('dsi_item_sync', None)
+
+def item_sync_active(web_item):
+    """True while the Item that owns this Website Item is the one being saved."""
+    code = web_item.get('item_code') if hasattr(web_item, 'get') else getattr(web_item, 'item_code', None)
+    return bool(code) and frappe.flags.get('dsi_item_sync') == code
+
+def _row_values(row):
+    return {k: v for k, v in row.as_dict().items() if k not in _STD_FIELDS and not k.startswith('_')}
+
+def limit_to_item_sync(doc):
+    """Inside the Item window a non-editor may change ONLY ITEM_SYNC_FIELDS (+ unpublish)."""
+    before = doc.get_doc_before_save()
+    if before is None:  # a new Website Item is never part of the copy
+        only_editor()
+        return
+    skip = set(frappe.model.no_value_fields)
+    changed = set()
+    for df in doc.meta.fields:
+        if df.fieldname in _STD_FIELDS or df.fieldtype in skip:
+            continue
+        if df.fieldtype in frappe.model.table_fields:
+            if [_row_values(r) for r in doc.get(df.fieldname) or []] != [_row_values(r) for r in before.get(df.fieldname) or []]:
+                changed.add(df.fieldname)
+        elif (doc.get(df.fieldname) or '') != (before.get(df.fieldname) or ''):
+            changed.add(df.fieldname)
+    if doc.get('published') and not before.get('published'):
+        doc.published = before.get('published')  # enabling an item never republishes it
+        changed.discard('published')
+    extra = changed - ITEM_SYNC_FIELDS - {'published'}
+    if extra:
+        frappe.throw('An Item save may change only %s on its Website Item; it tried to change %s. Only Carla edits website content.'
+                     % (', '.join(sorted(ITEM_SYNC_FIELDS | {'published'})), ', '.join(sorted(extra))), frappe.PermissionError)
+
 def has_permission(doc, user=None, permission_type=None, ptype=None):
-    if (ptype or permission_type) in ('write', 'create', 'delete', 'submit', 'cancel', 'amend') and (user or frappe.session.user) != EDITOR:
-        return False
+    pt = ptype or permission_type
+    if pt in ('write', 'create', 'delete', 'submit', 'cancel', 'amend') and (user or frappe.session.user) != EDITOR:
+        # Only the Item->Website Item copy of the item being saved, and only a plain write; guard() limits what it may change.
+        return bool(pt == 'write' and getattr(doc, 'doctype', None) == 'Website Item' and item_sync_active(doc))
     # Frappe controller hooks can only deny; returning None also denies reads.
     # True preserves the role permissions that Frappe has already checked.
     return True
 
 def guard(doc, method=None):
+    if method == 'before_validate' and doc.doctype == 'Website Item' and item_sync_active(doc):
+        return limit_to_item_sync(doc)
     only_editor()
 
 def guard_child(doc, method=None):
@@ -69,6 +126,8 @@ def content(doc):
 
 def stage(doc, method=None):
     if frappe.flags.get('dsi_storefront_approving') or frappe.flags.get('dsi_storefront_bootstrap'):
+        return
+    if item_sync_active(doc):  # the Item copy: limit_to_item_sync() has already bounded it
         return
     from dsi_catalogue.storefront_review import upsert_draft
     before = doc.get_doc_before_save()

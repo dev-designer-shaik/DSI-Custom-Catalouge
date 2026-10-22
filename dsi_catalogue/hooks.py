@@ -32,6 +32,8 @@ doctype_js = {
 # ---------------
 doc_events = {
 	"*": {"before_validate": "dsi_catalogue.website_item_review.guard_child", "on_trash": "dsi_catalogue.website_item_review.guard_child"},
+	# Opens/closes the window in which webshop may copy this Item onto its Website Item (website_item_review.py).
+	"Item": {"validate": "dsi_catalogue.website_item_review.item_sync_begin", "on_change": "dsi_catalogue.website_item_review.item_sync_end"},
 	"Storefront Settings": {"before_validate": "dsi_catalogue.website_item_review.guard", "validate": "dsi_catalogue.storefront_review.validate_settings", "on_update": "dsi_catalogue.storefront_review.invalidate"},
 	"Storefront Review": {"before_validate": "dsi_catalogue.website_item_review.guard", "on_trash": "dsi_catalogue.website_item_review.guard", "validate": "dsi_catalogue.storefront_review.validate_review", "on_update": "dsi_catalogue.storefront_review.review_updated"},
 	"Website Item": {
