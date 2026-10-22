@@ -1,0 +1,3 @@
+SNAPSHOT /tmp/set_item_description_snapshot_20261022_185704.json | old description: 'OPULENT WOMAN-40ML' | website item: {'name': 'WEB-ITM-0165', 'description': 'OPULENT WOMAN-40ML', 'published': 1, 'workflow_state': 'Approved'}
+RESULT item.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' | website item=OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML) | published unchanged=True | no review draft made=True
+DONE | rollback: RESTORE_FROM=/tmp/set_item_description_snapshot_20261022_185704.json

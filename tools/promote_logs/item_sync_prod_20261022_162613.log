@@ -1,0 +1,39 @@
+=== item sync -> prod 2026-10-22T16:26:13+03:00 | HEAD 68fc750
+box files are 702a036 (or already this change)
+hooks.py.orig
+website_item_review.py.orig
+installed + md5-checked
+frappe_docker-backend-1
+frappe_docker-frontend-1
+frappe_docker-queue-short-1
+frappe_docker-queue-long-1
+frappe_docker-scheduler-1
+ping: 200
+##### PROBE (rolled back)
+Website Item WEB-ITM-0165 published 1 | item disabled: 0 | old description: 'OPULENT WOMAN-40ML'
+PASS karthika@designershaik.com: Item description save web.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' published=1 drafts+0
+PASS karthika@designershaik.com: window closed after save 
+PASS karthika@designershaik.com: disabling unpublishes at once, no draft published=0
+PASS karthika@designershaik.com: re-enabling does not republish published=0
+PASS carla@designershaik.com: Item description save web.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' published=1 drafts+0
+PASS carla@designershaik.com: window closed after save 
+PASS carla@designershaik.com: disabling unpublishes at once, no draft published=0
+PASS carla@designershaik.com: re-enabling does not republish published=0
+PASS Administrator: Item description save web.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' published=1 drafts+0
+PASS Administrator: window closed after save 
+PASS Administrator: disabling unpublishes at once, no draft published=0
+PASS Administrator: re-enabling does not republish published=0
+PASS karthika direct edit of Website Item.web_long_description refused 
+PASS karthika direct edit of Website Item.description refused 
+PASS karthika saves 10000001 (no Website Item) 
+PASS nothing committed: Website Item unchanged 
+ALL PASS (16/16)
+##### DESCRIPTION trial
+SNAPSHOT /tmp/set_item_description_snapshot_20261022_185700.json | old description: 'OPULENT WOMAN-40ML' | website item: {'name': 'WEB-ITM-0165', 'description': 'OPULENT WOMAN-40ML', 'published': 1, 'workflow_state': 'Approved'}
+RESULT item.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' | website item=OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML) | published unchanged=True | no review draft made=True
+DRY_ONLY: verified, rolled back
+##### DESCRIPTION real
+SNAPSHOT /tmp/set_item_description_snapshot_20261022_185704.json | old description: 'OPULENT WOMAN-40ML' | website item: {'name': 'WEB-ITM-0165', 'description': 'OPULENT WOMAN-40ML', 'published': 1, 'workflow_state': 'Approved'}
+RESULT item.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' | website item=OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML) | published unchanged=True | no review draft made=True
+DONE | rollback: RESTORE_FROM=/tmp/set_item_description_snapshot_20261022_185704.json
+=== DONE 2026-10-22T16:27:06+03:00

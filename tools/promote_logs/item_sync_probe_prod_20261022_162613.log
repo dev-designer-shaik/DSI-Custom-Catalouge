@@ -1,0 +1,18 @@
+Website Item WEB-ITM-0165 published 1 | item disabled: 0 | old description: 'OPULENT WOMAN-40ML'
+PASS karthika@designershaik.com: Item description save web.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' published=1 drafts+0
+PASS karthika@designershaik.com: window closed after save 
+PASS karthika@designershaik.com: disabling unpublishes at once, no draft published=0
+PASS karthika@designershaik.com: re-enabling does not republish published=0
+PASS carla@designershaik.com: Item description save web.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' published=1 drafts+0
+PASS carla@designershaik.com: window closed after save 
+PASS carla@designershaik.com: disabling unpublishes at once, no draft published=0
+PASS carla@designershaik.com: re-enabling does not republish published=0
+PASS Administrator: Item description save web.description='OPULENT SHAIK NO.33 CLASSIC PARFUM WOMEN (40ML)' published=1 drafts+0
+PASS Administrator: window closed after save 
+PASS Administrator: disabling unpublishes at once, no draft published=0
+PASS Administrator: re-enabling does not republish published=0
+PASS karthika direct edit of Website Item.web_long_description refused 
+PASS karthika direct edit of Website Item.description refused 
+PASS karthika saves 10000001 (no Website Item) 
+PASS nothing committed: Website Item unchanged 
+ALL PASS (16/16)
