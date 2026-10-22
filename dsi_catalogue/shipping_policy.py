@@ -30,7 +30,7 @@ from functools import partial
 
 import frappe
 from frappe.model.base_document import BaseDocument
-from frappe.utils import flt, getdate
+from frappe.utils import add_to_date, flt, getdate, now_datetime
 
 from dsi_catalogue.shipping_engine import normalize_country, resolve
 from dsi_catalogue.shipping_policy_data import (
@@ -47,6 +47,13 @@ POLICY_DOCTYPE = "Shipping Policy"
 # The price list the storefront prices from. An order's value, which the rules' order-value limits compare
 # against, is read from it and never taken from the caller.
 PRICE_LIST = "USD - Online"
+
+# A formula that cannot be calculated is noted in the Error Log, for a given rule at most once in this many
+# minutes. What triggers it is a guest's input, and the table is MyISAM (nothing rolls a row back), so a row for
+# every failing request would let anyone fill it.
+FORMULA_ERROR_LOG_MINUTES = 10
+FORMULA_ERROR_TITLE = "Shipping policy formula error"
+_FORMULA_ERROR_TEXT_LIMIT = 2000
 
 _ZONE_FIELDS = [
 	"name",
@@ -183,9 +190,11 @@ def country_is_served(country_code, heaviest_box_kg) -> bool:
 	"""Can a carrier deliver to this country, with cartons of up to this weight?
 
 	True when some enabled Shipping Service of an enabled Shipping Provider lists the country and its weight
-	limit is 0 (none) or at least the heaviest carton: the services `get_shipping_rates` would quote. A code
-	that is not two letters is not a country, so not served. When dsi_shipping is not installed there is
-	nothing to check against and a country counts as served. Never raises on odd input.
+	limit is 0 (none) or at least the heaviest carton: the services `get_shipping_rates` would quote, which
+	skips a service when `max_weight_kg and weight > max_weight_kg` (so a negative limit, which the form
+	refuses and the database can hold, serves no carton). A code that is not two letters is not a country, so
+	not served. When dsi_shipping is not installed there is nothing to check against and a country counts as
+	served. Never raises on odd input.
 	"""
 	code = normalize_country(country_code)
 	if not code:
@@ -194,7 +203,7 @@ def country_is_served(country_code, heaviest_box_kg) -> bool:
 	if listed is None:
 		return True
 	weight = flt(heaviest_box_kg)
-	return any(limit <= 0 or limit >= weight for _, limit in listed)
+	return any(not limit or limit >= weight for _, limit in listed)
 
 
 def served_country_codes() -> list[str]:
@@ -367,41 +376,64 @@ def translate(text, language):
 
 # ---------------------------------------------------------------- the guest methods
 def _log_formula_error(policy, result, country_code):
-	"""Record that a rule's formula could not be calculated for an order, which then went to the fallback.
+	"""Note in the Error Log that a rule's formula could not be calculated for an order, which then went to
+	the fallback. For a given rule that is done at most once in FORMULA_ERROR_LOG_MINUTES.
 
 	The entry names the rule, its formula, the zone and the country, so that whoever keeps the policy can fix
-	it. It says nothing about the customer or what was ordered.
+	it, and nothing about the customer or what was ordered. It is inserted as a document of its own, never
+	through `frappe.log_error`, which copies the whole request (the cart, the cartons, the quotes) into the
+	entry's metadata. It refers to the rule's row (`Shipping Policy Rule`), and the throttle is a look at the
+	Error Log for an entry that refers to the same row and is newer than the window (no cache is involved).
+
+	It is best-effort: whatever goes wrong here, the customer's answer is not affected. The `except` does not
+	call `frappe.log_error` either, because that would bring the flood back.
 	"""
-	index = result.get("rule")
-	rules = policy.get("rules") or []
-	rule = rules[index] if isinstance(index, int) and 0 <= index < len(rules) else {}
-	label = (rule.get("label") or "").strip()
-	named = f' ("{label}")' if label else ""
-	number = index + 1 if isinstance(index, int) else "?"
-	frappe.log_error(
-		title="Shipping policy formula error",
-		message=(
+	try:
+		index = result.get("rule")
+		rules = policy.get("rules") or []
+		rule = rules[index] if isinstance(index, int) and 0 <= index < len(rules) else {}
+		reference = {
+			"reference_doctype": "Shipping Policy Rule",
+			"reference_name": rule.get("name") or f"rule-{index}",
+		}
+		since = add_to_date(now_datetime(), minutes=-FORMULA_ERROR_LOG_MINUTES)
+		if frappe.db.exists("Error Log", {**reference, "creation": [">", since]}):
+			return
+		label = (rule.get("label") or "").strip()
+		named = f' ("{label}")' if label else ""
+		number = index + 1 if isinstance(index, int) else "?"
+		text = (
 			f"Rule {number}{named} could not be priced, so the zone's fallback applied.\n"
 			f"Formula: {rule.get('formula') or ''}\n"
 			f"Zone: {result.get('zone')}\n"
 			f"Country: {normalize_country(country_code)}"
-		),
-	)
+		)
+		frappe.get_doc(
+			{
+				"doctype": "Error Log",
+				"method": FORMULA_ERROR_TITLE,
+				"error": text[:_FORMULA_ERROR_TEXT_LIMIT],
+				**reference,
+			}
+		).insert(ignore_permissions=True)
+	except Exception:
+		return
 
 
 @frappe.whitelist(allow_guest=True)
-def price_delivery(country_code, items, boxes, quotes, language=None) -> dict:
+def price_delivery(country_code=None, items=None, boxes=None, quotes=None, language=None) -> dict:
 	"""What a customer pays for delivery: the carrier's quotes for the order, run through the shipping policy.
 
-	Arguments (each list may be a list or JSON text of one, as a form post sends it):
+	Arguments (each list may be a list or JSON text of one, as a form post sends it; every argument is
+	optional, and a missing one is answered like an empty one):
 
-		country_code  where it goes, as the customer wrote it: " ae " is AE; anything that is not two letters
-		              is a destination nobody delivers to, not an error
+		country_code  where it goes, as the customer wrote it: " ae " is AE; anything that is not two letters,
+		              or nothing, is a destination nobody delivers to, not an error
 		items         [{"item_code", "qty"}]: at most 200; the ERP supplies each item's groups and price
 		boxes         [{"weight_kg", "volume_l"}]: the packed cartons, at most 50, both measures required
 		quotes        [{"service_id", "name", "amount", "boxes_quoted"}]: the carrier's price per service and
 		              how many cartons that service quoted, at most 20
-		language      optional; a Language the ERP has Translation records for. Anything else is English.
+		language      a Language the ERP has Translation records for. Anything else is English.
 
 	Returns {"policy_active", "zone", "offered", "reason", "message", "offers": [{"service_id", "name",
 	"amount", "source", "reason"}]}: whether the policy is on, the zone the country falls in, whether delivery
@@ -409,9 +441,11 @@ def price_delivery(country_code, items, boxes, quotes, language=None) -> dict:
 	message and one offer per delivery method. Nothing else is returned: no rule number, trace or formula.
 
 	Numbers that are negative, not finite or above a billion, lists over their limit, text where a number
-	belongs and ids or names that are not plain text (a lone surrogate, which JSON can carry but nothing can
-	write) are refused with a plain `frappe.ValidationError`. While the policy is off the quotes come back as
-	they were posted, and only the quotes are checked. The policy is read afresh on every call.
+	belongs and ids or names that are not plain text (a control character or a lone surrogate, which JSON can
+	carry but nothing can write) are refused with a plain `frappe.ValidationError`. While the policy is off the
+	quotes come back as they were posted, and only the quotes are checked. The policy is read afresh on every
+	call. A rule whose formula cannot be calculated sends the order to the fallback and is noted in the Error
+	Log, at most once in FORMULA_ERROR_LOG_MINUTES for each rule.
 	"""
 	policy = load_policy()
 	try:

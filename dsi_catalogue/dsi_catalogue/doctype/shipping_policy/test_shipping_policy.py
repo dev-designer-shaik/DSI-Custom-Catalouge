@@ -10,6 +10,8 @@ This module also holds the helpers that every native test of the feature shares:
 	zone_of(), rule_of(), policy_of()    a zone, a rule and a whole policy in the shape the engine reads
 	find_items()      real items of the site to order: inside or outside the watches, priced or not
 	as_guest()        runs a block as the Guest the website calls the guest methods as
+	error_log_entries()  the Error Log rows a block writes, deleted when it ends (that table is MyISAM)
+	web_request()     runs a block as if inside a web request that posted given arguments
 
 `ShippingPolicyTestCase` runs `wipe_policy` after every test, pass or fail. It refuses to run on a site that
 already holds a shipping policy, because the helpers reset it: run these tests on erp2 (the sandbox), never
@@ -21,6 +23,7 @@ on a site with a real policy. The hermetic fixture reaches erp2 with tools/erp2_
 import ast
 import inspect
 import json
+import types
 import unittest
 import warnings
 from contextlib import ExitStack, contextmanager
@@ -28,6 +31,7 @@ from unittest import mock
 
 import frappe
 import orjson
+from frappe.model.document import Document
 from frappe.tests.classes.integration_test_case import IntegrationTestCase
 from frappe.utils import add_days, add_to_date, flt, now_datetime, nowdate
 
@@ -392,6 +396,12 @@ ONE_BOX = {"weight_kg": 1.5, "volume_l": 4.0}
 # What the guest methods may hand back, and nothing more.
 RESPONSE_KEYS = {"policy_active", "zone", "offered", "reason", "message", "offers"}
 OFFER_KEYS = {"service_id", "name", "amount", "source", "reason"}
+# The title of the Error Log entries for a formula that could not be calculated.
+FORMULA_ERROR = "Shipping policy formula error"
+# A formula that passes the save-time check (at the sample weight of 2.4 kg it gives a number) and divides by
+# zero for a carton of 5 kg.
+FRAGILE = "10 / (weight_kg - 5)"
+CRASH_BOXES = [{"weight_kg": 5.0, "volume_l": 1.0}]
 
 
 def _listed(value):
@@ -413,6 +423,20 @@ def guest_summary(language=None):
 		result = shipping_policy.public_summary(language)
 	orjson.dumps(result)
 	return result
+
+
+def fragile_policy(*countries):
+	"""A policy with a zone ("Zone 1", "Zone 2"...) and one rule for each country, every rule's formula failing
+	for the 5 kg carton of CRASH_BOXES. Each zone's fallback is a fixed 35.00."""
+	zones = [
+		zone_of(f"Zone {number}", [code], fallback={"method": "fixed", "amount": 35.0})
+		for number, code in enumerate(countries, start=1)
+	]
+	rules = [
+		rule_of(zone["name"], label=f"Weight formula {number}", method="formula", formula=FRAGILE)
+		for number, zone in enumerate(zones, start=1)
+	]
+	return policy_of(zones, rules)
 
 
 def quote_of(amount, **fields):
@@ -449,7 +473,8 @@ def error_log_entries(title):
 	known = set(frappe.get_all("Error Log", {"method": title}, pluck="name"))
 
 	def new():
-		rows = frappe.get_all("Error Log", {"method": title}, ["name", "error"])
+		fields = ["name", "error", "metadata", "reference_doctype", "reference_name", "creation"]
+		rows = frappe.get_all("Error Log", {"method": title}, fields)
 		return [row for row in rows if row["name"] not in known]
 
 	try:
@@ -457,6 +482,20 @@ def error_log_entries(title):
 	finally:
 		if names := [row["name"] for row in new()]:
 			frappe.db.delete("Error Log", {"name": ["in", names]})
+
+
+@contextmanager
+def web_request(**posted):
+	"""Run a block as if it were inside a web request that posted `posted`. Frappe's own error logging copies
+	the request, `form_dict` included, into the entry it writes: this is what lets a test see whether it did."""
+	request = types.SimpleNamespace(
+		method="POST", path="/api/method/dsi_catalogue.shipping_policy.price_delivery", referrer=None
+	)
+	with (
+		mock.patch.object(frappe.local, "request", request, create=True),
+		mock.patch.dict(frappe.local.form_dict, posted),
+	):
+		yield
 
 
 def make_translation(test, language, source, translated):
@@ -542,16 +581,66 @@ class TestGuestMethods(ShippingPolicyTestCase):
 					with self.assertRaises(frappe.PermissionError):
 						frappe.get_list(doctype)
 				self.assertFalse(frappe.get_doc(POLICY).has_permission("read"))
-			# The two methods are open to guests, and nothing else of the module is.
 			for method in (shipping_policy.price_delivery, shipping_policy.public_summary):
 				frappe.is_whitelisted(method)  # raises PermissionError for a guest when it is not open
-			for helper in (
-				shipping_policy.build_order,
-				shipping_policy.load_policy,
-				shipping_policy.translate,
-			):
-				with self.assertRaises(frappe.PermissionError):
-					frappe.is_whitelisted(helper)
+
+	def test_only_the_two_guest_methods_are_whitelisted(self):
+		public = {
+			name: function
+			for name, function in vars(shipping_policy).items()
+			if inspect.isfunction(function)
+			and function.__module__ == shipping_policy.__name__
+			and not name.startswith("_")
+		}
+		# the lookups Task 6 reuses are all there to be checked, and none of them is open to anybody
+		self.assertLessEqual(
+			{"build_order", "item_groups_for", "order_value_for", "country_is_served"}, set(public)
+		)
+		self.assertLessEqual({"served_country_codes", "translate", "load_policy"}, set(public))
+		guest_methods = {"price_delivery", "public_summary"}
+		self.assertEqual(
+			{name for name, function in public.items() if function in frappe.whitelisted}, guest_methods
+		)
+		self.assertEqual(
+			{name for name, function in public.items() if function in frappe.guest_methods}, guest_methods
+		)
+
+	def test_a_call_with_missing_arguments_is_answered_like_an_empty_one(self):
+		self.assertEqual(
+			list(inspect.signature(shipping_policy.price_delivery).parameters),
+			["country_code", "items", "boxes", "quotes", "language"],
+		)
+		seed_policy(load_example(), active=True)
+		with as_guest():
+			nothing = shipping_policy.price_delivery()
+			country_only = shipping_policy.price_delivery("AE")
+			no_items = shipping_policy.price_delivery(country_code="AE", quotes=[QUOTE])
+			no_country = shipping_policy.price_delivery(quotes=[QUOTE])
+		self.assertEqual(
+			(nothing["offered"], nothing["reason"], nothing["offers"]), (False, "not_served", [])
+		)
+		self.assertEqual(nothing, guest_price(None, items=None, boxes=None, quotes=None))
+		self.assertEqual(country_only, guest_price("AE", boxes=[], quotes=[]), "AE with nothing quoted")
+		self.assertEqual(country_only["reason"], "fallback_offer")
+		self.assertEqual((no_items["zone"], first_amount(no_items)), ("GCC", 39.0))
+		self.assertEqual((no_country["reason"], no_country["offers"]), ("not_served", []))
+		# While the policy is off the quotes are echoed, and with none there is nothing to echo.
+		frappe.db.set_single_value(POLICY, "active", 0)
+		with as_guest():
+			echoed = shipping_policy.price_delivery(quotes=[{"service_id": "A", "amount": 12.5}])
+			empty = shipping_policy.price_delivery()
+		self.assertEqual([(o["service_id"], o["amount"]) for o in echoed["offers"]], [("A", 12.5)])
+		self.assertEqual(
+			empty,
+			{
+				"policy_active": False,
+				"zone": None,
+				"offered": False,
+				"reason": None,
+				"message": "",
+				"offers": [],
+			},
+		)
 
 	def test_policy_off_returns_the_quotes_unchanged(self):
 		quotes = [
@@ -666,6 +755,8 @@ class TestGuestMethods(ShippingPolicyTestCase):
 		}
 		banned = {"get_cached_doc", "get_cached_value", "cache", "lru_cache", "site_cache", "request_cache"}
 		self.assertEqual(used & banned, set())
+		# and the formula-error entry is written directly: `frappe.log_error` copies the whole request into it
+		self.assertNotIn("log_error", used)
 
 	def test_unknown_and_unpriced_items_count_as_zero_and_a_groupless_item_matches_only_by_code(self):
 		seed_policy(load_example(), active=True)
@@ -823,18 +914,17 @@ class TestGuestMethods(ShippingPolicyTestCase):
 			"service id with an escape character": {"quotes": [quote_of(5.0, service_id="A\x1b[0mB")]},
 			"service name with a tab": {"quotes": [quote_of(5.0, name="N\tB")]},
 		}
-		for what, bad in refused.items():
-			with self.subTest(what):
-				with (
-					mock.patch.object(frappe, "log_error") as log,
-					self.assertRaises(frappe.ValidationError) as caught,
-				):
-					guest_price(**bad)
-				message = str(caught.exception)
-				self.assertTrue(message.endswith("."), f"a plain sentence: {message}")
-				self.assertNotIn("MARKER", message, "what was sent is not repeated")
-				self.assertNotIn("Traceback", message)
-				log.assert_not_called()  # a refusal is the guest's mistake, not an error of ours
+		# The policy is read first, then the input is cleaned: nothing else is read before a refusal.
+		with no_lookups(), error_log_entries(FORMULA_ERROR) as new_entries:
+			for what, bad in refused.items():
+				with self.subTest(what):
+					with self.assertRaises(frappe.ValidationError) as caught:
+						guest_price(**bad)
+					message = str(caught.exception)
+					self.assertTrue(message.endswith("."), f"a plain sentence: {message}")
+					self.assertNotIn("MARKER", message, "what was sent is not repeated")
+					self.assertNotIn("Traceback", message)
+			self.assertEqual(new_entries(), [], "a refusal is the guest's mistake, not an error of ours")
 
 	def test_unserved_country_is_not_offered_even_with_a_fallback(self):
 		served = shipping_policy.served_country_codes()
@@ -883,6 +973,12 @@ class TestGuestMethods(ShippingPolicyTestCase):
 		self.assertTrue(served(country, 5), "the scope is not looked at, as in the carrier path")
 		frappe.db.set_value("Shipping Service", service.name, "max_weight_kg", 0)
 		self.assertTrue(served(country, 5000), "a limit of 0 is no limit")
+		# The form refuses a negative limit, the database can hold one, and the carrier path then skips the
+		# service for every carton (`weight > limit`), so nobody is served by it.
+		frappe.db.set_value("Shipping Service", service.name, "max_weight_kg", -5)
+		self.assertFalse(served(country, 5))
+		self.assertFalse(served(country, 0))
+		frappe.db.set_value("Shipping Service", service.name, "max_weight_kg", 0)
 		frappe.db.set_value("Shipping Service", service.name, "enabled", 0)
 		self.assertFalse(served(country, 0), "a disabled service serves nobody")
 		self.assertNotIn(country, shipping_policy.served_country_codes())
@@ -892,6 +988,17 @@ class TestGuestMethods(ShippingPolicyTestCase):
 		self.assertNotIn(country, shipping_policy.served_country_codes())
 		frappe.db.set_value("Shipping Provider", provider.name, "enabled", 1)
 		self.assertTrue(served(country, 0))
+
+	def test_country_is_served_follows_the_carrier_paths_weight_rule(self):
+		# dsi_shipping.api.get_shipping_rates skips a service when `max_weight_kg and weight > max_weight_kg`.
+		for limit in (0.0, -5.0, 0.5, 10.0):
+			for weight in (-1.0, 0.0, 0.5, 10.0, 10.001, 1000.0):
+				skipped = bool(limit) and weight > limit
+				listed = mock.patch.object(
+					shipping_policy, "_carrier_countries", return_value=[("AE", limit)]
+				)
+				with self.subTest(limit=limit, weight=weight), listed:
+					self.assertEqual(shipping_policy.country_is_served("AE", weight), not skipped)
 
 	def test_a_code_that_is_not_two_letters_is_not_served(self):
 		for code in ("", " ", "A", "UAE", "A1", "ÄE", "ae\x00", None, 123, 4.5, ["AE"], {"AE": 1}, True):
@@ -934,37 +1041,124 @@ class TestGuestMethods(ShippingPolicyTestCase):
 				)
 
 	def test_a_formula_error_is_logged_without_customer_data(self):
-		policy = policy_of(
-			[zone_of("Gulf", ["AE"], fallback={"method": "fixed", "amount": 35.0})],
-			[rule_of("Gulf", label="Weight formula", method="formula", formula="10 / (weight_kg - 5)")],
-		)
-		seed_policy(policy, active=True)  # saves: at the checker's sample weight the formula gives a number
+		seed_policy(
+			fragile_policy("AE"), active=True
+		)  # it saves: at the sample weight the formula gives a number
 		[(perfume, _)] = find_items(watches=False, priced=True)
-		crash = {"boxes": [{"weight_kg": 5.0, "volume_l": 1.0}], "items": one_of(perfume)}
-		with mock.patch.object(frappe, "log_error") as log:
+		secret = quote_of(38.2, service_id="SECRET-SERVICE", name="Secret Express")
+		crash = {"boxes": CRASH_BOXES, "items": one_of(perfume), "quotes": [secret]}
+		rule_row = load_policy()["rules"][0]["name"]
+		with error_log_entries(FORMULA_ERROR) as new_entries:
 			result = guest_price(**crash)
-		self.assertEqual(
-			(result["reason"], result["offered"], first_amount(result)), ("formula_error", True, 35.0)
-		)
-		self.assertEqual(result["offers"][0]["service_id"], "policy-fallback")
-		self.assertEqual(set(result), RESPONSE_KEYS)
-		log.assert_called_once()
-		logged = log.call_args.kwargs
-		self.assertEqual(logged["title"], "Shipping policy formula error")
-		for named in ("Rule 1", "Weight formula", "10 / (weight_kg - 5)", "Gulf", "AE"):
-			self.assertIn(named, logged["message"])
-		for private in (perfume, "Aramex", "38.2", "1.5"):
-			self.assertNotIn(private, logged["message"], "nothing about the customer's order")
-		# Unmocked, the Error Log really gets one entry, and it carries the same words.
-		with error_log_entries("Shipping policy formula error") as new_entries:
-			guest_price(**crash)
+			self.assertEqual(
+				(result["reason"], result["offered"], first_amount(result)), ("formula_error", True, 35.0)
+			)
+			self.assertEqual(result["offers"][0]["service_id"], "policy-fallback")
+			self.assertEqual(set(result), RESPONSE_KEYS)
 			[entry] = new_entries()
-			for named in ("Rule 1", "Weight formula", "10 / (weight_kg - 5)", "Gulf", "AE"):
+			for named in ("Rule 1", "Weight formula 1", FRAGILE, "Zone 1", "AE"):
 				self.assertIn(named, entry["error"])
+			# nothing of the order: not the item, the service, the amount nor the carton (5.0 kg, 1.0 l)
+			for private in (perfume, "SECRET-SERVICE", "Secret Express", "38.2", "5.0", "1.0"):
+				self.assertNotIn(private, entry["error"], "nothing about the customer's order")
+			self.assertLessEqual(len(entry["error"]), 2000)
+			self.assertEqual(
+				(entry["reference_doctype"], entry["reference_name"]), ("Shipping Policy Rule", rule_row)
+			)
+			self.assertIsNone(entry["metadata"], "no request metadata is attached")
 		# A call that prices normally logs nothing.
-		with mock.patch.object(frappe, "log_error") as log:
+		with error_log_entries(FORMULA_ERROR) as new_entries:
 			guest_price(boxes=[{"weight_kg": 2.0, "volume_l": 1.0}], items=one_of(perfume))
-		log.assert_not_called()
+			self.assertEqual(new_entries(), [])
+
+	def test_the_same_rule_is_logged_once_in_ten_minutes(self):
+		seed_policy(fragile_policy("AE"), active=True)
+		with error_log_entries(FORMULA_ERROR) as new_entries:
+			first = guest_price(boxes=CRASH_BOXES)
+			self.assertEqual(
+				guest_price(boxes=CRASH_BOXES), first, "the customer gets the same answer each time"
+			)
+			[entry] = new_entries()  # one row for two failures
+			# A row from nine minutes ago is inside the window: still one row.
+			ago = add_to_date(now_datetime(), minutes=-9)
+			frappe.db.set_value("Error Log", entry["name"], "creation", ago, update_modified=False)
+			guest_price(boxes=CRASH_BOXES)
+			self.assertEqual(len(new_entries()), 1)
+			# One from eleven minutes ago is outside it: the next failure is written again.
+			ago = add_to_date(now_datetime(), minutes=-11)
+			frappe.db.set_value("Error Log", entry["name"], "creation", ago, update_modified=False)
+			guest_price(boxes=CRASH_BOXES)
+			self.assertEqual(len(new_entries()), 2)
+
+	def test_each_rule_has_its_own_log_entry(self):
+		first, second = shipping_policy.served_country_codes()[:2]
+		seed_policy(fragile_policy(first, second), active=True)
+		rows = {rule["label"]: rule["name"] for rule in load_policy()["rules"]}
+		with error_log_entries(FORMULA_ERROR) as new_entries:
+			for code in (first, second, first, second):
+				guest_price(code, boxes=CRASH_BOXES)
+			text = {entry["reference_name"]: entry["error"] for entry in new_entries()}
+		self.assertEqual(sorted(text), sorted(rows.values()), "one entry for each rule, not for each failure")
+		self.assertIn("Zone 1", text[rows["Weight formula 1"]])
+		self.assertIn("Zone 2", text[rows["Weight formula 2"]])
+
+	def test_the_log_entry_carries_no_request_metadata(self):
+		seed_policy(fragile_policy("AE"), active=True)
+		[(perfume, _)] = find_items(watches=False, priced=True)
+		posted = {"items": json.dumps(one_of(perfume)), "cart_marker": "CART-MARKER-123"}
+		# `set_user` resets the form, so the request is entered after the guest session starts.
+		with as_guest(), web_request(**posted), error_log_entries(FORMULA_ERROR) as new_entries:
+			shipping_policy.price_delivery("AE", one_of(perfume), CRASH_BOXES, [QUOTE])
+			[entry] = new_entries()
+			self.assertIsNone(entry["metadata"])
+			self.assertNotIn("CART-MARKER", json.dumps(entry, default=str))
+		# The control: in the same request, Frappe's own logger does copy what was posted. So the test can fail.
+		with web_request(**posted), error_log_entries("zz request metadata probe") as probe:
+			frappe.log_error(title="zz request metadata probe", message="control")
+			[control] = probe()
+			self.assertIn("CART-MARKER-123", control["metadata"])
+
+	def test_a_failing_log_never_changes_the_answer(self):
+		seed_policy(fragile_policy("AE"), active=True)
+		with error_log_entries(FORMULA_ERROR):
+			normal = guest_price(boxes=CRASH_BOXES)
+		self.assertEqual(
+			(normal["reason"], normal["offers"][0]["service_id"], first_amount(normal)),
+			("formula_error", "policy-fallback", 35.0),
+		)
+		real_exists = frappe.db.exists
+
+		def exists(doctype, *args, **kwargs):
+			# Only the lookup in the Error Log fails. A failing `exists` everywhere would also break the hooks of
+			# other apps that run on an Error Log insert (one of them logs its own failure with another Error Log
+			# insert, and so on), and the Error Log is a table nothing rolls back.
+			if doctype == "Error Log":
+				raise RuntimeError("table crashed")
+			return real_exists(doctype, *args, **kwargs)
+
+		failures = {
+			"the insert fails": mock.patch.object(Document, "insert", side_effect=RuntimeError("disk full")),
+			"the throttle check fails": mock.patch.object(frappe.db, "exists", side_effect=exists),
+		}
+		for what, failure in failures.items():
+			with self.subTest(what), failure, error_log_entries(FORMULA_ERROR) as new_entries:
+				self.assertEqual(guest_price(boxes=CRASH_BOXES), normal)
+				self.assertEqual(new_entries(), [])
+
+	def test_the_log_text_is_capped_and_a_rule_without_a_row_name_is_named_by_its_position(self):
+		huge = "L" * 5000
+		with error_log_entries(FORMULA_ERROR) as new_entries:
+			shipping_policy._log_formula_error(
+				{"rules": [{"name": "capped-rule", "label": huge, "formula": huge}]},
+				{"rule": 0, "zone": huge},
+				"AE",
+			)
+			shipping_policy._log_formula_error(
+				{"rules": [{"label": "x", "formula": "y"}]}, {"rule": 0, "zone": "Z"}, "AE"
+			)
+			entries = {entry["reference_name"]: entry["error"] for entry in new_entries()}
+		self.assertEqual(sorted(entries), ["capped-rule", "rule-0"])
+		self.assertEqual(len(entries["capped-rule"]), 2000)
 
 	def test_build_order_assembles_the_order_the_engine_reads(self):
 		[(perfume, price)] = find_items(watches=False, priced=True)
