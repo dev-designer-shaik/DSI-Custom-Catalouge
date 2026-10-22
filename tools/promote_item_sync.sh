@@ -23,7 +23,7 @@ SRC="$(cd "$(dirname "$0")/.." && pwd)"; STAMP=$(date +%Y%m%d_%H%M%S); OUT="$SRC
 exec > >(tee -a "$OUT/item_sync_${BOX}_${STAMP}.log") 2>&1
 R() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 "$HOST" "$@"; }
 # every argument is %q-quoted: the remote shell re-parses ssh's command line (the description has spaces and parentheses)
-PY() { local f="$1"; shift; local extra; extra=$(printf '%q ' "$@")
+PY() { local f="$1"; shift; local extra=""; [ $# -gt 0 ] && extra=$(printf '%q ' "$@")
 	R "sudo docker exec -w $B/sites -e SITE=$SITE $extra $BK timeout 600 ../env/bin/python -u /tmp/$f" 2>&1 | grep -v RuntimeWarning; }
 cd "$SRC"
 echo "=== item sync -> $BOX $(date -Is) | HEAD $(git rev-parse --short HEAD)"
@@ -31,10 +31,11 @@ git diff --quiet HEAD -- . || { echo "REFUSING: working tree has uncommitted cha
 FILES="dsi_catalogue/website_item_review.py dsi_catalogue/hooks.py"
 python3 -m pytest -q tests/hermetic/test_item_sync.py tests/hermetic/test_auth.py tests/hermetic/test_index_key.py tests/hermetic/test_order_remarks.py 2>&1 | tail -1 | grep -q passed || { echo "REFUSING: hermetic tests fail"; exit 1; }
 for f in $FILES; do
-	[ "$(git show $BASE:$f | md5sum | cut -d' ' -f1)" = "$(R "sudo docker exec $BK md5sum $B/apps/dsi_catalogue/$f" | cut -d' ' -f1)" ] \
-		|| { echo "REFUSING: prod's $f is not the version this change was built on ($BASE)"; exit 1; }
+	REMOTE=$(R "sudo docker exec $BK md5sum $B/apps/dsi_catalogue/$f" | cut -d' ' -f1)
+	[ "$(git show $BASE:$f | md5sum | cut -d' ' -f1)" = "$REMOTE" ] || [ "$(md5sum $f | cut -d' ' -f1)" = "$REMOTE" ] \
+		|| { echo "REFUSING: the box's $f is neither the version this change was built on ($BASE) nor this change"; exit 1; }
 done
-echo "prod files == $BASE"
+echo "box files are $BASE (or already this change)"
 R "mkdir -p /home/ubuntu/dsi_catalogue_orig_$STAMP && for f in website_item_review.py hooks.py; do sudo docker cp $BK:$APP/\$f /home/ubuntu/dsi_catalogue_orig_$STAMP/\$f.orig; done; ls /home/ubuntu/dsi_catalogue_orig_$STAMP"
 scp -q -i "$KEY" tools/itemsync_probe.py tools/set_item_description.py $(for f in $FILES; do echo $f; done) "$HOST:/tmp/"
 for f in itemsync_probe.py set_item_description.py; do R "sudo docker cp /tmp/$f $BK:/tmp/$f"; done
