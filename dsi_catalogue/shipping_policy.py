@@ -220,8 +220,9 @@ def _is_utf8(text: str) -> bool:
 def _database_codes(values) -> list[str]:
 	"""The distinct, non-empty texts among `values`, in order, that the database can be asked about.
 
-	A guest can post JSON that holds a lone surrogate ("\\ud800"). It is text, but it cannot be written as
-	UTF-8, so the database driver raises on it. It is no item code the ERP knows: it is left out of the query.
+	A lone surrogate ("\\ud800") is text Python holds but nothing can write as UTF-8, so the database driver
+	raises on it. The cleaners refuse such text, but these lookups are plain functions that anybody may call
+	with anything: it is no item code the ERP knows, so it is left out of the query.
 	"""
 	return list(
 		dict.fromkeys(value for value in values if isinstance(value, str) and value and _is_utf8(value))
@@ -365,21 +366,6 @@ def translate(text, language):
 
 
 # ---------------------------------------------------------------- the guest methods
-def _refuse_unwritable_text(entries, singular, *fields):
-	"""`entries` as they are, once the text in `fields` is known to be writable as UTF-8.
-
-	A guest can send JSON text that holds a lone surrogate ("\\ud800"): valid JSON, but not text a database
-	driver or Frappe's JSON encoder can write, and both raise on it. The service id and name come back in the
-	response, so such a request would end as a bare server error instead of a refusal. The cleaners let it
-	through, so it is refused here, with a sentence that does not repeat what was sent.
-	"""
-	for position, entry in enumerate(entries, start=1):
-		for field in fields:
-			if not _is_utf8(entry[field]):
-				raise InputError(f"{singular} {position}: {field} has to be plain text.")
-	return entries
-
-
 def _log_formula_error(policy, result, country_code):
 	"""Record that a rule's formula could not be calculated for an order, which then went to the fallback.
 
@@ -430,15 +416,9 @@ def price_delivery(country_code, items, boxes, quotes, language=None) -> dict:
 	policy = load_policy()
 	try:
 		if policy["active"]:
-			order = build_order(
-				country_code,
-				_refuse_unwritable_text(clean_items(items), "Item", "item_code"),
-				clean_boxes(boxes),
-				_refuse_unwritable_text(clean_quotes(quotes), "Quote", "service_id", "name"),
-			)
+			order = build_order(country_code, clean_items(items), clean_boxes(boxes), clean_quotes(quotes))
 		else:
-			quotes = _refuse_unwritable_text(clean_quotes(quotes), "Quote", "service_id", "name")
-			order = {"country_code": country_code, "quotes": quotes}
+			order = {"country_code": country_code, "quotes": clean_quotes(quotes)}
 	except InputError as error:
 		frappe.throw(str(error), frappe.ValidationError)
 	result = resolve(policy, order)

@@ -257,6 +257,7 @@ def assert_number(value, *, above_zero=False):
 
 def assert_text(value):
 	assert type(value) is str and value == value.strip() and 0 < len(value) <= 140, value
+	assert value.isprintable(), "no control character, NUL or lone surrogate gets through"
 
 
 def assert_clean(kind, cleaned):
@@ -626,6 +627,74 @@ def test_a_quote_name_has_to_be_text_of_at_most_140_characters():
 			clean_quotes([quote(name=bad)])
 
 
+# Text that JSON can carry and Python holds, but that no id or name should be: a lone surrogate cannot be written
+# as UTF-8 (the database driver and Frappe's JSON encoder both raise on it), and a control character or NUL has no
+# place in a code a person types.
+NOT_PLAIN = {
+	"a lone low surrogate": "A\ud800B",
+	"a lone surrogate alone": "\ud800",
+	"a lone high surrogate": "N\ud83d",
+	"a NUL": "A\x00B",
+	"a tab": "A\tB",
+	"a new line": "A\nB",
+	"an escape sequence": "A\x1b[0mB",
+	"a delete character": "A\x7fB",
+	"a line separator": "A\u2028B",
+}
+# What stays: any script, a space inside, punctuation, an emoji.
+PLAIN = {
+	"letters, digits and a space": "AB 12",
+	"an Arabic name": "شركة الشحن السريع",
+	"accents and Japanese": "Café 日本",
+	"punctuation": "PERF-1/#2 (50 ml) & more",
+	"an emoji": "\U0001f4e6 box",
+}
+PLAIN_TEXT_FIELDS = [*TEXT_FIELDS, pytest.param(clean_quotes, quote, "name", id="name")]
+
+
+def who_of(clean):
+	return "Item 1" if clean is clean_items else "Quote 1"
+
+
+@pytest.mark.parametrize(("clean", "build", "field"), PLAIN_TEXT_FIELDS)
+@pytest.mark.parametrize("bad", NOT_PLAIN.values(), ids=NOT_PLAIN.keys())
+def test_an_id_or_a_name_that_is_not_plain_text_is_refused_with_a_sentence_that_does_not_repeat_it(
+	clean, build, field, bad
+):
+	with pytest.raises(InputError) as caught:
+		clean([build(**{field: bad})])
+	assert str(caught.value) == f"{who_of(clean)}: {field} has to be plain text."
+	with pytest.raises(InputError, match="has to be plain text"):
+		clean(json.dumps([build(**{field: bad})]))  # and as the JSON text a form post sends
+
+
+@pytest.mark.parametrize(("clean", "build", "field"), PLAIN_TEXT_FIELDS)
+@pytest.mark.parametrize("good", PLAIN.values(), ids=PLAIN.keys())
+def test_plain_text_in_any_script_is_kept_as_it_is(clean, build, field, good):
+	(cleaned,) = clean([build(**{field: good})])
+	assert cleaned[field] == good
+	(cleaned,) = clean([build(**{field: f"  {good}\t\n"})])
+	assert cleaned[field] == good, "white space around it is still stripped, and not what is checked"
+
+
+def test_json_text_with_a_lone_surrogate_really_gives_python_one_and_is_refused():
+	# This is why the refusal exists: json.loads accepts the escape and returns text nothing can write.
+	assert json.loads('"A\\ud800B"') == "A\ud800B"
+	with pytest.raises(UnicodeEncodeError):
+		"A\ud800B".encode("utf-8")
+	with pytest.raises(InputError, match=re.escape("Item 1: item_code has to be plain text.")):
+		clean_items('[{"item_code": "A\\ud800B", "qty": 1}]')
+	with pytest.raises(InputError, match=re.escape("Quote 1: service_id has to be plain text.")):
+		clean_quotes('[{"service_id": "A\\ud800B", "amount": 1}]')
+	with pytest.raises(InputError, match=re.escape("Quote 1: name has to be plain text.")):
+		clean_quotes('[{"service_id": "A", "name": "N\\ud83d", "amount": 1}]')
+
+
+def test_a_name_that_is_empty_once_stripped_still_defaults_to_the_service_id():
+	for empty in ("", "  ", "\t\n"):
+		assert clean_quotes([quote(service_id="EPX", name=empty)])[0]["name"] == "EPX"
+
+
 NOT_LISTS = {
 	"a number": 5,
 	"a float": 1.5,
@@ -737,6 +806,9 @@ def test_a_refusal_says_which_entry_it_is_about():
 		(clean_quotes, [quote(service_id="x" * 141)], "Quote 1: service_id is longer than 140 characters."),
 		(clean_quotes, [quote(name=5)], "Quote 1: name has to be text."),
 		(clean_quotes, [quote(name="n" * 141)], "Quote 1: name is longer than 140 characters."),
+		(clean_items, [item(item_code="A\x00B")], "Item 1: item_code has to be plain text."),
+		(clean_quotes, [quote(service_id="A\ud800B")], "Quote 1: service_id has to be plain text."),
+		(clean_quotes, [quote(name="N\tB")], "Quote 1: name has to be plain text."),
 	],
 	ids=lambda value: value if isinstance(value, str) and value.endswith(".") else None,
 )
@@ -757,6 +829,19 @@ def test_cleaners_raise_input_error_or_return_clean_data_whatever_they_are_given
 			except InputError:
 				continue
 			assert_clean(kind, cleaned)
+
+
+@pytest.mark.parametrize("kind", CLEANERS)
+@pytest.mark.parametrize("hostile", NOT_PLAIN.values(), ids=NOT_PLAIN.keys())
+def test_unwritable_text_is_refused_or_cleaned_whatever_place_it_is_put(kind, hostile):
+	clean = CLEANERS[kind]
+	for variant in with_junk_at_every_place(VALID[kind], hostile):
+		for given in (variant, json.dumps(variant)):
+			try:
+				cleaned = clean(given)
+			except InputError:
+				continue
+			assert_clean(kind, cleaned)  # assert_text: an id or a name that got through is plain
 
 
 # ---------------------------------------------------------------- database rows <-> the policy

@@ -19,7 +19,9 @@ Four jobs:
 1. `clean_items`, `clean_boxes` and `clean_quotes` check what a guest posts. They return plain data with
    plain floats, or raise `InputError` with a sentence that is safe to show in a customer's browser (it
    names the field and never repeats what was sent). Nothing else is allowed through: unknown keys are
-   dropped and a number that is negative, not finite or above a billion is refused.
+   dropped, a number that is negative, not finite or above a billion is refused, and so is an id or a name
+   that is not plain text (a control character, NUL or a lone surrogate: JSON can carry them, but nothing
+   downstream can write them).
 2. `policy_from_rows` and `rows_from_policy` turn database rows into the policy and back. Select labels
    become the engine's codes (an unknown label passes through unchanged, for the engine to fail closed
    on and `validate_policy` to report), Country names become upper-case ISO codes. Neither raises on odd
@@ -134,6 +136,22 @@ def _boxes_quoted(entry, who):
 	return value
 
 
+def _is_plain(text):
+	"""Text a person could have typed: printable (so no control character, no NUL and no lone surrogate) and
+	writable as UTF-8. A space inside is fine, and so is any script: an Arabic name is plain text.
+
+	JSON can carry a lone surrogate ("\\ud800"), a text Python holds but nothing can write: the database
+	driver and Frappe's JSON encoder both raise on it, and an id or a name comes back in the response.
+	(`isprintable` already refuses every lone surrogate; the encoding is tried as well, so that the point of
+	the check does not rest on how `isprintable` treats one.)
+	"""
+	try:
+		text.encode("utf-8")
+	except UnicodeEncodeError:
+		return False
+	return text.isprintable()
+
+
 def _identifier(entry, field, who):
 	value = entry.get(field)
 	text = value.strip() if isinstance(value, str) else ""
@@ -141,6 +159,8 @@ def _identifier(entry, field, who):
 		raise InputError(f"{who}: {field} has to be text that is not empty.")
 	if len(text) > MAX_TEXT:
 		raise InputError(f"{who}: {field} is longer than {MAX_TEXT} characters.")
+	if not _is_plain(text):
+		raise InputError(f"{who}: {field} has to be plain text.")
 	return text
 
 
@@ -153,6 +173,8 @@ def _service_name(entry, service_id, who):
 	name = value.strip()
 	if len(name) > MAX_TEXT:
 		raise InputError(f"{who}: name is longer than {MAX_TEXT} characters.")
+	if not _is_plain(name):
+		raise InputError(f"{who}: name has to be plain text.")
 	return name or service_id
 
 
@@ -183,8 +205,8 @@ def _quote(entry, who):
 def clean_items(items) -> list[dict]:
 	"""The order's items as [{"item_code", "qty"}]: a list or JSON text of one, at most MAX_ITEMS long.
 
-	The item code is stripped text of 1 to 140 characters, the quantity a number above 0 and at most a
-	billion (0.5 is allowed). Other keys are dropped. Raises InputError for anything else.
+	The item code is stripped plain text of 1 to 140 characters (see `_is_plain`), the quantity a number above
+	0 and at most a billion (0.5 is allowed). Other keys are dropped. Raises InputError for anything else.
 	"""
 	return _clean(items, "items", "Item", MAX_ITEMS, _item)
 
@@ -200,8 +222,8 @@ def clean_quotes(quotes) -> list[dict]:
 	"""The carrier's quotes as [{"service_id", "name", "amount", "boxes_quoted"}]: a list or JSON text of
 	one, at most MAX_QUOTES long.
 
-	The service id is stripped text of 1 to 140 characters. The name is stripped text of at most 140
-	characters and is the service id when empty or missing. The amount is a number from 0 to a billion.
+	The service id is stripped plain text of 1 to 140 characters. The name is stripped plain text of at most
+	140 characters and is the service id when empty or missing. The amount is a number from 0 to a billion.
 	`boxes_quoted` is a whole number of cartons from 0 to MAX_BOXES (1.0 is read as 1) and is 0 when
 	missing. Other keys are dropped. Raises InputError for anything else.
 	"""

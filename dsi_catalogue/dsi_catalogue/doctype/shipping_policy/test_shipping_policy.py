@@ -813,11 +813,15 @@ class TestGuestMethods(ShippingPolicyTestCase):
 			"half a carton quoted": {"quotes": [quote_of(5.0, boxes_quoted=1.5)]},
 			"too many quotes": {"quotes": [QUOTE] * 21},
 			"NaN as an amount": {"quotes": '[{"service_id": "A", "amount": NaN}]'},
-			# Text that is JSON but not text: Frappe cannot write it back, so it is refused, not echoed.
+			# Text that is not plain, which the cleaners refuse. A lone surrogate is JSON that Frappe cannot write
+			# back (it would have been a bare 500); a control character has no place in an id.
 			"item code with a lone surrogate": {"items": [{**item, "item_code": "A\ud800"}]},
 			"service id with a lone surrogate": {"quotes": [quote_of(5.0, service_id="A\ud800B")]},
 			"service name with a lone surrogate": {"quotes": [quote_of(5.0, name="N\ud83d")]},
 			"a lone surrogate sent as JSON text": {"quotes": '[{"service_id": "A\\ud800B", "amount": 1.5}]'},
+			"item code with a NUL": {"items": [{**item, "item_code": "A\x00B"}]},
+			"service id with an escape character": {"quotes": [quote_of(5.0, service_id="A\x1b[0mB")]},
+			"service name with a tab": {"quotes": [quote_of(5.0, name="N\tB")]},
 		}
 		for what, bad in refused.items():
 			with self.subTest(what):
@@ -1132,17 +1136,11 @@ class TestGuestMethods(ShippingPolicyTestCase):
 
 	def test_odd_item_codes_are_unknown_items_not_errors(self):
 		seed_policy(load_example(), active=True)
-		odd = [
-			"O'Brien",
-			"back\\slash",
-			"100%",
-			"a\x00b",
-			"\x1b[0m",
-			"\ud800",
-			"x" * 140,
-			"' OR 1=1 -- ",
-			"日本 é",
-		]
+		# Plain text that is odd to a database, and text the cleaners refuse (a NUL, an escape character, a lone
+		# surrogate): the method never passes the second kind on, but the lookups are plain functions that
+		# anybody may call with anything, so they cope with both.
+		plain = ["O'Brien", "back\\slash", "100%", "x" * 140, "' OR 1=1 -- ", "日本 é"]
+		odd = [*plain, "a\x00b", "\x1b[0m", "\ud800"]
 		self.assertEqual(shipping_policy.item_groups_for(odd), {code: [] for code in odd})
 		self.assertEqual(
 			shipping_policy.order_value_for([{"item_code": code, "qty": 2.0} for code in odd]), 0.0
@@ -1151,8 +1149,6 @@ class TestGuestMethods(ShippingPolicyTestCase):
 		junk = [None, "text", 5, {}, {"item_code": 5, "qty": 1}, {"item_code": "A", "qty": "abc"}, {"qty": 1}]
 		self.assertEqual(shipping_policy.order_value_for(junk), 0.0)
 		self.assertEqual(shipping_policy.item_groups_for([None, 5, "A", ["B"]]), {"A": []})
-		for code in odd:
-			if code == "\ud800":  # the method refuses it (see the refusals); the lookups above coped
-				continue
+		for code in plain:
 			with self.subTest(code=code):
 				self.assertEqual(first_amount(guest_price(items=one_of(code))), 39.0)
