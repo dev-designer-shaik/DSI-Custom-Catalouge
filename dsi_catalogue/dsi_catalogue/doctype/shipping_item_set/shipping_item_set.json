@@ -1,0 +1,71 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:set_name",
+ "creation": "2026-10-22 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "set_name",
+  "sec_groups",
+  "item_groups",
+  "sec_items",
+  "items"
+ ],
+ "fields": [
+  {
+   "description": "Rules refer to the set by this name. It cannot be changed once the set is saved.",
+   "fieldname": "set_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item set name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "sec_groups",
+   "fieldtype": "Section Break",
+   "label": "Item groups"
+  },
+  {
+   "description": "An item group includes the groups beneath it.",
+   "fieldname": "item_groups",
+   "fieldtype": "Table",
+   "label": "Item groups",
+   "options": "Shipping Item Set Group"
+  },
+  {
+   "fieldname": "sec_items",
+   "fieldtype": "Section Break",
+   "label": "Specific items"
+  },
+  {
+   "description": "An item is in the set if it is listed here, or if its group is listed above or sits beneath a listed group.",
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Items",
+   "options": "Shipping Item Set Item"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-22 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "dsi_catalogue",
+ "name": "Shipping Item Set",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  }
+ ],
+ "search_fields": "set_name",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

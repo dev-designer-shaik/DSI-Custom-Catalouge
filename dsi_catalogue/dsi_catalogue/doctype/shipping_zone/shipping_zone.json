@@ -1,0 +1,129 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:zone_name",
+ "creation": "2026-10-22 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "zone_name",
+  "enabled",
+  "col_kind",
+  "not_shipped",
+  "everywhere_else",
+  "sec_countries",
+  "countries",
+  "sec_customers",
+  "customer_line",
+  "not_offered_message",
+  "sec_fallback",
+  "fallback_method",
+  "fallback_amount"
+ ],
+ "fields": [
+  {
+   "description": "Rules refer to the zone by this name. It cannot be changed once the zone is saved.",
+   "fieldname": "zone_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Zone name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "1",
+   "description": "A country can be in only one enabled zone. A disabled zone is ignored.",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "col_kind",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Delivery is not offered to the countries in this zone.",
+   "fieldname": "not_shipped",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Not shipped"
+  },
+  {
+   "description": "Catches every country that is not in another enabled zone. Only one enabled zone can be Everywhere else, and it lists no countries.",
+   "fieldname": "everywhere_else",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Everywhere else"
+  },
+  {
+   "fieldname": "sec_countries",
+   "fieldtype": "Section Break",
+   "label": "Countries"
+  },
+  {
+   "fieldname": "countries",
+   "fieldtype": "Table",
+   "label": "Countries",
+   "options": "Shipping Zone Country"
+  },
+  {
+   "fieldname": "sec_customers",
+   "fieldtype": "Section Break",
+   "label": "What customers are told"
+  },
+  {
+   "description": "One plain line for the FAQ and the Shipping page. Optional.",
+   "fieldname": "customer_line",
+   "fieldtype": "Small Text",
+   "label": "Shown to customers"
+  },
+  {
+   "description": "Shown at checkout when delivery is not offered here (a Not shipped zone, or a fallback that declines). Optional.",
+   "fieldname": "not_offered_message",
+   "fieldtype": "Small Text",
+   "label": "If delivery isn't offered"
+  },
+  {
+   "fieldname": "sec_fallback",
+   "fieldtype": "Section Break",
+   "label": "If the carrier can't quote"
+  },
+  {
+   "default": "Use the policy default",
+   "fieldname": "fallback_method",
+   "fieldtype": "Select",
+   "label": "When the carrier gives no price",
+   "options": "Use the policy default\nDon't offer delivery\nCharge a fixed amount\nFree"
+  },
+  {
+   "depends_on": "eval:doc.fallback_method == 'Charge a fixed amount'",
+   "fieldname": "fallback_amount",
+   "fieldtype": "Float",
+   "label": "Fixed amount (USD)",
+   "non_negative": 1,
+   "precision": "2"
+  }
+ ],
+ "links": [],
+ "modified": "2026-10-22 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "dsi_catalogue",
+ "name": "Shipping Zone",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  }
+ ],
+ "search_fields": "zone_name",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

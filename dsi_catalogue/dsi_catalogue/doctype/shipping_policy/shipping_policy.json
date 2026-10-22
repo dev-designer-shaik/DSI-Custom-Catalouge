@@ -1,0 +1,96 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-10-22 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "active",
+  "sec_defaults",
+  "not_covered",
+  "col_default_fallback",
+  "default_fallback_method",
+  "default_fallback_amount",
+  "sec_rules",
+  "rules",
+  "rules_note"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "description": "Off: delivery costs stay exactly what the carrier quotes. On: the rules below set what customers pay.",
+   "fieldname": "active",
+   "fieldtype": "Check",
+   "label": "Active"
+  },
+  {
+   "fieldname": "sec_defaults",
+   "fieldtype": "Section Break",
+   "label": "When no rule applies"
+  },
+  {
+   "default": "Pass the carrier price through",
+   "description": "What happens when a country is in no zone and there is no Everywhere else zone, or when no rule in the zone fits.",
+   "fieldname": "not_covered",
+   "fieldtype": "Select",
+   "label": "Anything not covered",
+   "options": "Pass the carrier price through\nDon't offer delivery"
+  },
+  {
+   "fieldname": "col_default_fallback",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Don't offer delivery",
+   "description": "Used by every zone set to Use the policy default. It applies only where a carrier serves the country.",
+   "fieldname": "default_fallback_method",
+   "fieldtype": "Select",
+   "label": "If the carrier can't quote (default)",
+   "options": "Don't offer delivery\nCharge a fixed amount\nFree"
+  },
+  {
+   "depends_on": "eval:doc.default_fallback_method == 'Charge a fixed amount'",
+   "fieldname": "default_fallback_amount",
+   "fieldtype": "Float",
+   "label": "Fixed amount (USD)",
+   "non_negative": 1,
+   "precision": "2"
+  },
+  {
+   "fieldname": "sec_rules",
+   "fieldtype": "Section Break",
+   "label": "Rules"
+  },
+  {
+   "description": "Rules are checked from top to bottom. The first enabled rule whose conditions all hold is used.",
+   "fieldname": "rules",
+   "fieldtype": "Table",
+   "label": "Rules",
+   "options": "Shipping Policy Rule"
+  },
+  {
+   "fieldname": "rules_note",
+   "fieldtype": "HTML",
+   "label": "Note",
+   "options": "<p class=\"text-muted small\">* A rule for selected items applies only when every item in the order is one of them. A rule for every item applies to every order.</p>"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-22 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "dsi_catalogue",
+ "name": "Shipping Policy",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

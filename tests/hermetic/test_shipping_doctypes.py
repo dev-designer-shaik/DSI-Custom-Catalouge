@@ -1,0 +1,749 @@
+"""Pins the Shipping Policy doctypes, read straight from the files the desk will load.
+
+Seven standard doctypes in the dsi_catalogue module: Shipping Zone, Shipping Item Set and the Shipping Policy
+single, with four child tables between them (zone countries, item set groups, item set items, policy rules).
+Nothing here needs Frappe or bench: the doctypes are JSON, and the tests check what the engine and the data
+module rely on (field names, Select strings, defaults), who may edit them, and that the asterisk sentence is on
+the form.
+
+The second half pins the way these files reach erp2: tools/shipping_policy_files.txt names every file, and
+tools/erp2_push.sh copies only those, refuses anything outside its allow-list, and reloads the doctypes in
+dependency order. It is run here against stand-ins for ssh and rsync, so nothing leaves the machine.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from dsi_catalogue.shipping_engine import LABELS
+from dsi_catalogue.shipping_policy_data import policy_from_rows, rows_from_policy
+
+ROOT = Path(__file__).resolve().parents[2]
+DOCTYPE_DIR = ROOT / "dsi_catalogue" / "dsi_catalogue" / "doctype"
+FIXTURE = Path(__file__).parent / "fixtures" / "shipping_policy_example.json"
+
+# The sentence the plan's Global Constraints fix word for word.
+ASTERISK = (
+	"* A rule for selected items applies only when every item in the order is one of them. "
+	"A rule for every item applies to every order."
+)
+
+ZONE, ITEM_SET, POLICY = "Shipping Zone", "Shipping Item Set", "Shipping Policy"
+ZONE_COUNTRY, SET_GROUP, SET_ITEM, RULE = (
+	"Shipping Zone Country",
+	"Shipping Item Set Group",
+	"Shipping Item Set Item",
+	"Shipping Policy Rule",
+)
+TOP_LEVEL = (ZONE, ITEM_SET, POLICY)
+CHILDREN = (ZONE_COUNTRY, SET_GROUP, SET_ITEM, RULE)
+DOCTYPES = TOP_LEVEL + CHILDREN
+
+# Every limit a rule can set, with the number of decimals it is kept to.
+BANDS = {
+	"min_order_value": "2",
+	"max_order_value": "2",
+	"min_weight_kg": "3",
+	"max_weight_kg": "3",
+	"min_volume_l": "3",
+	"max_volume_l": "3",
+}
+
+# The Select fields, and the engine's label table whose keys are their options, in order.
+SELECTS = {
+	(ZONE, "fallback_method"): "zone_fallback",
+	(POLICY, "default_fallback_method"): "default_fallback",
+	(POLICY, "not_covered"): "not_covered",
+	(RULE, "method"): "method",
+}
+
+
+def folder_of(name):
+	return name.lower().replace(" ", "_")
+
+
+def doctype(name):
+	return json.loads((DOCTYPE_DIR / folder_of(name) / f"{folder_of(name)}.json").read_text(encoding="utf-8"))
+
+
+def fields_of(name):
+	return {field["fieldname"]: field for field in doctype(name)["fields"]}
+
+
+def example():
+	return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------- what kind of doctypes they are
+@pytest.mark.parametrize("name", DOCTYPES)
+def test_every_doctype_is_standard_and_in_the_module(name):
+	data = doctype(name)
+	assert data["doctype"] == "DocType"
+	assert data["name"] == name
+	assert data["module"] == "dsi_catalogue"
+	assert "custom" not in data, "a standard doctype that ships with the app, not a Custom DocType"
+	folder = DOCTYPE_DIR / folder_of(name)
+	assert (folder / "__init__.py").is_file()
+	controller = (folder / f"{folder_of(name)}.py").read_text(encoding="utf-8")
+	assert f"class {name.replace(' ', '')}(Document)" in controller
+
+
+@pytest.mark.parametrize("name", TOP_LEVEL)
+def test_every_top_level_doctype_has_a_native_test_module(name):
+	assert (DOCTYPE_DIR / folder_of(name) / f"test_{folder_of(name)}.py").is_file()
+
+
+def test_the_policy_is_a_single_and_four_doctypes_are_child_tables():
+	assert doctype(POLICY).get("issingle") == 1
+	for name in (ZONE, ITEM_SET, *CHILDREN):
+		assert not doctype(name).get("issingle"), name
+	for name in CHILDREN:
+		assert doctype(name).get("istable") == 1, name
+	for name in TOP_LEVEL:
+		assert not doctype(name).get("istable"), name
+
+
+@pytest.mark.parametrize("name", DOCTYPES)
+def test_nothing_can_be_renamed_and_the_lists_are_newest_first(name):
+	data = doctype(name)
+	assert data["allow_rename"] == 0
+	assert data["sort_field"] == "modified"
+	assert data["sort_order"] == "DESC"
+
+
+@pytest.mark.parametrize("name", DOCTYPES)
+def test_changes_are_tracked_on_the_three_top_level_doctypes_only(name):
+	assert doctype(name).get("track_changes", 0) == (1 if name in TOP_LEVEL else 0)
+
+
+def test_zones_and_item_sets_are_named_by_their_own_name_field():
+	for name, field in ((ZONE, "zone_name"), (ITEM_SET, "set_name")):
+		data = doctype(name)
+		assert data["autoname"] == f"field:{field}"
+		assert data["naming_rule"] == "By fieldname"
+		assert fields_of(name)[field]["fieldtype"] == "Data"
+		assert fields_of(name)[field]["reqd"] == 1
+		assert fields_of(name)[field]["unique"] == 1
+	for name in (POLICY, *CHILDREN):
+		assert not doctype(name).get("autoname"), name
+
+
+@pytest.mark.parametrize("name", DOCTYPES)
+def test_field_order_lists_every_field_once(name):
+	data = doctype(name)
+	names = [field["fieldname"] for field in data["fields"]]
+	assert len(names) == len(set(names)), "a field name is used twice"
+	assert data["field_order"] == names
+
+
+# ---------------------------------------------------------------- who may edit
+RIGHTS = {
+	ZONE: {"read", "write", "create", "delete"},
+	ITEM_SET: {"read", "write", "create", "delete"},
+	POLICY: {"read", "write"},
+}
+
+
+@pytest.mark.parametrize("name", TOP_LEVEL)
+def test_only_system_manager_has_permissions(name):
+	rows = doctype(name)["permissions"]
+	assert [row["role"] for row in rows] == ["System Manager"]
+	granted = {right for right, value in rows[0].items() if right != "role" and value}
+	assert granted == RIGHTS[name]
+
+
+@pytest.mark.parametrize("name", CHILDREN)
+def test_child_doctypes_have_no_permissions_of_their_own(name):
+	data = doctype(name)
+	assert data["permissions"] == []
+	assert data["editable_grid"] == 1
+
+
+# ---------------------------------------------------------------- the Select strings and defaults
+def test_select_options_match_the_engine_labels():
+	found = {
+		(name, fieldname)
+		for name in DOCTYPES
+		for fieldname, field in fields_of(name).items()
+		if field["fieldtype"] == "Select"
+	}
+	assert found == set(SELECTS), "every Select field has a label table in the engine"
+	for (name, fieldname), kind in SELECTS.items():
+		field = fields_of(name)[fieldname]
+		assert field["options"].split("\n") == list(LABELS[kind]), (name, fieldname)
+		assert field["default"] == next(iter(LABELS[kind])), "the first label is the default"
+
+
+def test_new_rule_rows_start_disabled():
+	enabled = fields_of(RULE)["enabled"]
+	assert enabled["fieldtype"] == "Check"
+	assert enabled["default"] == "0"
+
+
+def test_new_zones_start_enabled_and_as_ordinary_zones():
+	fields = fields_of(ZONE)
+	assert fields["enabled"]["default"] == "1"
+	for name in ("not_shipped", "everywhere_else"):
+		assert fields[name]["fieldtype"] == "Check"
+		assert fields[name].get("default", "0") == "0"
+
+
+def test_policy_defaults_ship_the_policy_off():
+	fields = fields_of(POLICY)
+	assert fields["active"]["fieldtype"] == "Check"
+	assert fields["active"]["default"] == "0"
+	assert fields["not_covered"]["default"] == "Pass the carrier price through"
+	assert fields["default_fallback_method"]["default"] == "Don't offer delivery"
+
+
+def test_the_fixed_amount_shows_only_when_the_choice_is_a_fixed_amount():
+	assert "Charge a fixed amount" in LABELS["zone_fallback"]
+	assert "Charge a fixed amount" in LABELS["default_fallback"]
+	zone = fields_of(ZONE)["fallback_amount"]
+	policy = fields_of(POLICY)["default_fallback_amount"]
+	assert zone["depends_on"] == "eval:doc.fallback_method == 'Charge a fixed amount'"
+	assert policy["depends_on"] == "eval:doc.default_fallback_method == 'Charge a fixed amount'"
+
+
+def test_a_formula_is_required_only_for_a_custom_formula_and_round_up_is_hidden_for_free():
+	assert "Custom formula" in LABELS["method"]
+	assert "Free" in LABELS["method"]
+	fields = fields_of(RULE)
+	assert fields["formula"]["fieldtype"] == "Small Text"
+	assert fields["formula"]["depends_on"] == "eval:doc.method == 'Custom formula'"
+	assert fields["formula"]["mandatory_depends_on"] == "eval:doc.method == 'Custom formula'"
+	assert fields["round_up"]["depends_on"] == "eval:doc.method != 'Free'"
+
+
+# ---------------------------------------------------------------- the asterisk sentence
+def test_asterisk_sentence_is_on_the_form_and_the_item_set_field():
+	note = fields_of(POLICY)["rules_note"]
+	assert note["fieldtype"] == "HTML"
+	assert ASTERISK in note["options"], "the policy form carries the sentence word for word"
+	assert note["options"].startswith("<p ") and 'class="text-muted' in note["options"], (
+		"in a muted paragraph"
+	)
+	assert ASTERISK in fields_of(RULE)["item_set"]["description"], "and so does the rule's item set field"
+
+
+# ---------------------------------------------------------------- the fields the data module uses
+def test_links_and_tables_point_at_the_right_doctypes():
+	links = {
+		(ZONE_COUNTRY, "country"): "Country",
+		(SET_GROUP, "item_group"): "Item Group",
+		(SET_ITEM, "item"): "Item",
+		(RULE, "zone"): ZONE,
+		(RULE, "item_set"): ITEM_SET,
+	}
+	for (name, fieldname), target in links.items():
+		field = fields_of(name)[fieldname]
+		assert (field["fieldtype"], field["options"]) == ("Link", target), (name, fieldname)
+	tables = {
+		(ZONE, "countries"): ZONE_COUNTRY,
+		(ITEM_SET, "item_groups"): SET_GROUP,
+		(ITEM_SET, "items"): SET_ITEM,
+		(POLICY, "rules"): RULE,
+	}
+	for (name, fieldname), child in tables.items():
+		field = fields_of(name)[fieldname]
+		assert (field["fieldtype"], field["options"]) == ("Table", child), (name, fieldname)
+	assert fields_of(RULE)["zone"]["reqd"] == 1
+	for name, fieldname in ((ZONE_COUNTRY, "country"), (SET_GROUP, "item_group"), (SET_ITEM, "item")):
+		assert fields_of(name)[fieldname]["reqd"] == 1, "a blank row means nothing"
+
+
+def test_flags_are_checks_and_limits_are_floats_that_cannot_be_negative():
+	checks = {
+		(ZONE, "enabled"),
+		(ZONE, "not_shipped"),
+		(ZONE, "everywhere_else"),
+		(POLICY, "active"),
+		(RULE, "enabled"),
+		(RULE, "round_up"),
+	}
+	for name, fieldname in checks:
+		assert fields_of(name)[fieldname]["fieldtype"] == "Check", (name, fieldname)
+	floats = {(ZONE, "fallback_amount"): "2", (POLICY, "default_fallback_amount"): "2"}
+	floats.update({(RULE, fieldname): precision for fieldname, precision in BANDS.items()})
+	for (name, fieldname), precision in floats.items():
+		field = fields_of(name)[fieldname]
+		assert field["fieldtype"] == "Float", (name, fieldname)
+		assert field["non_negative"] == 1, (name, fieldname)
+		assert field["precision"] == precision, (name, fieldname)
+
+
+class Reads(dict):
+	"""A row that notes every key the data module asks it for."""
+
+	def __init__(self, row, seen):
+		super().__init__(row)
+		self.seen = seen
+
+	def get(self, key, default=None):
+		self.seen.add(key)
+		return super().get(key, default)
+
+
+def test_every_field_the_data_module_reads_exists():
+	policy = example()
+	policy["item_sets"][0]["items"] = ["WATCH-001"]  # so that the item rows are read as well
+	names = {"BH": "Bahrain", "AE": "United Arab Emirates", "SA": "Saudi Arabia", "KW": "Kuwait"}
+	names.update({"OM": "Oman", "QA": "Qatar", "RU": "Russian Federation", "BY": "Belarus"})
+	rows = rows_from_policy(policy, names)
+	seen = {kind: set() for kind in ("policy", "rule", "zone", "country", "set", "group", "item")}
+	policy_row = Reads(
+		{**rows["policy"], "rules": [Reads(rule, seen["rule"]) for rule in rows["policy"]["rules"]]},
+		seen["policy"],
+	)
+	zone_rows = [
+		Reads({**zone, "countries": [Reads(c, seen["country"]) for c in zone["countries"]]}, seen["zone"])
+		for zone in rows["zones"]
+	]
+	set_rows = [
+		Reads(
+			{
+				**item_set,
+				"item_groups": [Reads(g, seen["group"]) for g in item_set["item_groups"]],
+				"items": [Reads(i, seen["item"]) for i in item_set["items"]],
+			},
+			seen["set"],
+		)
+		for item_set in rows["item_sets"]
+	]
+	policy_from_rows(policy_row, zone_rows, set_rows, {name: code for code, name in names.items()})
+
+	doctypes = {
+		"policy": POLICY,
+		"rule": RULE,
+		"zone": ZONE,
+		"country": ZONE_COUNTRY,
+		"set": ITEM_SET,
+		"group": SET_GROUP,
+		"item": SET_ITEM,
+	}
+	for kind, name in doctypes.items():
+		assert seen[kind], f"the data module read nothing from a {name} row"
+		# The `name` of a rule row is the row's own name in the database, not a field.
+		missing = seen[kind] - set(fields_of(name)) - ({"name"} if kind == "rule" else set())
+		assert not missing, f"{name} has no field {sorted(missing)}, which policy_from_rows reads"
+	written = {
+		POLICY: {key for key in rows["policy"] if key != "rules"},
+		RULE: {key for rule in rows["policy"]["rules"] for key in rule} - {"name"},
+		ZONE: {key for zone in rows["zones"] for key in zone},
+		ZONE_COUNTRY: {key for zone in rows["zones"] for c in zone["countries"] for key in c},
+		ITEM_SET: {key for item_set in rows["item_sets"] for key in item_set},
+		SET_GROUP: {key for item_set in rows["item_sets"] for g in item_set["item_groups"] for key in g},
+		SET_ITEM: {key for item_set in rows["item_sets"] for i in item_set["items"] for key in i},
+	}
+	for name, keys in written.items():
+		missing = keys - set(fields_of(name))
+		assert not missing, f"{name} has no field {sorted(missing)}, which rows_from_policy writes"
+
+
+# ---------------------------------------------------------------- how the files reach erp2
+PUSH = ROOT / "tools" / "erp2_push.sh"
+FILE_LIST = ROOT / "tools" / "shipping_policy_files.txt"
+FIXTURE_PATH = "tests/hermetic/fixtures/shipping_policy_example.json"
+CONTAINER = "frappe_docker-backend-1"
+
+# Children first (a table must exist before its parent points at it), then the doctypes that link to each
+# other: the rule links to a zone and an item set, and the policy holds the rules.
+RELOAD_ORDER = [
+	"shipping_zone_country",
+	"shipping_item_set_group",
+	"shipping_item_set_item",
+	"shipping_zone",
+	"shipping_item_set",
+	"shipping_policy_rule",
+	"shipping_policy",
+]
+
+needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="the push script is a bash script")
+
+
+def listed_files():
+	lines = [line.strip() for line in FILE_LIST.read_text(encoding="utf-8").splitlines()]
+	return [line for line in lines if line and not line.startswith("#")]
+
+
+def files_the_push_may_carry():
+	"""Every file in the working tree that the push script's allow-list covers."""
+	found = {FIXTURE_PATH}
+	for pattern in (
+		"dsi_catalogue/shipping_*",
+		"dsi_catalogue/dsi_catalogue/doctype/shipping_*/*",
+		"dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/*",
+	):
+		found |= {
+			path.relative_to(ROOT).as_posix()
+			for path in ROOT.glob(pattern)
+			if path.is_file() and path.suffix != ".pyc"
+		}
+	return found
+
+
+def test_the_push_list_names_every_file_the_push_may_carry():
+	listed = listed_files()
+	assert len(listed) == len(set(listed)), "a file is listed twice"
+	expected = files_the_push_may_carry()
+	assert not expected - set(listed), f"in the tree but not in the list: {sorted(expected - set(listed))}"
+	assert not set(listed) - expected, f"in the list but not in the tree: {sorted(set(listed) - expected)}"
+
+
+def test_the_push_list_carries_the_modules_the_native_tests_import_and_the_fixture():
+	listed = set(listed_files())
+	for module in ("shipping_formula", "shipping_engine", "shipping_policy_data", "shipping_policy"):
+		assert f"dsi_catalogue/{module}.py" in listed
+	assert FIXTURE_PATH in listed
+	for name in DOCTYPES:
+		folder = f"dsi_catalogue/dsi_catalogue/doctype/{folder_of(name)}"
+		assert f"{folder}/{folder_of(name)}.json" in listed
+		assert f"{folder}/{folder_of(name)}.py" in listed
+	assert "dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.js" in listed
+
+
+def test_the_push_script_is_executable_and_never_deletes_or_migrates():
+	assert os.access(PUSH, os.X_OK)
+	script = PUSH.read_text(encoding="utf-8")
+	assert script.startswith("#!/usr/bin/env bash\n")
+	assert "set -euo pipefail" in script
+	for forbidden in ("migrate", "--delete", "rm -", "rsync -a", "--force"):
+		assert forbidden not in script, forbidden
+	assert script.count("docker restart") == 1, "the one restart is of the backend container"
+
+
+class Push:
+	"""A copy of the push script in a scratch repo, run with stand-ins for ssh, rsync and docker.
+
+	The stand-ins record what they were called with and do nothing else, so a run cannot reach erp2.
+	"""
+
+	def __init__(self, tmp_path, listed, make=None):
+		self.root = tmp_path / "repo"
+		self.script = self.root / "tools" / "erp2_push.sh"
+		self.script.parent.mkdir(parents=True)
+		shutil.copy(PUSH, self.script)
+		self.script.chmod(0o755)
+		(self.root / "tools" / "shipping_policy_files.txt").write_text(
+			"\n".join(listed) + "\n", encoding="utf-8"
+		)
+		for relative in listed if make is None else make:
+			target = self.root / relative
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text("x", encoding="utf-8")
+		self.log = tmp_path / "calls.log"
+		stubs = tmp_path / "bin"
+		stubs.mkdir()
+		for name in ("ssh", "rsync", "docker", "bench"):
+			stub = stubs / name
+			stub.write_text(
+				"#!/usr/bin/env bash\n"
+				f'echo "{name} $*" >> "{self.log}"\n'
+				# rsync reports a new file for every path it was given, the way --itemize-changes does
+				'if [ "$(basename "$0")" = rsync ]; then for a in "$@"; do case "$a" in *.*) echo "<f+++++++++ $a";; esac; done; fi\n',
+				encoding="utf-8",
+			)
+			stub.chmod(0o755)
+		self.env = {**os.environ, "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}"}
+
+	def run(self, *args):
+		return subprocess.run(
+			["bash", str(self.script), *args],
+			capture_output=True,
+			text=True,
+			env=self.env,
+			timeout=60,
+			stdin=subprocess.DEVNULL,
+		)
+
+	def calls(self):
+		return self.log.read_text(encoding="utf-8").splitlines() if self.log.exists() else []
+
+
+@pytest.fixture
+def real_list(tmp_path):
+	return Push(tmp_path, listed_files())
+
+
+@needs_bash
+def test_a_dry_run_checks_the_list_prints_every_step_and_touches_nothing(real_list):
+	result = real_list.run("--dry-run")
+	assert result.returncode == 0, result.stderr
+	assert real_list.calls() == [], "a dry run must not call ssh, rsync or docker at all"
+	reloads = [line.split()[-1] for line in result.stdout.splitlines() if "reload-doc" in line]
+	assert reloads == RELOAD_ORDER
+	lines = result.stdout.splitlines()
+	cleared = [number for number, line in enumerate(lines) if "clear-cache" in line]
+	last_reload = max(number for number, line in enumerate(lines) if "reload-doc" in line)
+	assert len(cleared) == 1 and cleared[0] > last_reload, "the cache is cleared once, after the reloads"
+	assert "restart" not in result.stdout
+	for relative in listed_files():
+		assert relative in result.stdout
+
+
+@needs_bash
+def test_a_dry_run_with_restart_says_it_would_restart_only_the_backend(real_list):
+	result = real_list.run("--dry-run", "--restart")
+	assert result.returncode == 0, result.stderr
+	restarts = [line for line in result.stdout.splitlines() if "restart" in line]
+	assert len(restarts) == 1 and CONTAINER in restarts[0]
+	assert real_list.calls() == []
+
+
+@needs_bash
+def test_a_real_run_copies_the_listed_files_reloads_in_order_and_clears_the_cache(real_list):
+	result = real_list.run()
+	assert result.returncode == 0, result.stderr
+	calls = real_list.calls()
+	copies = [call for call in calls if call.startswith("rsync ")]
+	assert len(copies) == 1
+	assert "-R" in copies[0].split() and "erp2-sandbox:dsi_catalogue_dev/" in copies[0]
+	assert "--delete" not in copies[0]
+	for relative in listed_files():
+		assert relative in copies[0].split()
+	remote = [call for call in calls if call.startswith("ssh ")]
+	assert all("erp2-sandbox" in call and "docker exec" in call and CONTAINER in call for call in remote)
+	assert len(remote) == 2, "one process reloads every doctype, one clears the cache, and nothing else"
+	reload_call, cache_call = remote
+	assert "/env/bin/python - erp.shaik.net dsi_catalogue doctype:" in reload_call
+	asked = [word.rstrip("'") for word in reload_call.split() if word.startswith("doctype:")]
+	assert asked == [f"doctype:{name}" for name in RELOAD_ORDER]
+	assert cache_call.rstrip("'").endswith("bench --site erp.shaik.net clear-cache")
+	assert not any(call.startswith(("docker ", "bench ")) for call in calls)
+	assert "restart" not in " ".join(calls)
+
+
+@needs_bash
+def test_restart_restarts_only_the_backend_container_and_comes_last(real_list):
+	result = real_list.run("--restart")
+	assert result.returncode == 0, result.stderr
+	restarts = [call for call in real_list.calls() if "restart" in call]
+	assert len(restarts) == 1
+	assert restarts[0].endswith(f"docker restart {CONTAINER}")
+	assert real_list.calls()[-1] == restarts[0]
+
+
+@needs_bash
+def test_running_it_again_asks_for_nothing_new(real_list):
+	first = real_list.run().returncode
+	second = real_list.run().returncode
+	assert (first, second) == (0, 0)
+	# Both runs send the same commands: what is already current is skipped by rsync and by reload-doc.
+	calls = real_list.calls()
+	assert calls[: len(calls) // 2] == calls[len(calls) // 2 :]
+
+
+@needs_bash
+def test_a_changed_python_file_that_is_already_on_erp2_says_a_restart_is_needed(tmp_path):
+	push = Push(tmp_path, ["dsi_catalogue/shipping_engine.py"])
+	# rsync reports an existing file whose content changed as <fcst...... (a new file is <f+++++++++)
+	rsync = tmp_path / "bin" / "rsync"
+	rsync.write_text(
+		f'#!/usr/bin/env bash\necho "rsync $*" >> "{push.log}"\necho "<fcst...... dsi_catalogue/shipping_engine.py"\n'
+	)
+	result = push.run()
+	assert result.returncode == 0, result.stderr
+	assert "NOTE" in result.stdout and "--restart" in result.stdout
+	assert "restart" not in " ".join(push.calls()), "it asks; it does not restart on its own"
+	assert "NOTE" not in push.run("--restart").stdout, "no reminder when it restarts anyway"
+
+
+@needs_bash
+def test_a_page_and_an_unknown_doctype_folder_are_reloaded_after_the_known_doctypes(tmp_path):
+	listed = [
+		"dsi_catalogue/dsi_catalogue/doctype/shipping_zone/shipping_zone.json",
+		"dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.json",
+		"dsi_catalogue/dsi_catalogue/doctype/shipping_extra/shipping_extra.json",
+		"dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.json",
+		"dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.js",
+	]
+	push = Push(tmp_path, listed)
+	result = push.run("--dry-run")
+	assert result.returncode == 0, result.stderr
+	reloads = [
+		line.strip().split("reload-doc ")[-1] for line in result.stdout.splitlines() if "reload-doc" in line
+	]
+	assert reloads == [
+		"dsi_catalogue doctype shipping_zone",
+		"dsi_catalogue doctype shipping_policy",
+		"dsi_catalogue doctype shipping_extra",
+		"dsi_catalogue page shipping_policy_wizard",
+	]
+
+
+def reload_snippet():
+	"""The Python the script sends into the container, taken out of the script."""
+	script = PUSH.read_text(encoding="utf-8")
+	start = script.index("<<'PY' || true\n") + len("<<'PY' || true\n")
+	return script[start : script.index("\nPY\n", start) + 1]
+
+
+class FakeFrappe:
+	"""Records what the reload snippet asks of frappe."""
+
+	def __init__(self, loaded=True):
+		self.calls = []
+		self.loaded = loaded
+		self.local = type("Local", (), {"module_app": {"selling": "erpnext"}})()
+		self.db = type("Db", (), {"commit": lambda _: self.calls.append("commit")})()
+
+	def init(self, **kwargs):
+		self.calls.append(("init", kwargs))
+
+	def connect(self):
+		self.calls.append("connect")
+
+	def get_module_list(self, app):
+		self.calls.append(("get_module_list", app))
+		return ["Dsi Catalogue"]
+
+	def scrub(self, text):
+		return text.lower().replace(" ", "_")
+
+	def reload_doc(self, *args):
+		self.calls.append(("reload_doc", *args))
+		return self.loaded
+
+	def destroy(self):
+		self.calls.append("destroy")
+
+
+def run_snippet(monkeypatch, capsys, fake, *argv):
+	import sys
+
+	monkeypatch.setitem(sys.modules, "frappe", fake)
+	monkeypatch.setattr(sys, "argv", ["-", *argv])
+	exec(compile(reload_snippet(), "<reload>", "exec"), {"__name__": "__main__"})
+	return capsys.readouterr().out
+
+
+def test_the_reload_snippet_teaches_its_process_the_app_and_reloads_in_the_order_given(monkeypatch, capsys):
+	fake = FakeFrappe()
+	out = run_snippet(
+		monkeypatch,
+		capsys,
+		fake,
+		"erp.shaik.net",
+		"dsi_catalogue",
+		"doctype:shipping_zone_country",
+		"doctype:shipping_zone",
+		"page:shipping_policy_wizard",
+	)
+	assert fake.calls == [
+		("init", {"site": "erp.shaik.net", "sites_path": "."}),
+		"connect",
+		("get_module_list", "dsi_catalogue"),
+		("reload_doc", "dsi_catalogue", "doctype", "shipping_zone_country"),
+		"commit",
+		("reload_doc", "dsi_catalogue", "doctype", "shipping_zone"),
+		"commit",
+		("reload_doc", "dsi_catalogue", "page", "shipping_policy_wizard"),
+		"commit",
+		"destroy",
+	]
+	assert fake.local.module_app == {"selling": "erpnext", "dsi_catalogue": "dsi_catalogue"}
+	assert "doctype shipping_zone_country: loaded" in out
+
+
+def test_the_reload_snippet_says_when_a_doctype_was_already_current_and_always_lets_go_of_the_site(
+	monkeypatch, capsys
+):
+	fake = FakeFrappe(loaded=False)
+	out = run_snippet(monkeypatch, capsys, fake, "erp.shaik.net", "dsi_catalogue", "doctype:shipping_zone")
+	assert "doctype shipping_zone: already current" in out
+	failing = FakeFrappe()
+	failing.reload_doc = lambda *args: (_ for _ in ()).throw(RuntimeError("bad json"))
+	with pytest.raises(RuntimeError):
+		run_snippet(monkeypatch, capsys, failing, "erp.shaik.net", "dsi_catalogue", "doctype:shipping_zone")
+	assert failing.calls[-1] == "destroy"
+
+
+REFUSED = [
+	"dsi_catalogue/hooks.py",
+	"dsi_catalogue/modules.txt",
+	"dsi_catalogue/api.py",
+	"dsi_catalogue/dsi_catalogue/workspace/website_content_review/website_content_review.json",
+	"dsi_catalogue/dsi_catalogue/doctype/storefront_settings/storefront_settings.json",
+	"dsi_catalogue/dsi_catalogue/doctype/shipping_zone/../storefront_settings/storefront_settings.json",
+	"dsi_catalogue/shipping_x/../hooks.py",
+	"dsi_catalogue/shipping_/../hooks.py",
+	"dsi_catalogue/dsi_catalogue/doctype/shipping_zone/sub/dir/file.py",
+	"dsi_catalogue/dsi_catalogue/page/other_page/other_page.json",
+	"dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/sub/file.js",
+	"tests/hermetic/fixtures/index_key_samples.json",
+	"tests/hermetic/test_shipping_engine.py",
+	"tools/erp2_push.sh",
+	"/etc/passwd",
+	"../outside/shipping_x.py",
+	"./dsi_catalogue/shipping_engine.py",
+	"dsi_catalogue//shipping_engine.py",
+	"dsi_catalogue/shipping_engine.py;touch pwned",
+	"dsi_catalogue/shipping_engine.py $(touch pwned)",
+	"dsi_catalogue/shipping engine.py",
+	"dsi_catalogue/Shipping_engine.py",
+]
+
+
+@needs_bash
+@pytest.mark.parametrize("bad", REFUSED)
+def test_a_path_outside_the_allow_list_is_refused_before_anything_is_copied_or_run(tmp_path, bad):
+	push = Push(
+		tmp_path, ["dsi_catalogue/shipping_engine.py", bad], make=["dsi_catalogue/shipping_engine.py"]
+	)
+	# the bad path is also made, when it can be, so that the allow-list is what refuses it
+	target = push.root / bad
+	if not bad.startswith(("/", ".")) and ".." not in bad and "$" not in bad and ";" not in bad:
+		if not target.exists():
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text("x", encoding="utf-8")
+	for args in (("--dry-run",), ()):
+		result = push.run(*args)
+		assert result.returncode == 1, (args, result.stdout, result.stderr)
+		assert "refused" in result.stderr and bad in result.stderr
+		assert push.calls() == [], "nothing was sent"
+		assert "reload-doc" not in result.stdout
+	assert not (push.root / "pwned").exists()
+
+
+@needs_bash
+def test_a_listed_file_that_is_missing_or_not_a_plain_file_is_refused(tmp_path):
+	listed = [
+		"dsi_catalogue/shipping_engine.py",
+		"dsi_catalogue/shipping_missing.py",
+		"dsi_catalogue/shipping_link.py",
+		"dsi_catalogue/dsi_catalogue/doctype/shipping_zone",
+	]
+	push = Push(tmp_path, listed, make=["dsi_catalogue/shipping_engine.py"])
+	(push.root / "dsi_catalogue" / "shipping_link.py").symlink_to(
+		push.root / "dsi_catalogue" / "shipping_engine.py"
+	)
+	(push.root / "dsi_catalogue" / "dsi_catalogue" / "doctype" / "shipping_zone").mkdir(parents=True)
+	result = push.run("--dry-run")
+	assert result.returncode == 1
+	assert "refused" in result.stderr
+	for name in ("shipping_missing.py", "shipping_link.py"):
+		assert name in result.stderr
+	assert push.calls() == []
+
+
+@needs_bash
+def test_comments_blank_lines_and_windows_line_endings_in_the_list_are_fine(tmp_path):
+	push = Push(tmp_path, ["dsi_catalogue/shipping_engine.py"])
+	(push.root / "tools" / "shipping_policy_files.txt").write_bytes(
+		b"# a comment\r\n\r\n  dsi_catalogue/shipping_engine.py  \r\n"
+	)
+	result = push.run("--dry-run")
+	assert result.returncode == 0, result.stderr
+	assert "dsi_catalogue/shipping_engine.py" in result.stdout
+
+
+@needs_bash
+def test_an_unknown_option_is_a_usage_error(real_list):
+	result = real_list.run("--everything")
+	assert result.returncode == 2
+	assert "Usage" in result.stderr
+	assert real_list.calls() == []
