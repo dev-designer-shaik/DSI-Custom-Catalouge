@@ -20,6 +20,7 @@ import math
 import random
 import string
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -1223,12 +1224,141 @@ def test_rounding_never_raises_for_a_finite_float(amount):
 	assert type(to_cents(amount)) is float and type(round_up_dollar(amount)) is float
 
 
-@pytest.mark.parametrize("junk", [float("nan"), float("inf"), float("-inf"), None, "38.2", True, [1]])
+@pytest.mark.parametrize(
+	"junk",
+	[
+		float("nan"),
+		float("inf"),
+		float("-inf"),
+		None,
+		"38.2",
+		True,
+		[1],
+		# an integer or a Decimal too big for a float: it is no finite number, and never an infinity or an
+		# InvalidOperation (10**5000 has more digits than str() will make of an integer)
+		10**350,
+		-(10**350),
+		10**500,
+		10**5000,
+		Decimal("1e400"),
+		Decimal("-1e400"),
+		Decimal("sNaN"),
+	],
+	ids=lambda junk: "huge" if isinstance(junk, int) and abs(junk) > 10**300 else repr(junk),
+)
 def test_rounding_refuses_what_is_not_a_finite_number(junk):
 	with pytest.raises(ValueError):
 		to_cents(junk)
 	with pytest.raises(ValueError):
 		round_up_dollar(junk)
+
+
+HUGE_AMOUNTS = [10**350, -(10**350), 10**400, 10**5000, Decimal("1e400")]
+
+
+@pytest.mark.parametrize(
+	"amount", HUGE_AMOUNTS, ids=["10**350", "-(10**350)", "10**400", "10**5000", "1e400"]
+)
+def test_a_quote_too_big_for_a_float_is_handed_back_when_off_and_dropped_when_on(amount):
+	"""Off, the quotes come back as posted, whatever they hold, and writing the trace line for one must not
+	raise. On, it is no usable price (a service that gave no price), like a NaN."""
+	big, fine = make_quote(amount, "big", "Huge"), make_quote(38.2, "ok", "Express")
+	order = make_order("AE", quotes=[big, fine])
+	off = {**example(), "active": False}
+	result = resolve(
+		off, order
+	)  # (not check_shape: it wants int and float amounts, and this hands back a Decimal)
+	assert (result["policy_active"], result["offered"]) == (False, True)
+	assert [o["service_id"] for o in result["offers"]] == ["big", "ok"]
+	assert result["offers"][0]["amount"] is amount, "handed back exactly as it was posted"
+	for text in (step["text"] for offer in result["offers"] for step in offer["trace"]):
+		assert isinstance(text, str) and text
+	# on, only the quote that is a price is priced (GCC: the carrier price rounded up)
+	result = resolve(example(), order)
+	check_shape(result)
+	assert [(o["service_id"], o["amount"]) for o in result["offers"]] == [("ok", 39.0)]
+	# and with nothing else to quote, it is as if the carrier had given no price (here GCC's fixed fallback)
+	alone = resolve(example(), make_order("AE", quotes=[big]))
+	check_shape(alone)
+	assert alone == resolve(example(), make_order("AE", quotes=[make_quote(float("nan"))]))
+	assert (alone["reason"], amount_of(alone)) == ("fallback_offer", 35.0)
+
+
+# str() and an f-string refuse an integer of more than 4300 digits, and a draft or a stored policy may hold
+# anything, so every sentence the engine writes about a value of the policy has to cope with one.
+VAST = 10**5000
+TOO_LARGE_TO_SHOW = "a number too large to show"
+
+
+def test_a_policy_holding_a_vast_integer_anywhere_is_priced_previewed_and_checked_without_raising():
+	orders = [
+		make_order("AE"),
+		make_order("BH"),
+		make_order("US", quotes=[make_quote(60.0)]),
+		make_order("AE", items=[make_item("W", ["Watches"])]),
+		make_order("JP", quotes=[]),
+		make_order("AE", served=False),
+	]
+	places = 0
+	for base in (
+		example(),
+		card_policy(),
+		card_policies(sample_card())["carrier with the card as its fallback"],
+	):
+		for path in list(paths_in(base)):
+			policy = copy.deepcopy(base)
+			follow(policy, path[:-1])[path[-1]] = VAST
+			places += 1
+			for order in orders:
+				check_shape(resolve(policy, order))
+				for preview in rule_previews(policy, order):
+					assert set(preview) == {"index", "in_zone", "matches", "amount"}
+			problems = validate_policy(policy)
+			assert all(isinstance(problem, str) and problem for problem in problems), path
+	assert places > 300, "every place of three policies was tried"
+
+
+def test_a_vast_integer_is_shown_as_a_phrase_in_the_sentences_that_name_it():
+	"""One policy holds it in each place a sentence quotes a value: a rule's label, zone and item set, the
+	countries of an Everywhere-else zone, a country, and the zone or item set a rule names."""
+	policy = example()
+	policy["zones"][1]["name"] = VAST  # GCC, now named by the number (its rule 3 names it too)
+	policy["rules"][1]["zone"] = VAST
+	policy["rules"][2].update(zone=VAST, label=VAST)
+	policy["rules"][1]["item_set"] = VAST
+	policy["item_sets"][0]["name"] = VAST
+	result = resolve(policy, make_order("AE"))
+	check_shape(result)
+	text = " ".join(step["text"] for step in only_offer(result)["trace"])
+	assert f'Rule 3 ("{TOO_LARGE_TO_SHOW}") applies: {TOO_LARGE_TO_SHOW}, every item' in text, text
+	watches = resolve(policy, make_order("AE", items=[make_item("W", ["Watches"])]))
+	assert f"selected items ({TOO_LARGE_TO_SHOW})" in " ".join(
+		step["text"] for step in only_offer(watches)["trace"]
+	)
+	# the sentences of validate_policy
+	policy = example()
+	policy["rules"][0]["zone"] = VAST  # a zone that does not exist
+	policy["rules"][1]["item_set"] = VAST  # an item set that does not exist
+	policy["zones"][1]["countries"].append(VAST)  # not a country code
+	policy["zones"][2]["countries"].append(VAST)  # Rest of world is Everywhere else, so it cannot list any
+	problems = validate_policy(policy)
+	assert len(problems) == 5, (
+		problems
+	)  # (the Everywhere-else zone gets two: not a code, and not allowed to list)
+	assert [TOO_LARGE_TO_SHOW in problem for problem in problems] == [True] * 5, problems
+	assert any(problem.startswith('Zone "Rest of world" is set to Everywhere else') for problem in problems)
+
+
+def test_an_item_whose_code_or_group_is_a_vast_integer_matches_no_item_set():
+	"""It has no text to compare, so it names nothing: it neither raises nor matches a blank entry."""
+	sets = [{"name": "Odd", "item_groups": [VAST, ""], "items": [VAST, "  "]}]
+	selected = make_rule(item_set="Odd")
+	for item in (make_item(VAST, [VAST]), make_item("", [""]), make_item(None, [None])):
+		assert not rule_matches(selected, make_order("AE", items=[item]), sets), item
+	policy = example()
+	policy["item_sets"][0]["item_groups"] = [VAST]
+	problems = validate_policy(policy)
+	assert len(problems) == 1 and "Watches" in problems[0] and "no item group and no item" in problems[0]
 
 
 # ---------------------------------------------------------------- previews
@@ -1534,6 +1664,8 @@ JUNK = [
 	float("nan"),
 	float("inf"),
 	10**30,
+	10**400,  # too big for a float
+	10**5000,  # and more digits than str() will make of an integer
 	"GCC",
 	"Watches",
 	"UAE",

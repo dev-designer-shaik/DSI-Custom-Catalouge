@@ -152,8 +152,23 @@ def _number(value):
 
 
 def _key(value):
-	"""How item groups and item codes are compared: the ERP's database ignores case and outer spaces."""
-	return "" if value is None else str(value).strip().casefold()
+	"""How item groups and item codes are compared: the ERP's database ignores case and outer spaces. A value
+	that has no text (an integer of more than 4300 digits, which str() refuses) names nothing."""
+	if value is None:
+		return ""
+	try:
+		return str(value).strip().casefold()
+	except ValueError:
+		return ""
+
+
+def _shown(value):
+	"""`value` as text inside a sentence. The policy and the order may hold anything, and str() refuses an
+	integer of more than 4300 digits, so that one is shown as a fixed phrase."""
+	try:
+		return str(value)
+	except ValueError:
+		return "a number too large to show"
 
 
 # ---------------------------------------------------------------- money
@@ -164,13 +179,16 @@ _ROOM = Context(prec=400)
 
 
 def _decimal(amount):
-	"""The decimal a person reads in `amount`: 1.005 is 1.005, not the binary number nearest to it."""
+	"""The decimal a person reads in `amount`: 1.005 is 1.005, not the binary number nearest to it.
+
+	Only what `_number` reads as a finite float is an amount: an integer or a Decimal too big for a float is
+	refused, as an infinity is (it would give an infinite price, or an InvalidOperation from `quantize`).
+	"""
 	if not _is_number(amount):
 		raise ValueError("An amount has to be a number.")
-	value = Decimal(str(amount))
-	if not value.is_finite():
+	if _number(amount) is None:
 		raise ValueError("An amount has to be a finite number.")
-	return value
+	return Decimal(str(amount))
 
 
 def _cents(amount):
@@ -202,11 +220,15 @@ def _difference(larger, smaller):
 
 
 def _fmt(amount):
-	"""An amount as a receipt prints it, with two decimals."""
+	"""An amount as a receipt prints it, with two decimals.
+
+	A policy that is off hands the carrier's quote back as it was posted, so this may be given anything: what
+	is no amount is printed as it is (see `_shown`).
+	"""
 	try:
 		return f"{to_cents(amount):.2f}"
 	except ValueError:
-		return str(amount)
+		return _shown(amount)
 
 
 # ---------------------------------------------------------------- zones
@@ -512,12 +534,14 @@ def _price(rule, carrier, totals):
 
 
 def _rule_text(index, rule, zone):
-	label = str(rule.get("label") or "").strip()
+	label = _shown(rule.get("label") or "").strip()
 	named = f' ("{label}")' if label else ""
-	items = f"selected items ({rule['item_set']})" if rule.get("item_set") else "every item"
+	items = f"selected items ({_shown(rule['item_set'])})" if rule.get("item_set") else "every item"
 	rounding = ", rounded up" if rule.get("round_up") else ""
 	charge = _CHARGES[rule.get("method") or "carrier_price"]
-	return f"Rule {index + 1}{named} applies: {zone.get('name')}, {items}, charges {charge}{rounding}."
+	return (
+		f"Rule {index + 1}{named} applies: {_shown(zone.get('name'))}, {items}, charges {charge}{rounding}."
+	)
 
 
 def _formula_text(rule, value):
@@ -773,14 +797,16 @@ def _zone_problems(zones, has_card):
 		listed = [country for country in _as_list(zone.get("countries")) if country not in (None, "")]
 		for country in listed:
 			if not normalize_country(country):
-				problems.append(f'Zone {ref} lists "{country}", which is not a two-letter country code.')
+				problems.append(
+					f'Zone {ref} lists "{_shown(country)}", which is not a two-letter country code.'
+				)
 		problems += _fallback_problems(f"Zone {ref}", zone.get("fallback"), LABELS["zone_fallback"], has_card)
 		if not zone.get("enabled"):
 			continue
 		if zone.get("everywhere_else"):
 			catching_all.append(ref)
 			if listed:
-				shown = ", ".join(str(country) for country in listed)
+				shown = ", ".join(_shown(country) for country in listed)
 				problems.append(
 					f"Zone {ref} is set to Everywhere else, so it cannot also list countries ({shown})."
 				)
@@ -865,9 +891,9 @@ def _rule_problems(rules, zones, item_sets):
 		if not zone:
 			problems.append(f"Rule {number} does not say which zone it is for.")
 		elif zone not in zone_names:
-			problems.append(f'Rule {number} is for the zone "{zone}", which does not exist.')
+			problems.append(f'Rule {number} is for the zone "{_shown(zone)}", which does not exist.')
 		if item_set and item_set not in set_names:
-			problems.append(f'Rule {number} uses the item set "{item_set}", which does not exist.')
+			problems.append(f'Rule {number} uses the item set "{_shown(item_set)}", which does not exist.')
 		problems += _charge_problems(number, rule)
 		problems += _band_problems(number, rule)
 	return problems
