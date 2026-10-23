@@ -17,7 +17,8 @@ loggers that a path may reach are mocks, and `error_log_entries` checks that non
 The rate card is covered too: `import_rate_card` (the CSV text is embedded below, because the sample files do
 not reach erp2), Try an order and Apply with a price source and a card, and `test_integration`, whose HTTP
 calls are always mocked (`requests.post` is replaced, the website's address and its name lookup are stand-ins),
-so that no test reaches the network.
+so that no test reaches the network, and whose carrier is always a stand-in (`carrier(...)`; the class refuses
+the real one), so that no test runs the shipping module against erp2's own services.
 """
 
 import ast
@@ -30,7 +31,8 @@ import random
 import string
 import sys
 import types
-from contextlib import contextmanager, nullcontext
+import unittest
+from contextlib import contextmanager, nullcontext, suppress
 from unittest import mock
 
 import frappe
@@ -624,32 +626,46 @@ def random_edit(rng, draft, item) -> str:
 	return kind
 
 
+def refusing(test, what):
+	"""A stand-in that refuses a call ("a test <what>") and first writes down on `test.stray` that it was made.
+	The code under test may catch what a refusal raises (the integration test catches everything a check does),
+	so the refusal alone could not fail the test: the list does, see `guard_against_strays`."""
+
+	def refuse(*arguments, **keywords):
+		test.stray.append(what)
+		raise AssertionError(f"a test {what}")
+
+	return refuse
+
+
+def guard_against_strays(test):
+	"""Make `test` fail if it, or code it runs, commits the transaction, reaches the network or writes to the
+	Error Log, whatever that code does with the error these raise. A rollback undoes none of the three: a commit
+	keeps what the test wrote, and the Error Log (MyISAM) and a request that has gone out stay for good. A test
+	that expects one of them replaces the guard with a mock of its own, inside its own block."""
+	test.stray = []
+	for owner, name, what in (
+		(frappe.db, "commit", "committed the transaction"),
+		# `requests.post` is replaced in every test that makes a call; this is for the one that forgets, so that
+		# nothing here can reach the network (the ERP's own address, a website or anyone else).
+		(requests.adapters.HTTPAdapter, "send", "reached the network"),
+		(frappe, "log_error", "wrote to the Error Log"),
+	):
+		patch = mock.patch.object(owner, name, new=refusing(test, what))
+		patch.start()
+		test.addCleanup(patch.stop)
+	test.addCleanup(lambda: test.assertEqual(test.stray, [], "what the test did that it must not"))
+
+
 class WizardTestCase(ShippingPolicyTestCase):
 	"""The base of these tests: a clean site before and after each (the shared base), and no commit. The class
 	rolls back at its end whatever its tests wrote; a commit would keep it, so any commit here fails the test.
-	Nor can a test reach the network or write to the Error Log: both would stay whatever a rollback does."""
+	Nor can a test reach the network or write to the Error Log: both would stay whatever a rollback does. Each
+	of the three fails the test even when the code under test catches the refusal (`guard_against_strays`)."""
 
 	def setUp(self):
 		super().setUp()
-		commit = mock.patch.object(
-			frappe.db, "commit", side_effect=AssertionError("a test committed the transaction")
-		)
-		commit.start()
-		self.addCleanup(commit.stop)
-		# `requests.post` is replaced in every test that makes a call; this is for the one that forgets, so that
-		# nothing here can reach the network (the ERP's own address, a website or anyone else).
-		network = mock.patch.object(
-			requests.adapters.HTTPAdapter, "send", side_effect=AssertionError("a test reached the network")
-		)
-		network.start()
-		self.addCleanup(network.stop)
-		# The Error Log is a MyISAM table: a row written by a test, or by code a test has broken, stays for good.
-		# A test that expects a log entry replaces this with a mock of its own.
-		logged = mock.patch.object(
-			frappe, "log_error", side_effect=AssertionError("a test wrote to the Error Log")
-		)
-		logged.start()
-		self.addCleanup(logged.stop)
+		guard_against_strays(self)
 
 
 # ---------------------------------------------------------------- who may use the wizard
@@ -673,16 +689,18 @@ class TestWizardAccess(WizardTestCase):
 		calls["apply_policy with a change"] = lambda: wizard.apply_policy({**draft, "active": True}, version)
 		before = snapshot()
 		sales = make_user(self, "Sales User")
-		# The integration test reaches out to the network: a refusal has to come before any call.
-		with mock.patch.object(
-			requests, "post", side_effect=AssertionError("the network was asked")
-		) as asked:
+		# The integration test reaches out to the network and asks the carrier: a refusal has to come before either.
+		with (
+			mock.patch.object(requests, "post", side_effect=AssertionError("the network was asked")) as asked,
+			carrier(side_effect=AssertionError("the carrier was asked")) as carrier_asked,
+		):
 			for user in ("Guest", sales):
 				for method, call in calls.items():
 					with self.subTest(user=user, method=method), as_user(user):
 						with self.assertRaises(frappe.PermissionError):
 							call()
 		asked.assert_not_called()
+		carrier_asked.assert_not_called()
 		self.assertEqual(snapshot(), before, "nothing was written")
 		# The control: the same user once it holds the System Manager role.
 		frappe.get_doc("User", sales).add_roles("System Manager")
@@ -3169,6 +3187,59 @@ def secrets_of_the_site() -> list[str]:
 
 
 class TestTestIntegration(WizardTestCase):
+	def setUp(self):
+		super().setUp()
+		# `carrier(...)` replaces this in every test that lets the integration test ask for rates. One that forgets
+		# would run the real shipping module against this site's own services (and may write Error Log rows).
+		real = mock.patch("dsi_shipping.api.get_shipping_rates", new=refusing(self, "asked the real carrier"))
+		real.start()
+		self.addCleanup(real.stop)
+
+	def test_the_guards_fail_a_test_even_when_the_code_under_test_swallows_what_they_raise(self):
+		class Swallowing(unittest.TestCase):
+			def setUp(self):
+				guard_against_strays(self)
+
+			def test_network(self):
+				with suppress(AssertionError):
+					requests.get("http://localhost:9/")  # not replaced: the adapter below it is the guard
+
+			def test_error_log(self):
+				with suppress(AssertionError):
+					frappe.log_error(title="a title", message="a message")
+
+			def test_commit(self):
+				with suppress(AssertionError):
+					frappe.db.commit()
+
+			def test_the_one_that_expects_a_log_entry(self):
+				with mock.patch.object(frappe, "log_error") as logged:
+					frappe.log_error(title="a title", message="a message")
+				logged.assert_called_once()
+
+			def test_nothing(self):
+				pass
+
+		result = unittest.TestResult()
+		unittest.defaultTestLoader.loadTestsFromTestCase(Swallowing).run(result)
+		failed = {test.id().rsplit(".", 1)[1]: text for test, text in [*result.failures, *result.errors]}
+		self.assertEqual(set(failed), {"test_network", "test_error_log", "test_commit"})
+		for name, what in (
+			("test_network", "reached the network"),
+			("test_error_log", "wrote to the Error Log"),
+			("test_commit", "committed the transaction"),
+		):
+			self.assertIn(what, failed[name])
+		self.assertEqual(result.testsRun, 5)
+		# The same for the real carrier of the integration test, which the check turns into a plain answer.
+		with the_network(Reply(200, {"message": {}}), site_reply(100.0)):
+			result = wizard.test_integration()
+		self.assertEqual(
+			result["checks"][1]["summary"], "The carrier could not be asked: the call stopped with an error."
+		)
+		self.assertEqual(self.stray, ["asked the real carrier"])
+		self.stray.clear()  # that was this test's own doing: the cleanup need not fail it
+
 	def test_test_integration_runs_all_three_checks_with_mocked_http(self):
 		seed_policy(card_policy(), active=True)  # the rate card is the price source
 		items = sample_items()
@@ -3396,8 +3467,33 @@ class TestTestIntegration(WizardTestCase):
 				wizard.test_integration()["verdict"],
 				"The shipping policy is switched off, so customers pay the carrier's own prices.",
 			)
+		# The carrier answering is not the whole of it: a website that is down is named in the same sentence.
+		down = requests.exceptions.ConnectionError()
+		with the_network(Reply(200, {"message": own}), down), carrier(**good):
+			self.assertEqual(
+				wizard.test_integration()["verdict"],
+				"The shipping policy is switched off, so customers pay the carrier's own prices, but the website "
+				"did not give a usable answer (see the third check).",
+			)
+		with the_network(Reply(200, {"message": own}), down, website="https://10.0.0.5/"), carrier(**good):
+			self.assertEqual(
+				wizard.test_integration()["verdict"],
+				"The shipping policy is switched off, so customers pay the carrier's own prices; the website was "
+				"not asked because its address is not usable (see the third check).",
+			)
 		frappe.get_doc(POLICY).update({"active": 1, "price_source": "Carrier"}).save()
 		own = shipping_policy.price_delivery("US", json.dumps(items), carton, "[]")
+		with the_network(Reply(200, {"message": own}), site_reply(38.2)), carrier(**good):
+			self.assertEqual(
+				wizard.test_integration()["verdict"],
+				"The price source is the carrier, so customers pay the carrier's price through the policy's rules.",
+			)
+		with the_network(Reply(200, {"message": own}), down), carrier(**good):
+			self.assertEqual(
+				wizard.test_integration()["verdict"],
+				"The price source is the carrier, so customers pay the carrier's price through the policy's rules, "
+				"but the website did not give a usable answer (see the third check).",
+			)
 		with the_network(Reply(200, {"message": own}), site_reply(38.2)), carrier(**no_rates) as asked:
 			result = wizard.test_integration()
 		asked.assert_called_once()
@@ -3414,6 +3510,10 @@ class TestTestIntegration(WizardTestCase):
 
 	def test_test_integration_only_calls_the_configured_website(self):
 		seed_policy(card_policy(), active=True)
+		# The carrier is not what is under test here: the real shipping module is never run against this site.
+		carrier_patch = carrier(return_value=rates(THE_CARRIER))
+		carrier_patch.start()
+		self.addCleanup(carrier_patch.stop)
 		items = sample_items()
 		erp = Reply(200, {"message": shipping_policy.price_delivery("US", json.dumps(items))})
 		erp_url = frappe.utils.get_url() + PRICE_API
