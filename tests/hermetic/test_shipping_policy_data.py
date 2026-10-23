@@ -1436,6 +1436,52 @@ def test_flags_are_read_the_way_frappe_reads_a_check_field():
 	assert all(type(zone["enabled"]) is bool for zone in zones)
 
 
+FLAG_VALUES = [1, 0, True, False, None, "1", "0", "", "2", " 1 ", 2, -1, 0.0, 0.5, 1.0, "true", "yes", "no"]
+FLAG_VALUES += ["abc", float("nan"), float("inf"), BIG, [], {}, [1], (0,), {"a": 1}, object()]
+FLAGS = {
+	"policy": ("active",),
+	"zone": ("enabled", "not_shipped", "everywhere_else"),
+	"rule": ("enabled", "round_up"),
+}
+
+
+def test_flags_are_written_the_way_the_engine_reads_them():
+	"""The engine reads a flag as Python truth ("yes", "0", 0.5 and 2 are on; 0, "" and [] are off), so that is
+	what is written: a draft that previews live must not save off. Reading a row back is the other direction,
+	and `cint` is the rule there (see the test above)."""
+	for value in FLAG_VALUES:
+		policy = example()
+		policy["active"] = value
+		policy["zones"][0].update({key: value for key in FLAGS["zone"]})
+		policy["rules"][0].update({key: value for key in FLAGS["rule"]})
+		rows = rows_from_policy(policy, COUNTRY_NAMES)
+		written = [
+			*(rows["policy"][key] for key in FLAGS["policy"]),
+			*(rows["zones"][0][key] for key in FLAGS["zone"]),
+			*(rows["policy"]["rules"][0][key] for key in FLAGS["rule"]),
+		]
+		assert written == [1 if value else 0] * 6, value
+		assert all(type(flag) is int for flag in written), value
+	# and it is the engine's own reading, not a copy of it: on for `resolve` is on in the row
+	order = {"country_code": "AE", "items": [], "order_value": 1.0, "boxes": [], "quotes": [], "served": True}
+	for value in FLAG_VALUES:
+		policy = {**example(), "active": value}
+		assert resolve(policy, order)["policy_active"] is bool(value), value
+		assert rows_from_policy(policy, COUNTRY_NAMES)["policy"]["active"] == int(bool(value)), value
+	# a bool is a bool again once it has been through the rows
+	for flag in (True, False):
+		policy = example()
+		policy["active"] = flag
+		policy["zones"][0].update({key: flag for key in FLAGS["zone"]})
+		policy["rules"][0].update({key: flag for key in FLAGS["rule"]})
+		rows = rows_from_policy(policy, COUNTRY_NAMES)
+		back = policy_from_rows(rows["policy"], rows["zones"], rows["item_sets"], COUNTRY_CODES)
+		assert back["active"] is flag
+		assert [back["zones"][0][key] for key in FLAGS["zone"]] == [flag] * 3
+		assert [back["rules"][0][key] for key in FLAGS["rule"]] == [flag] * 2
+		assert all(type(back["zones"][0][key]) is bool for key in FLAGS["zone"])
+
+
 def test_a_country_name_the_map_does_not_know_is_dropped_from_its_zone():
 	zone_rows = [
 		{

@@ -252,8 +252,9 @@ def _text(value):
 
 
 def _flag(value):
-	"""A Check field as a bool, read the way Frappe's `cint` reads it: a number other than 0, or text holding
-	one, is on. None, other text, a NaN and anything unreadable are off, which is the safe side."""
+	"""A Check field of a database row as a bool, read the way Frappe's `cint` reads it: a number other than 0,
+	or text holding one, is on. None, other text, a NaN and anything unreadable are off, which is the safe
+	side. This is for rows read from the database; a policy's flags are read by `_check`."""
 	try:
 		return int(float(value)) != 0
 	except (TypeError, ValueError, OverflowError):
@@ -261,8 +262,11 @@ def _flag(value):
 
 
 def _check(value):
-	"""A flag as the 1 or 0 a Check field holds."""
-	return 1 if _flag(value) else 0
+	"""A flag of a policy as the 1 or 0 a Check field holds, read the way the engine reads it (`not
+	policy.get("active")`): anything Python counts as true is 1, so "yes", "0" and 0.5 are 1 and 0, "", None
+	and [] are 0. A draft therefore saves with the flags it previewed with. (A database row is read the other
+	way round, by `_flag`.)"""
+	return 1 if value else 0
 
 
 def _float(value):
@@ -459,7 +463,8 @@ def rows_from_policy(policy: dict, country_names: dict[str, str]) -> dict:
 
 	`country_names` maps an ISO code (in either case) to its Country name; a code it has no name for is
 	written as the code, so that saving the row fails loudly rather than the country being lost quietly.
-	Flags become the 1 and 0 a database holds, Select codes become their labels (a code that has no label
+	Flags become the 1 and 0 a database holds, read as the engine reads them (anything Python counts as true
+	is 1), Select codes become their labels (a code that has no label
 	is written as it is), the rate card becomes JSON text, and a rule row has a `name` only when the rule
 	has one. It does not raise on odd content.
 	"""
