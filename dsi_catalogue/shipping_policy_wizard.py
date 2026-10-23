@@ -750,8 +750,8 @@ def _capital_letter_clashes(kind, names, saved_names) -> list[str]:
 
 def _saving_problems(policy, saved) -> list[str]:
 	"""What the zone and policy doctypes would refuse to save although `validate_policy` has no quarrel with it,
-	said now instead of half way through the write: names the ERP reads as one, a disabled Everywhere else zone
-	that lists countries, and a fallback amount below zero that no fixed charge uses."""
+	said now instead of half way through the write: names the ERP reads as one, and a fallback amount below zero
+	that no fixed charge uses."""
 	problems = [
 		*_capital_letter_clashes(
 			"Zone", [zone.get("name") for zone in policy["zones"]], [zone["name"] for zone in saved["zones"]]
@@ -765,9 +765,6 @@ def _saving_problems(policy, saved) -> list[str]:
 	fallbacks = [("The policy default", policy["default_fallback"])]
 	for position, zone in enumerate(policy["zones"], start=1):
 		ref = f'"{zone["name"]}"' if zone.get("name") else f"number {position}"
-		# The zone form refuses countries on any Everywhere else zone; the engine looks at enabled zones only.
-		if zone.get("everywhere_else") and not zone.get("enabled") and zone["countries"]:
-			problems.append(f"Zone {ref} is an Everywhere else zone, so it cannot list countries.")
 		fallbacks.append((f"Zone {ref}", zone.get("fallback")))
 	for subject, fallback in fallbacks:
 		amount = (fallback or {}).get("amount")

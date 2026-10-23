@@ -1839,6 +1839,12 @@ def _everywhere_else_lists_countries(policy):
 	policy["zones"][2]["countries"] = ["JP"]
 
 
+def _disabled_everywhere_else_lists_countries(policy):
+	# The zone form refuses countries on any Everywhere-else zone, so the policy's check does too.
+	old = {**copy.deepcopy(policy["zones"][2]), "name": "Old rest", "enabled": False, "countries": ["JP"]}
+	policy["zones"].append(old)
+
+
 def _empty_item_set(policy):
 	policy["item_sets"][0]["item_groups"] = []
 
@@ -1918,6 +1924,10 @@ PROBLEMS = {
 		_everywhere_else_lists_countries,
 		["Rest of world", "JP"],
 	),
+	"a disabled Everywhere-else zone that lists countries": (
+		_disabled_everywhere_else_lists_countries,
+		['Zone "Old rest" is set to Everywhere else', "(JP)"],
+	),
 	"an item set with no group and no item": (_empty_item_set, ["Watches"]),
 	"an item set of blanks": (_item_set_of_blanks, ["Watches"]),
 	"a zone country that is not two letters": (_country_that_is_not_two_letters, ["GCC", "UAE"]),
@@ -1968,10 +1978,11 @@ def test_validate_policy_numbers_rules_from_one_and_names_every_problem_it_finds
 
 def test_validate_policy_allows_what_is_harmless():
 	policy = example()
-	# a disabled zone may repeat a country, and a disabled second Everywhere-else zone is fine
+	# a disabled zone may repeat a country, and a disabled second Everywhere-else zone is fine (as long as it
+	# lists no country: no Everywhere-else zone may, enabled or not)
 	policy["zones"].append({**copy.deepcopy(policy["zones"][1]), "name": "Old GCC", "enabled": False})
 	policy["zones"].append(
-		{**copy.deepcopy(policy["zones"][2]), "name": "Old rest", "enabled": False, "countries": ["JP"]}
+		{**copy.deepcopy(policy["zones"][2]), "name": "Old rest", "enabled": False, "countries": []}
 	)
 	# a country listed twice in one zone, and a stale formula on a rule that is not a formula rule
 	policy["zones"][0]["countries"] = ["BH", "bh"]

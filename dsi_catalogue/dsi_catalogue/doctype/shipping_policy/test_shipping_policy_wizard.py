@@ -1617,22 +1617,24 @@ class TestPreviewChanges(WizardTestCase):
 		self.assertEqual(wizard.preview_changes(too_deep), {"changes": NO_CHANGES, "problems": [SHAPE]})
 
 	def test_a_disabled_everywhere_else_zone_cannot_list_countries(self):
+		# The zone form refuses countries on any Everywhere else zone, and the policy's own check says so too,
+		# enabled or not: one sentence, the engine's.
 		seed_policy(load_example())
 		before = snapshot()
 		draft = wizard.wizard_state()["policy"]
 		draft["zones"].append(zone_of("Far & <away>", ["FR"], enabled=False, everywhere_else=True))
-		sentence = 'Zone "Far & <away>" is an Everywhere else zone, so it cannot list countries.'
+		sentence = 'Zone "Far & <away>" is set to Everywhere else, so it cannot also list countries (FR).'
 		self.assertEqual(wizard.preview_changes(draft)["problems"], [sentence])
 		with self.assertRaises(frappe.ValidationError) as caught:
 			apply(draft)
 		self.assertEqual(messages(caught), [frappe.utils.escape_html(sentence)])
 		self.assertNotIn("<", " ".join(messages(caught)))
 		self.assertEqual(snapshot(), before)
-		# An enabled one gets the engine's own sentence, once.
+		# Enabled, it is also a second enabled Everywhere else zone.
 		zone_named(draft, "Far & <away>")["enabled"] = True
 		problems = wizard.preview_changes(draft)["problems"]
 		self.assertEqual(len(problems), 2, problems)
-		self.assertTrue(problems[0].startswith('Zone "Far & <away>" is set to Everywhere else'), problems)
+		self.assertEqual(problems[0], sentence)
 		self.assertTrue(
 			problems[1].startswith("More than one enabled zone is set to Everywhere else"), problems
 		)

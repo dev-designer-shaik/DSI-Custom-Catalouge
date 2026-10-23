@@ -809,15 +809,16 @@ def _zone_problems(zones, has_card):
 					f'Zone {ref} lists "{_shown(country)}", which is not a two-letter country code.'
 				)
 		problems += _fallback_problems(f"Zone {ref}", zone.get("fallback"), LABELS["zone_fallback"], has_card)
+		# Enabled or not, as the zone form refuses it: only the count of Everywhere else zones is of enabled ones.
+		if zone.get("everywhere_else") and listed:
+			shown = ", ".join(_shown(country) for country in listed)
+			problems.append(
+				f"Zone {ref} is set to Everywhere else, so it cannot also list countries ({shown})."
+			)
 		if not zone.get("enabled"):
 			continue
 		if zone.get("everywhere_else"):
 			catching_all.append(ref)
-			if listed:
-				shown = ", ".join(_shown(country) for country in listed)
-				problems.append(
-					f"Zone {ref} is set to Everywhere else, so it cannot also list countries ({shown})."
-				)
 			continue
 		for code in dict.fromkeys(normalize_country(country) for country in listed):
 			if code:
