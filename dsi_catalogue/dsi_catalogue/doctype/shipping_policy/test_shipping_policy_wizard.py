@@ -2164,6 +2164,32 @@ class TestApplyPolicy(WizardTestCase):
 		self.assertEqual(logged.call_args.kwargs["title"], "shipping policy revalidate failed")
 		self.assertIn("outbox table locked", logged.call_args.kwargs["message"])
 
+	def test_a_dsi_core_that_fails_as_it_is_imported_never_fails_the_apply(self):
+		# Only a site without dsi_core skips the refresh in silence. Any other error on the way to the outbox, such
+		# as a dsi_core that raises while its `outbox` is looked up, is logged like an outbox that refuses, and the
+		# apply stands.
+		seed_policy(load_example())
+		draft = wizard.wizard_state()["policy"]
+		draft["active"] = True
+		half_set_up = types.ModuleType("dsi_core")
+
+		def broken_lookup(name):
+			# What the import machinery asks first (__path__ and the like) is answered as a plain module would.
+			if name.startswith("__"):
+				raise AttributeError(name)
+			raise RuntimeError("dsi_core is half set up")
+
+		half_set_up.__getattr__ = broken_lookup
+		with modules({"dsi_core": half_set_up}), mock.patch.object(frappe, "log_error") as logged:
+			with self.assertRaisesRegex(RuntimeError, "half set up"):
+				from dsi_core import outbox  # what the wizard meets
+			result = apply(draft)
+		self.assertTrue(load_policy()["active"], "the apply stands")
+		self.assertEqual(result["version"], wizard.wizard_state()["version"])
+		logged.assert_called_once()
+		self.assertEqual(logged.call_args.kwargs["title"], "shipping policy revalidate failed")
+		self.assertIn("dsi_core is half set up", logged.call_args.kwargs["message"])
+
 	def test_without_dsi_core_the_refresh_is_skipped_silently(self):
 		seed_policy(load_example())
 		draft = wizard.wizard_state()["policy"]

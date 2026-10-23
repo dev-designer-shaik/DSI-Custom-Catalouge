@@ -1103,12 +1103,13 @@ def _save_policy(row, loaded, before):
 
 def _refresh_the_website(version):
 	"""Ask the website to refresh the pages that show the policy, through dsi_core's outbox when the site has
-	it, the way `api.notify_revalidate` does for products. It never fails the apply: a failure is logged."""
+	it, the way `api.notify_revalidate` does for products. It never fails the apply: a site without dsi_core
+	skips it, and any other failure, a dsi_core that fails as it is imported included, is logged."""
 	try:
-		from dsi_core import outbox
-	except ImportError:
-		return
-	try:
+		try:
+			from dsi_core import outbox
+		except ImportError:  # no dsi_core on this site: there is nothing to ask
+			return
 		outbox.enqueue(
 			"website-revalidate",
 			{"tags": ["shipping-policy"]},
