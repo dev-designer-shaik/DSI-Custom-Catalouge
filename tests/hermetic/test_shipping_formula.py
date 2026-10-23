@@ -6,6 +6,7 @@ import ast
 import itertools
 import math
 import random
+import re
 import warnings
 from pathlib import Path
 
@@ -656,14 +657,15 @@ def test_round_needs_a_whole_number_of_places():
 		evaluate("round(carrier_price, 1.5)", SAMPLE)
 
 
-# A number written straight against the word after it. Python reads the first four today but warns (and may
-# refuse them in a later version), so whether a formula was accepted would depend on the version and on the
-# warning settings. The others are a syntax error already.
-NUMBER_THEN_WORD = [
+# A number written straight against a KEYWORD (if, else, and, or, in, ...). Python reads most of these today but
+# warns (and may refuse them in a later version), so whether a formula was accepted would depend on the version
+# and on the warning settings. A space is all they need.
+NUMBER_THEN_KEYWORD = [
 	"1if boxes else 2",
 	"1or 2",
 	"2and boxes",
 	"0x1for 2",
+	"2in boxes",
 	"1_000if boxes else 2",
 	"1jif boxes else 2",
 	"0b1if boxes else 2",
@@ -671,13 +673,28 @@ NUMBER_THEN_WORD = [
 	"carrier_price+1if boxes else 2",
 	"(1if boxes else 2)",
 	"boxes if 1else 2",
-	"1.5e3x",
 ]
+# A number written straight against a NAME (2boxes). That is a syntax error whatever the warning settings, and a
+# space does not mend it: `2 boxes` is refused too. It needs an operator between them.
+NUMBER_THEN_NAME = [
+	"2boxes",
+	"3carrier_price",
+	"1.5e3x",
+	"carrier_price+2boxes",
+	"0x1fx",
+	"1_000boxes",
+	"1e5weight_kg",
+	"max(2boxes, 3)",
+	"2e",
+	"2match",  # a soft keyword is a name here
+]
+SPACE_ADVICE = "Put a space between a number and the word after it. Write '"
+OPERATOR_ADVICE = "Put an operator between a number and the name after it. Write '"
 
 
-@pytest.mark.parametrize("source", NUMBER_THEN_WORD, ids=_short)
-def test_a_number_written_straight_against_a_word_is_refused_with_or_without_warnings(source):
-	"""The same sentence however warnings are set, and the parser is never asked to warn about it."""
+def _refusal_whatever_the_warnings(source):
+	"""The refusal of `source`: the same sentence however warnings are set, and the parser is never asked to warn
+	about it."""
 	with warnings.catch_warnings(record=True) as caught:
 		warnings.simplefilter("always")
 		normal = _refusal(source)
@@ -685,17 +702,70 @@ def test_a_number_written_straight_against_a_word_is_refused_with_or_without_war
 	with warnings.catch_warnings():
 		warnings.simplefilter("error")  # as under python -W error
 		assert _refusal(source) == normal
-	assert normal.startswith("Put a space between a number and the word after it. Write '")
 	assert normal.endswith("."), normal
+	return normal
 
 
-def test_the_sentence_for_a_number_against_a_word_shows_what_to_write():
-	assert _refusal("1if boxes else 2") == (
-		"Put a space between a number and the word after it. Write '1 if', not '1if'."
-	)
-	assert _refusal("carrier_price + 0x1for 2") == (
-		"Put a space between a number and the word after it. Write '0x1f or', not '0x1for'."
-	)
+@pytest.mark.parametrize("source", NUMBER_THEN_KEYWORD, ids=_short)
+def test_a_number_written_straight_against_a_keyword_is_refused_with_or_without_warnings(source):
+	assert _refusal_whatever_the_warnings(source).startswith(SPACE_ADVICE)
+
+
+@pytest.mark.parametrize("source", NUMBER_THEN_NAME, ids=_short)
+def test_a_number_written_straight_against_a_name_is_refused_and_asks_for_an_operator(source):
+	assert _refusal_whatever_the_warnings(source).startswith(OPERATOR_ADVICE)
+
+
+@pytest.mark.parametrize(
+	("source", "sentence"),
+	[
+		("1if boxes else 2", f"{SPACE_ADVICE}1 if', not '1if'."),
+		("carrier_price + 0x1for 2", f"{SPACE_ADVICE}0x1f or', not '0x1for'."),
+		("boxes if 1else 2", f"{SPACE_ADVICE}1 else', not '1else'."),
+		("2boxes", f"{OPERATOR_ADVICE}2 * boxes', not '2boxes'."),
+		("3carrier_price + 1", f"{OPERATOR_ADVICE}3 * carrier_price', not '3carrier_price'."),
+		("1.5e3x", f"{OPERATOR_ADVICE}1.5e3 * x', not '1.5e3x'."),
+	],
+)
+def test_the_sentence_for_a_number_against_a_word_shows_what_to_write(source, sentence):
+	assert _refusal(source) == sentence
+
+
+@pytest.mark.parametrize(
+	"source",
+	[
+		"1if boxes else 2",
+		"1or 2",
+		"2and boxes",
+		"1e5if boxes else 2",
+		"1_000if boxes else 2",
+		"carrier_price+1if boxes else 2",
+		"(1if boxes else 2)",
+		"boxes if 1else 2",
+		"2boxes",
+		"3carrier_price",
+		"carrier_price+2boxes",
+		"1_000boxes",
+		"1e5weight_kg",
+		"max(2boxes, 3)",
+	],
+	ids=_short,
+)
+def test_what_the_sentence_says_to_write_is_accepted(source):
+	"""The advice is followed to the letter: the text it says is wrong is replaced by the text it says to write."""
+	said = re.search(r"Write '(?P<right>.+)', not '(?P<wrong>.+)'\.$", _refusal(source))
+	assert said and said["wrong"] in source, source
+	assert isinstance(compile_formula(source.replace(said["wrong"], said["right"])), ast.Expression)
+
+
+@pytest.mark.parametrize("source", ["2boxes", "3carrier_price", "1e5weight_kg", "max(2boxes, 3)"])
+def test_a_space_alone_does_not_mend_a_number_written_against_a_name(source):
+	"""Why the sentence for a name is not the one for a keyword: with only a space it is refused all the same."""
+	said = re.search(r"Write '(?P<right>.+)', not '(?P<wrong>.+)'\.$", _refusal(source))
+	spaced = source.replace(said["wrong"], said["right"].replace(" * ", " "))
+	assert spaced != source
+	with pytest.raises(FormulaError, match="not written correctly"):
+		compile_formula(spaced)
 
 
 @pytest.mark.parametrize(

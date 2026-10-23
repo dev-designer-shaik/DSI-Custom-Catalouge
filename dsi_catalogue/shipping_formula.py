@@ -36,6 +36,7 @@ user. Nothing else escapes `compile_formula`, `evaluate` or `check_formula`.
 import ast
 import io
 import itertools
+import keyword
 import math
 import operator
 import sys
@@ -338,6 +339,15 @@ def _number_against_a_word(text):
 	return None
 
 
+def _glued_problem(number, word):
+	"""The sentence for a number written straight against the word after it. Against a keyword (`1if`, `2and`)
+	all it needs is a space. Against a name (`2boxes`) a space does not mend it, `2 boxes` is refused too: what
+	was meant is an operator between them, `2 * boxes`."""
+	if keyword.iskeyword(word):
+		return f"Put a space between a number and the word after it. Write '{number} {word}', not '{number}{word}'."
+	return f"Put an operator between a number and the name after it. Write '{number} * {word}', not '{number}{word}'."
+
+
 def _syntax_problem(source, text, err):
 	"""The sentence for the SyntaxError that `ast.parse` raised for `text`, which is `source` without its outer
 	blanks. Python counts from the first character of `text`, but the person typed `source`, so the blanks and
@@ -372,10 +382,7 @@ def compile_formula(source: str) -> ast.Expression:
 		raise FormulaError(_TOO_BIG)
 	glued = _number_against_a_word(text)
 	if glued is not None:
-		number, word = glued
-		raise FormulaError(
-			f"Put a space between a number and the word after it. Write '{number} {word}', not '{number}{word}'."
-		)
+		raise FormulaError(_glued_problem(*glued))
 	try:
 		tree = ast.parse(text, mode="eval")
 	except SyntaxError as err:
