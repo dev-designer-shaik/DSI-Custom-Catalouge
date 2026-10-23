@@ -3,7 +3,9 @@ whitelist (everything else is refused in plain words), the size limits, and that
 nothing a user types can reach eval/exec."""
 
 import ast
+import itertools
 import math
+import random
 from pathlib import Path
 
 import pytest
@@ -313,17 +315,118 @@ def test_a_formula_that_is_not_a_number_is_refused_when_evaluated():
 		"1 < boxes < 3",
 		"carrier_price > 5 and boxes",
 		"boxes or 0",
-		"(carrier_price > 5) + 1",
-		"-(boxes > 0)",
-		"max(boxes > 0, 1)",
-		"(boxes > 0) < 2",
 		"(boxes > 0) if carrier_price > 5 else 1",
 	],
 )
-def test_a_yes_no_answer_is_never_used_as_a_number(source):
+def test_a_formula_as_a_whole_that_gives_a_yes_no_answer_is_refused_when_evaluated(source):
+	"""A yes/no answer is fine to write (it can sit inside `a if condition else b`), but the formula as a whole
+	has to give a number, which only `evaluate` can tell for the order it is given."""
 	compile_formula(source)
 	with pytest.raises(FormulaError, match="yes/no"):
 		evaluate(source, SAMPLE)
+
+
+# A yes/no answer used where a number is needed: an operand of + - * / % //, of unary + or -, of a comparison, or
+# an argument of a function. The branches the SAMPLE order does not take are checked just the same.
+YES_NO_AS_A_NUMBER = [
+	"(carrier_price > 5) + 1",
+	"-(boxes > 0)",
+	"+(boxes > 0)",
+	"max(boxes > 0, 1)",
+	"(boxes > 0) < 2",
+	"1 < (boxes > 0)",
+	"1 if (boxes > 0) == (carrier_price > 5) else 2",
+	"1 + (not boxes)",
+	"2 * (boxes and item_count)",
+	"(boxes or 0) / 2",
+	"round(carrier_price > 5)",
+	"round(carrier_price, boxes > 0)",
+	"abs(not boxes)",
+	"ceil(boxes > 0) + 1",
+	"(weight_kg > 5) * 10 if order_value > 1000 else carrier_price",
+	"-(boxes > 0) if boxes > 5 else 1",
+	"max(boxes > 0, 1) if boxes > 5 else 2",
+	"1 if boxes < 5 else (boxes > 0) + 1",
+	"1 if boxes < 5 else 2 * (boxes or item_count)",
+	"1 if boxes > 5 else (1 if boxes > 3 else (boxes > 0) * 2)",
+	# an a-if-condition-else-b whose branches differ is a number on one of them only, so it is no number either
+	"-(1 if boxes > 5 else boxes > 0)",
+	"1 + (boxes if carrier_price > 5 else boxes > 0)",
+	"max(1, (boxes > 0) if carrier_price > 5 else 2)",
+	"(1 if carrier_price > 5 else boxes > 0) < 2",
+]
+
+
+@pytest.mark.parametrize("source", YES_NO_AS_A_NUMBER, ids=_short)
+def test_a_yes_no_answer_used_as_a_number_is_refused_when_the_formula_is_saved(source):
+	"""Even on a branch the SAMPLE order does not take, where `evaluate` would never notice it."""
+	for refuse in (compile_formula, check_formula, lambda text: evaluate(text, SAMPLE)):
+		with pytest.raises(FormulaError, match="yes/no"):
+			refuse(source)
+
+
+# A yes/no answer where a number is not needed: the whole formula (`evaluate` refuses that), the condition of an
+# a-if-condition-else-b, an operand of and, or and not, and either branch of an a-if-condition-else-b.
+YES_NO_NOT_AS_A_NUMBER = [
+	"1 if boxes > 0 else 2",
+	"1 if not boxes else 2",
+	"1 if boxes and carrier_price else 2",
+	"1 if (boxes > 0) and (carrier_price > 5) else 2",
+	"1 if not (boxes > 0 or carrier_price < 1) else 2",
+	"1 if boxes > 0 or not boxes else 2",
+	"1 if (1 if boxes else boxes > 0) else 2",  # an either as a condition
+	"1 if (1 if boxes else boxes > 0) and boxes else 2",  # an either as an operand of `and`
+	"1 if not (1 if boxes else boxes > 0) else 2",  # an either as an operand of `not`
+	"(boxes > 0) if carrier_price > 5 else 1",
+	"1 if carrier_price > 5 else (boxes > 0)",
+	"(boxes > 0) if carrier_price > 5 else (not boxes)",
+]
+
+
+@pytest.mark.parametrize("source", YES_NO_NOT_AS_A_NUMBER, ids=_short)
+def test_a_yes_no_answer_that_is_not_used_as_a_number_is_accepted(source):
+	assert isinstance(compile_formula(source), ast.Expression)
+
+
+def _random_formula(rng, depth):
+	"""A random well-formed formula in which numbers and yes/no answers are mixed freely."""
+	if depth == 0 or rng.random() < 0.12:
+		return rng.choice(["boxes", "carrier_price", "item_count", "2", "0", "1.5"])
+
+	def part():
+		return _random_formula(rng, depth - 1)
+
+	shapes = [
+		lambda: f"({part()} {rng.choice('+-*')} {part()})",
+		lambda: f"(-{part()})",
+		lambda: f"({part()} {rng.choice(['<', '>=', '=='])} {part()})",
+		lambda: f"({part()} {rng.choice(['and', 'or'])} {part()})",
+		lambda: f"(not {part()})",
+		lambda: f"({part()} if {part()} else {part()})",
+		lambda: f"({part()} if {part()} else {part()})",
+		lambda: f"{rng.choice(['max', 'min'])}({part()}, {part()})",
+		lambda: f"abs({part()})",
+	]
+	return rng.choice(shapes)()
+
+
+def test_a_formula_saved_as_a_number_never_meets_a_yes_no_answer_as_a_number():
+	"""The save check against the run-time rule, on random formulas: when `(formula) * 1` is accepted (so the
+	formula gives a number on every branch), no values of the names make `evaluate` raise the yes/no error."""
+	rng = random.Random(20261023)
+	grid = itertools.product((0, 1, 5), (0.0, 3.0, 40.0), (0, 2))
+	values = [{**SAMPLE, "boxes": b, "carrier_price": c, "item_count": i} for b, c, i in grid]
+	accepted = 0
+	for _ in range(1500):
+		source = _random_formula(rng, rng.randint(1, 5))
+		try:
+			compile_formula(f"({source}) * 1")
+		except FormulaError:
+			continue  # a yes/no used as a number somewhere, or too big a formula
+		accepted += 1
+		for given in values:
+			assert isinstance(evaluate(source, given), float), source  # raises the yes/no error if it is hit
+	assert accepted > 100, "the fuzz must reach formulas that are accepted"
 
 
 def test_node_limit():

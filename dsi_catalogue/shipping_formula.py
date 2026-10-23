@@ -22,7 +22,9 @@ A formula can contain:
 
 A comparison, and, or and not give a yes/no answer, never a number. They choose
 between two numbers inside ``a if condition else b``, but a formula as a whole
-must give a number.
+must give a number. Using a yes/no answer as a number (adding it, comparing it,
+giving it to a function) is refused when the formula is saved, on every branch of
+an ``a if condition else b``, not only on the one a sample order takes.
 
 Every failure is a FormulaError whose message is a plain sentence for an ERP
 user. Nothing else escapes `compile_formula`, `evaluate` or `check_formula`.
@@ -184,6 +186,47 @@ def _check_call(node):
 		raise FormulaError(f"The function {name}() needs {wording}.")
 
 
+# What a part of a formula gives: a number, a yes/no answer (a comparison, and, or, not), or either (an
+# `a if condition else b` whose branches differ, so it is a number on one path and a yes/no on the other).
+_NUMBER, _ANSWER, _EITHER = "number", "yes/no", "either"
+
+
+def _kind(node):
+	"""What a checked node gives. Raises FormulaError where a yes/no answer (or an either) is used as a number:
+	the rule `_eval_number` applies when a formula is calculated, applied here to every branch, including the
+	ones the order being calculated never takes. `not`, `and`, `or` and a condition take either kind."""
+	kind = type(node)
+	if kind is ast.BinOp:
+		_need_numbers(node.left, node.right)
+	elif kind is ast.UnaryOp and isinstance(node.op, ast.Not):
+		_kind(node.operand)
+		return _ANSWER
+	elif kind is ast.UnaryOp:
+		_need_numbers(node.operand)
+	elif kind is ast.BoolOp:
+		for operand in node.values:
+			_kind(operand)
+		return _ANSWER
+	elif kind is ast.Compare:
+		_need_numbers(node.left, *node.comparators)
+		return _ANSWER
+	elif kind is ast.IfExp:
+		_kind(node.test)
+		body, orelse = _kind(node.body), _kind(node.orelse)
+		return body if body == orelse else _EITHER
+	elif kind is ast.Call:
+		_need_numbers(*node.args)
+	return _NUMBER  # a number, a name, or the result of an operation or a function
+
+
+def _need_numbers(*nodes):
+	"""Raise FormulaError if any of `nodes` can give a yes/no answer. All of them are typed first, so a
+	misuse deeper inside one is reported rather than this one."""
+	kinds = [_kind(node) for node in nodes]
+	if any(kind != _NUMBER for kind in kinds):
+		raise FormulaError(_YES_NO)
+
+
 # ---------------------------------------------------------------- evaluating
 def _eval(node, values):
 	"""Calculate a checked tree. A yes/no answer is a bool; every number is a finite float."""
@@ -271,6 +314,7 @@ def compile_formula(source: str) -> ast.Expression:
 	if sum(isinstance(node, ast.expr) for node in ast.walk(tree)) > MAX_NODES:
 		raise FormulaError(_TOO_BIG)
 	_check(tree.body)
+	_kind(tree.body)  # the formula as a whole may still be a yes/no: `evaluate` refuses that for an order
 	return tree
 
 
