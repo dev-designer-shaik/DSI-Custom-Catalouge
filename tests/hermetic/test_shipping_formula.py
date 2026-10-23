@@ -6,6 +6,7 @@ import ast
 import itertools
 import math
 import random
+import warnings
 from pathlib import Path
 
 import pytest
@@ -553,6 +554,81 @@ def test_a_bad_part_is_refused_even_where_the_sample_order_never_goes(source):
 def test_round_needs_a_whole_number_of_places():
 	with pytest.raises(FormulaError, match="whole number"):
 		evaluate("round(carrier_price, 1.5)", SAMPLE)
+
+
+# A number written straight against the word after it. Python reads the first four today but warns (and may
+# refuse them in a later version), so whether a formula was accepted would depend on the version and on the
+# warning settings. The others are a syntax error already.
+NUMBER_THEN_WORD = [
+	"1if boxes else 2",
+	"1or 2",
+	"2and boxes",
+	"0x1for 2",
+	"1_000if boxes else 2",
+	"1jif boxes else 2",
+	"0b1if boxes else 2",
+	"1e5if boxes else 2",
+	"carrier_price+1if boxes else 2",
+	"(1if boxes else 2)",
+	"boxes if 1else 2",
+	"1.5e3x",
+]
+
+
+@pytest.mark.parametrize("source", NUMBER_THEN_WORD, ids=_short)
+def test_a_number_written_straight_against_a_word_is_refused_with_or_without_warnings(source):
+	"""The same sentence however warnings are set, and the parser is never asked to warn about it."""
+	with warnings.catch_warnings(record=True) as caught:
+		warnings.simplefilter("always")
+		normal = _refusal(source)
+	assert caught == [], [str(warning.message) for warning in caught]
+	with warnings.catch_warnings():
+		warnings.simplefilter("error")  # as under python -W error
+		assert _refusal(source) == normal
+	assert normal.startswith("Put a space between a number and the word after it. Write '")
+	assert normal.endswith("."), normal
+
+
+def test_the_sentence_for_a_number_against_a_word_shows_what_to_write():
+	assert _refusal("1if boxes else 2") == (
+		"Put a space between a number and the word after it. Write '1 if', not '1if'."
+	)
+	assert _refusal("carrier_price + 0x1for 2") == (
+		"Put a space between a number and the word after it. Write '0x1f or', not '0x1for'."
+	)
+
+
+@pytest.mark.parametrize(
+	"source",
+	[
+		"1e5",
+		"1 if boxes else 2",
+		"(1)if boxes else 2",
+		"boxes*2",
+		"2*boxes",
+		"1.5e3 * boxes",
+		"1_000 + boxes",
+		"weight_kg",
+	],
+	ids=_short,
+)
+def test_a_number_that_is_not_against_a_word_is_still_accepted_without_a_warning(source):
+	with warnings.catch_warnings():
+		warnings.simplefilter("error")
+		assert isinstance(compile_formula(source), ast.Expression)
+
+
+def test_a_formula_the_scan_cannot_read_gets_the_parsers_message():
+	"""Whatever the tokenizer refuses falls through to the usual message about where it is wrong."""
+	for source in (
+		"max(carrier_price",
+		"carrier_price $",
+		"carrier_price \\ 1",
+		"'unclosed",
+		"carrier_price\x00",
+	):
+		message = _refusal(source)
+		assert not message.startswith("Put a space"), (source, message)
 
 
 def test_a_syntax_error_says_what_and_where():

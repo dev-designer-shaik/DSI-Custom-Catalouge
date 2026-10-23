@@ -31,9 +31,12 @@ user. Nothing else escapes `compile_formula`, `evaluate` or `check_formula`.
 """
 
 import ast
+import io
+import itertools
 import math
 import operator
 import sys
+import tokenize
 from decimal import ROUND_HALF_UP, Context, Decimal
 
 VARIABLES = ("carrier_price", "order_value", "weight_kg", "volume_l", "boxes", "item_count")
@@ -291,6 +294,21 @@ def _variable(name, values):
 	return float(value)
 
 
+def _number_against_a_word(text):
+	"""(number, word) of the first number written straight against the word after it, as in `1if boxes else 2`,
+	else None. Python reads that, but warns and may refuse it in a later version, so whether a formula was
+	accepted would depend on the version and on the warning settings. Text the tokenizer cannot read is left
+	to the parser, which says what is wrong with it."""
+	try:
+		tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+	except (tokenize.TokenError, SyntaxError, ValueError):  # a null byte is a ValueError before Python 3.12
+		return None
+	for number, word in itertools.pairwise(tokens):
+		if number.type == tokenize.NUMBER and word.type == tokenize.NAME and number.end == word.start:
+			return number.string, word.string
+	return None
+
+
 # ---------------------------------------------------------------- public API
 def compile_formula(source: str) -> ast.Expression:
 	"""Parse a formula and check it against the whitelist. Returns the checked tree."""
@@ -301,6 +319,12 @@ def compile_formula(source: str) -> ast.Expression:
 		raise FormulaError("The formula is empty. Write a formula such as 'carrier_price * 1.1'.")
 	if len(text) > MAX_LENGTH:
 		raise FormulaError(_TOO_BIG)
+	glued = _number_against_a_word(text)
+	if glued is not None:
+		number, word = glued
+		raise FormulaError(
+			f"Put a space between a number and the word after it. Write '{number} {word}', not '{number}{word}'."
+		)
 	try:
 		tree = ast.parse(text, mode="eval")
 	except SyntaxError as err:
