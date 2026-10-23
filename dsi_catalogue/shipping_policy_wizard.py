@@ -75,6 +75,7 @@ from dsi_catalogue.shipping_policy_data import (
 )
 from dsi_catalogue.shipping_rate_card import (
 	MAX_COUNTRIES,
+	MAX_LISTED,
 	MAX_PROFILES,
 	MAX_ZONES,
 	RateCardError,
@@ -97,10 +98,10 @@ _SAVEPOINT = "shipping_policy_apply"
 # carton is one question to the carrier.
 MAX_PACKED_UNITS = 1000
 
-# `import_rate_card` reads files of up to this many characters (bytes: four times as many, as UTF-8 needs),
-# and tells of at most this many problems and notes, then how many more there are.
+# `import_rate_card` reads files of up to this many characters (bytes: four times as many, as UTF-8 needs).
+# It tells of at most MAX_LISTED problems and notes, then how many more there are: the rate card's own number,
+# so that the sentence in which `validate_card` counts what it left out is never cut.
 MAX_CSV_CHARACTERS = 1_000_000
-MAX_LISTED = 50
 
 # A rate card is plain data nested about eight deep (card, profiles, a profile, zones, a zone, tiers, a tier,
 # a value) and, at the most `validate_card` allows, some 250,000 values. A draft's card may hold more than the
@@ -336,8 +337,11 @@ def import_rate_card(config_csv, not_delivered_csv=None) -> dict:
 	the files, `problems` what stops the card from being applied: the card's own (`validate_card`), then a
 	sentence for each country code that is not a Country of the ERP, in the first zone of the card that lists it
 	and in the not-delivered list. `not_delivered_missing` lists those of the not-delivered countries. Each list
-	shows at most 50 sentences and then "And N more.". The sentences quote the files as they are and are plain
-	text: the page shows them with textContent, never as HTML.
+	shows at most 50 sentences and then "And N more.", with one exception: a card with more than 50 problems of
+	its own has `problems` exactly as `validate_card` gives them, its first 50 and its own last sentence
+	("There are N more problems with the card."), so the countries the ERP lacks are told once the card is
+	fixed. The sentences quote the files as they are and are plain text: the page shows them with
+	textContent, never as HTML.
 
 	The draft is not changed: the page takes the card (and the not-delivered countries, as a Not shipped zone)
 	into its draft, and Apply is the only writer.
@@ -353,11 +357,18 @@ def import_rate_card(config_csv, not_delivered_csv=None) -> dict:
 		return _imported(None, [], [], [], [str(error)])
 	card, codes = read["card"], _country_names()
 	missing = [code for code in read["not_delivered"] if code not in codes]
-	problems = [
-		*validate_card(card),
-		*_unknown_card_countries(card, codes),
-		*(f"Country code {code} in the not-delivered list is not a country in the ERP." for code in missing),
-	]
+	problems = validate_card(card)
+	if len(problems) <= MAX_LISTED:  # else its last sentence says how many more the card has: keep it last
+		problems = _cut(
+			[
+				*problems,
+				*_unknown_card_countries(card, codes),
+				*(
+					f"Country code {code} in the not-delivered list is not a country in the ERP."
+					for code in missing
+				),
+			]
+		)
 	return _imported(card, read["not_delivered"], missing, read["notes"], problems)
 
 
@@ -1143,13 +1154,15 @@ def _cut(sentences) -> list[str]:
 
 
 def _imported(card, not_delivered, missing, notes, problems) -> dict:
+	"""The answer of `import_rate_card`. `problems` comes already listed within MAX_LISTED; the notes are cut
+	here."""
 	return {
 		"card": card,
 		"not_delivered": not_delivered,
 		"not_delivered_missing": missing,
 		"summary": card_summary(card),
 		"notes": _cut(notes),
-		"problems": _cut(problems),
+		"problems": problems,
 	}
 
 

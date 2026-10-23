@@ -81,6 +81,10 @@ MAX_TEXT = 140  # the longest profile name, zone name or delivery method
 MAX_PRICE = 1_000_000
 MAX_WEIGHT_LB = 10_000
 MAX_DAYS = 60
+# `validate_card` lists at most this many problems, and past it one sentence more says how many there are
+# besides: a card can be wrong in over a hundred thousand places, and the list goes into every save, Review
+# and import. The wizard's import lists its sentences within the same number.
+MAX_LISTED = 50
 
 _BOM = chr(0xFEFF)  # a UTF-8 byte order mark, as a character
 # Pounds. Shopify's tiers run 2 to 2.01 and 4 to 4.01, so a hundredth of a pound between two tiers is not a gap.
@@ -745,6 +749,10 @@ def validate_card(card) -> list[str]:
 	longer than the limits (12 profiles, 40 zones in a profile, 60 tiers and 260 countries in a zone, 12
 	patterns, 80 characters in a pattern, 140 in a name or method, 10,000 lb in a weight). Only the first
 	entries of a list over its limit are looked at.
+
+	At most 50 sentences are listed (MAX_LISTED). A card with more problems gets its first 50, in the order
+	they were found, and then one that says how many more there are ("There are 7 more problems with the
+	card.").
 	"""
 	if not isinstance(card, dict):
 		return ["There is no rate card."]
@@ -781,7 +789,15 @@ def validate_card(card) -> list[str]:
 			"No profile matches every item (a pattern of *), so items that match no profile would be left "
 			"out of the price."
 		)
+	if len(problems) > MAX_LISTED:
+		return [*problems[:MAX_LISTED], _more_problems(len(problems) - MAX_LISTED)]
 	return problems
+
+
+def _more_problems(count):
+	if count == 1:
+		return "There is 1 more problem with the card."
+	return f"There are {count} more problems with the card."
 
 
 def card_summary(card) -> dict:

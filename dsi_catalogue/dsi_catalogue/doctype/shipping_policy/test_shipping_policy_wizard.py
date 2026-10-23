@@ -2406,6 +2406,49 @@ class TestImportRateCard(WizardTestCase):
 		self.assertEqual(answer["notes"][:50], every_note[:50])
 		self.assertEqual(answer["notes"][50], f"And {len(every_note) - 50} more.")
 
+	def test_import_keeps_the_cards_own_count_of_the_problems_past_fifty(self):
+		# `validate_card` lists at most 50 problems and then counts the rest in a sentence of its own. The import
+		# keeps that list as it is, the count last: never cut, and with no second count after it (the countries
+		# the ERP lacks are told once the card is fixed). A card of 50 problems or fewer leaves the count to the
+		# import, which counts its own sentences with the card's.
+		def card_with_overpriced_tiers(count):
+			rows = [
+				f"Dangerous Goods,Heavy,1,ZZ - Nowhere,{EXPRESS_ROW},{number},{number}.5,2000000"
+				for number in range(count)
+			]
+			rows.append(
+				f"Rest of the World Allowed Items,Worldwide,1,US - United States,{EXPRESS_ROW},0.01,2,40"
+			)
+			return imported(csv_text(*rows), "ISO-2,Country\r\nZZ,Nowhere\r\n")
+
+		overpriced = (
+			'Tier {0} of zone 1 ("Heavy") of profile 1 ("Dangerous Goods") has a price that has to be a number '
+			"from 0 to 1000000."
+		)
+		answer = card_with_overpriced_tiers(60)
+		self.assertEqual(
+			answer["problems"],
+			[
+				*(overpriced.format(number) for number in range(1, 51)),
+				"There are 10 more problems with the card.",
+			],
+		)
+		self.assertEqual(answer["problems"], validate_card(answer["card"]))
+		self.assertEqual(answer["not_delivered_missing"], ["ZZ"])
+		answer = card_with_overpriced_tiers(50)
+		self.assertEqual(
+			answer["problems"], [*(overpriced.format(number) for number in range(1, 51)), "And 2 more."]
+		)
+		answer = card_with_overpriced_tiers(48)
+		self.assertEqual(
+			answer["problems"],
+			[
+				*(overpriced.format(number) for number in range(1, 49)),
+				"Country code ZZ in zone Heavy (Dangerous Goods) is not a country in the ERP.",
+				"Country code ZZ in the not-delivered list is not a country in the ERP.",
+			],
+		)
+
 	def test_import_carries_what_the_file_says_in_its_sentences_as_it_is(self):
 		# Every wizard return value is plain text, which the page shows with textContent: a name with markup in it
 		# is in the sentence as the file wrote it, not escaped (only what the methods raise goes through Frappe's

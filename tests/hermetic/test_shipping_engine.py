@@ -2744,6 +2744,18 @@ def test_validate_policy_rate_card_problems():
 	assert validate_policy({**example(), "rate_card": {}}), "an empty card is a card with problems"
 
 
+def test_validate_policy_passes_on_the_short_list_of_a_card_wrong_in_many_places():
+	"""`validate_card` lists at most 50 problems and then says how many more there are: that sentence comes after
+	"Rate card: " like the others, and the policy's own problems stand beside them."""
+	codes = [f"bad{number}" for number in range(60)]
+	many = card_with(lambda card: card["profiles"][2]["zones"][0]["countries"].extend(codes))
+	problems = validate_policy({**example(), "rate_card": many})
+	assert problems == [f"Rate card: {problem}" for problem in validate_card(many)]
+	assert len(problems) == 51 and problems[-1] == "Rate card: There are 10 more problems with the card."
+	both = validate_policy({**example(), "rate_card": many, "not_covered": "maybe"})
+	assert len(both) == 52 and both[-51:] == problems
+
+
 def test_validate_policy_never_raises_on_a_hostile_rate_card():
 	for card in (
 		None,

@@ -2410,6 +2410,64 @@ def test_a_long_name_is_read_for_plain_text_up_to_its_limit_and_one_character_mo
 	assert validate_card(card) == [too_long]
 
 
+# ---------------------------------------------------------------- a card wrong in many places
+def _bad_codes(count):
+	"""The sample card with `count` country codes that cannot be used, and the sentence each one gets."""
+	card = sample_card()
+	codes = [f"bad{number}" for number in range(count)]
+	zone_of(card, "Dangerous Goods", "USA")["countries"] += codes
+	return card, [
+		f'Zone 1 ("USA") of profile 3 ("Dangerous Goods") lists "{code}", which is not a country code (two '
+		"capital letters, such as US)."
+		for code in codes
+	]
+
+
+@pytest.mark.parametrize(
+	("count", "last"),
+	[
+		(1, None),
+		(49, None),
+		(50, None),
+		(51, "There is 1 more problem with the card."),
+		(52, "There are 2 more problems with the card."),
+		(259, "There are 209 more problems with the card."),
+	],
+)
+def test_validate_card_lists_at_most_fifty_problems_then_says_how_many_more(count, last):
+	"""The list goes into every save, preview and import, so it is kept short: 50 or fewer problems are listed
+	as they are, and past 50 the first 50 are listed and one more sentence says how many there are besides."""
+	card, sentences = _bad_codes(count)
+	if last is None:
+		assert validate_card(card) == sentences
+	else:
+		assert validate_card(card) == [*sentences[:50], last]
+
+
+def test_a_card_wrong_everywhere_at_the_limits_gives_fifty_sentences_and_the_count_of_the_rest():
+	"""12 profiles of 40 zones, each zone with 260 country codes and 60 tiers that cannot be used: 155,068
+	problems, which listed in full were 13 MB of text. The first 50 are listed in the order they are found,
+	then the count of the others."""
+	zone = {"name": "", "countries": ["bad"] * 260, "method": "", "days": 61, "tiers": ["tier"] * 60}
+	profile = {"name": "", "match": [], "zones": [zone] * 40}
+	card = {"version": 2, "currency": "usd", "unit": "kg", "profiles": [profile] * 12}
+	problems = validate_card(card)
+	bad_code = (
+		'Zone 1 of profile 1 lists "bad", which is not a country code (two capital letters, such as US).'
+	)
+	assert problems == [
+		"The rate card's version has to be 1.",
+		'The rate card\'s currency has to be "USD".',
+		'The rate card\'s unit has to be "lb".',
+		"Profile 1 has no name.",
+		"Profile 1 has no product code patterns, so it will never be used.",
+		"Zone 1 of profile 1 has no name.",
+		*[bad_code] * 44,
+		# 3 + 12 x (2 + 40 x (1 + 260 + 1 + 1 + 60)) + 1 = 155,068 in all, 50 of them above
+		"There are 155018 more problems with the card.",
+	]
+
+
 # ---------------------------------------------------------------- the real export, on this machine only
 def real_text(name):
 	"""The text of one file of the real export, or a skip when it cannot be found. The folder is looked up here,
