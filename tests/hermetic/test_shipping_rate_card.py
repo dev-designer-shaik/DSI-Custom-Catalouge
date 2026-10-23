@@ -10,6 +10,10 @@ fixtures/shopify_countries_not_delivered_sample.csv. Once parsed, the sample car
 	2  Dangerous Goods                F-*                 USA, Europe, Tier 2, Bahrain (flat 0), GCC (flat 35)
 	3  Rest of the World Allowed ...  *                   Worldwide (3 tiers), GCC (flat 0)
 
+In 9 rows of the sample (file lines 7-10, 13-15 and 20-21) the Country count cell was recounted to the cut
+list, so it says 4 or 5 where the real export says Europe 43, Tier 2 28, Worldwide 226 and Petite
+International 72. Every other count cell is the real one.
+
 One local-only test reads the real export from ~/shipping-interim-rates (or $RATES_DIR), which is outside this
 public repository, and skips when the files are not there. The module under test is pure Python; nothing here
 needs Frappe.
