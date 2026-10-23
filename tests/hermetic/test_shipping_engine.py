@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from dsi_catalogue import shipping_engine
+from dsi_catalogue import shipping_engine, shipping_rate_card
 from dsi_catalogue.shipping_engine import (
 	DEFAULT_MESSAGES,
 	FALLBACK_SERVICE_ID,
@@ -2599,6 +2599,18 @@ def test_an_unknown_price_source_prices_nothing_and_a_missing_one_means_the_carr
 	assert resolve(absent, make_order("AE")) == baseline
 	assert (baseline["price_source"], amount_of(baseline)) == ("carrier", 39.0)
 	assert resolve({}, make_order("AE"))["price_source"] == "carrier"
+
+
+def test_the_receipt_and_the_card_write_a_weight_with_one_function():
+	"""The engine's receipt lines and the card's own sentences use the card module's `lb_text`, so they cannot
+	drift apart: there is no second copy in the engine."""
+	assert shipping_engine.lb_text is shipping_rate_card.lb_text
+	assert not hasattr(shipping_engine, "_lb")
+	order = card_order("US", card_item(DANGEROUS, 1.5))  # 1.5 kg is 3.307 lb
+	sentence = shipping_rate_card.price_card(sample_card(), order)["detail"]
+	receipt = only_offer(resolve(card_policy(), order))["trace"][0]["text"]
+	assert "3.307 lb" in sentence, sentence
+	assert "3.307 lb ->" in receipt, receipt
 
 
 def test_every_result_names_the_price_source():

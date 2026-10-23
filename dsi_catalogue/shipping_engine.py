@@ -57,7 +57,7 @@ import math
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Context, Decimal
 
 from dsi_catalogue.shipping_formula import FormulaError, check_formula, evaluate
-from dsi_catalogue.shipping_rate_card import price_card, validate_card
+from dsi_catalogue.shipping_rate_card import lb_text, price_card, validate_card
 
 # The Select strings the doctypes store, mapped to the codes used here. The order is the order of the
 # Select options, and the first string of each is that field's default.
@@ -451,15 +451,10 @@ def _source(policy):
 	return source if source in _SOURCES else None
 
 
-def _lb(pounds):
-	"""A weight in pounds as a receipt prints it: 1.984, 2."""
-	return f"{pounds:.10g}"
-
-
 def _card_line(line):
 	"""One profile's share of a card price, as a line of the receipt."""
 	where = ", ".join(part for part in (line["profile"] or "A profile with no name", line["zone"]) if part)
-	text = f"{where}: {_lb(line['weight_lb'])} lb -> ${_fmt(line['price'])}"
+	text = f"{where}: {lb_text(line['weight_lb'])} lb -> ${_fmt(line['price'])}"
 	if line["defaulted_weight"]:
 		text += " (weight estimated)"
 	return _step("rate_card", text, line["price"])

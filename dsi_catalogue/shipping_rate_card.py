@@ -148,8 +148,9 @@ def _quote(text, limit=60):
 	return '"' + (text if len(text) <= limit else text[: limit - 3] + "...") + '"'
 
 
-def _lb(pounds):
-	"""A weight or a tier edge as a sentence writes it: 0.7, 2, 18.01."""
+def lb_text(pounds):
+	"""A weight or a tier edge in pounds as a sentence writes it: 0.7, 2, 18.01, 1.984. The card's own sentences
+	and the engine's receipt lines both use this one, so they cannot drift apart."""
 	return f"{pounds:.10g}"
 
 
@@ -393,13 +394,13 @@ def _zone_tiers(rows, where, notes):
 		tiers.sort(key=lambda tier: (tier["from"], tier["to"]))
 		if Decimal(str(tiers[0]["from"])) > _GAP:
 			notes.append(
-				f"{where}: the first tier starts at {_lb(tiers[0]['from'])} lb. Lighter weights pay the first tier."
+				f"{where}: the first tier starts at {lb_text(tiers[0]['from'])} lb. Lighter weights pay the first tier."
 			)
 		for index in range(1, len(tiers)):
 			before, after = tiers[index - 1], tiers[index]
 			if Decimal(str(after["from"])) - Decimal(str(before["to"])) > _GAP:  # exact: 6.011 - 6 is 0.011
 				notes.append(
-					f"{where}: there is a gap between {_lb(before['to'])} lb and {_lb(after['from'])} lb. "
+					f"{where}: there is a gap between {lb_text(before['to'])} lb and {lb_text(after['from'])} lb. "
 					"Weights in the gap pay the next tier up."
 				)
 		return tiers
@@ -609,7 +610,7 @@ def _check_tier(where, tier, problems):
 	if low > high:
 		problems.append(
 			f"{_cap(where)} has its weights the wrong way round: "
-			f"it starts at {_lb(low)} lb but ends at {_lb(high)} lb."
+			f"it starts at {lb_text(low)} lb but ends at {lb_text(high)} lb."
 		)
 		return None
 	return low, high
@@ -637,7 +638,7 @@ def _check_tiers(zone_subject, tiers, problems):
 		if low <= before_to:
 			problems.append(
 				f"{_cap(f'tier {position} of {zone_subject}')} overlaps the tier before it: it starts at "
-				f"{_lb(low)} lb, but tier {before} ends at {_lb(before_to)} lb."
+				f"{lb_text(low)} lb, but tier {before} ends at {lb_text(before_to)} lb."
 			)
 
 
@@ -900,14 +901,14 @@ def _tier_sentence(who, country, zone_name, pounds, tiers, chosen, guessed, coun
 	if low is None:
 		sentence = f"{who} to {country}: {where} has one flat price, ${_cents(price):.2f}."
 	else:
-		band = f"tier {position} ({_lb(low)} to {_lb(high)} lb)"
+		band = f"tier {position} ({lb_text(low)} to {lb_text(high)} lb)"
 		if pounds >= low:
 			how = f"is in {band} of {where}"
 		elif chosen is tiers[0]:
-			how = f"is below the first tier ({_lb(low)} to {_lb(high)} lb) of {where}, so it pays the first tier"
+			how = f"is below the first tier ({lb_text(low)} to {lb_text(high)} lb) of {where}, so it pays the first tier"
 		else:
 			how = f"is in the gap before {band} of {where}, so it pays tier {position}"
-		sentence = f"{who} to {country}: {_lb(pounds)} lb {how}, ${_cents(price):.2f}."
+		sentence = f"{who} to {country}: {lb_text(pounds)} lb {how}, ${_cents(price):.2f}."
 	if guessed:
 		sentence += (
 			f" The weight is an estimate: {guessed} of {count} items have no weight on file "
@@ -953,8 +954,8 @@ def _price_profile(profile, entries, country):
 			line,
 			zone,
 			"too_heavy",
-			f'{who} to {country}: {_lb(pounds)} lb is heavier than the highest tier of zone "{line["zone"]}" '
-			f"({_lb(tiers[-1][2])} lb), so the order cannot be priced.",
+			f'{who} to {country}: {lb_text(pounds)} lb is heavier than the highest tier of zone "{line["zone"]}" '
+			f"({lb_text(tiers[-1][2])} lb), so the order cannot be priced.",
 		)
 	line["price"], line["tier"] = float(_cents(chosen[3])) + 0.0, chosen[0]
 	return (

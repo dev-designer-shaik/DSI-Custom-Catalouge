@@ -36,6 +36,7 @@ from dsi_catalogue.shipping_rate_card import (
 	RateCardError,
 	card_summary,
 	classify_item,
+	lb_text,
 	normalize_index_key,
 	parse_shopify_export,
 	price_card,
@@ -254,6 +255,26 @@ def test_the_module_is_pure_python_that_imports_only_what_it_needs():
 		elif isinstance(node, ast.ImportFrom):
 			imported.add((node.module or "").split(".")[0])
 	assert imported == {"csv", "decimal", "fnmatch", "io", "math"}
+
+
+@pytest.mark.parametrize(
+	("pounds", "text"),
+	[
+		(0.7, "0.7"),
+		(2.0, "2"),
+		(2.01, "2.01"),
+		(18.01, "18.01"),
+		(1.984, "1.984"),
+		(0.0, "0"),
+		(10000.0, "10000"),
+		(0.1 + 0.2, "0.3"),  # not 0.30000000000000004
+		(3.327, "3.327"),
+		(1e19, "1e+19"),
+	],
+)
+def test_lb_text_writes_a_weight_the_way_a_sentence_does(pounds, text):
+	assert lb_text(pounds) == text
+	assert not hasattr(shipping_rate_card, "_lb"), "one public function, not a private copy"
 
 
 # ---------------------------------------------------------------- reading the export
