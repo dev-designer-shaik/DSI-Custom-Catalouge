@@ -36,8 +36,11 @@ from dsi_catalogue.shipping_policy_data import (
 	rows_from_policy,
 	snapshot_version,
 )
+from dsi_catalogue.shipping_rate_card import parse_shopify_export
 
 FIXTURE = Path(__file__).parent / "fixtures" / "shipping_policy_example.json"
+SAMPLE_CARD_CSV = Path(__file__).parent / "fixtures" / "shopify_shipping_config_sample.csv"
+EN_DASH = chr(0x2013)  # in the names of some zones of the sample card, as the export has it
 
 # The ERP's Country list for the example: the Country name for each ISO code, and the inverse.
 COUNTRY_NAMES = {
@@ -52,7 +55,16 @@ COUNTRY_NAMES = {
 }
 COUNTRY_CODES = {name: code for code, name in COUNTRY_NAMES.items()}
 
-POLICY_KEYS = {"active", "not_covered", "default_fallback", "zones", "item_sets", "rules"}
+POLICY_KEYS = {
+	"active",
+	"price_source",
+	"rate_card",
+	"not_covered",
+	"default_fallback",
+	"zones",
+	"item_sets",
+	"rules",
+}
 ZONE_KEYS = {
 	"name",
 	"enabled",
@@ -81,7 +93,15 @@ RULE_KEYS = {
 }
 LIMIT_KEYS = [key for key in sorted(RULE_KEYS) if key.startswith(("min_", "max_"))]
 
-POLICY_ROW_KEYS = {"active", "not_covered", "default_fallback_method", "default_fallback_amount", "rules"}
+POLICY_ROW_KEYS = {
+	"active",
+	"price_source",
+	"rate_card",
+	"not_covered",
+	"default_fallback_method",
+	"default_fallback_amount",
+	"rules",
+}
 ZONE_ROW_KEYS = {
 	"zone_name",
 	"enabled",
@@ -98,13 +118,14 @@ RULE_ROW_KEYS = RULE_KEYS - {"name"}  # a rule row carries its `name` only when 
 
 SUMMARY_KEYS = {"active", "zones"}
 SUMMARY_ZONE_KEYS = {"name", "countries", "customer_line", "delivers"}
-RESPONSE_KEYS = {"policy_active", "zone", "offered", "reason", "message", "offers"}
-OFFER_KEYS = {"service_id", "name", "amount", "source", "reason"}
+RESPONSE_KEYS = {"policy_active", "price_source", "zone", "offered", "reason", "message", "offers"}
+OFFER_KEYS = {"service_id", "name", "amount", "source", "reason", "estimated_days"}
 
 NOTHING_CHANGED = {
 	"zones": {"added": [], "removed": [], "changed": []},
 	"item_sets": {"added": [], "removed": [], "changed": []},
 	"rules": {"added": [], "removed": [], "changed": [], "order_changed": False},
+	"rate_card": {"added": [], "removed": [], "changed": []},
 	"settings": [],
 }
 
@@ -116,6 +137,57 @@ OVER_THE_CAP = math.nextafter(1e9, math.inf)  # the first float above 1e9
 def example():
 	"""A fresh copy of the example policy, so a test can change it freely."""
 	return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+def sample_card():
+	"""The trimmed Shopify export of the rate card tests, parsed afresh so a test can change it. Its profiles are,
+	in this order, Dangerous Goods Petite, Refill Service, Dangerous Goods and Rest of the World Allowed Items."""
+	return parse_shopify_export(SAMPLE_CARD_CSV.read_bytes().decode("utf-8"))["card"]
+
+
+def card_policy(**changes):
+	"""The example policy with the rate card as its price source, holding the sample card."""
+	return {**example(), "price_source": "rate_card", "rate_card": sample_card(), **changes}
+
+
+def small_card():
+	"""A card of two profiles, small enough to be broken at every place."""
+	return {
+		"version": 1,
+		"currency": "USD",
+		"unit": "lb",
+		"profiles": [
+			{
+				"name": "Fragrances",
+				"match": ["F-*"],
+				"zones": [
+					{
+						"name": "World",
+						"countries": ["US", "BH"],
+						"method": "Express (4-7 days)",
+						"days": 7,
+						"tiers": [
+							{"from": 0.0, "to": 2.0, "price": 60.0},
+							{"from": 2.01, "to": 5.0, "price": 80.0},
+						],
+					}
+				],
+			},
+			{
+				"name": "Everything else",
+				"match": ["*"],
+				"zones": [
+					{
+						"name": "Flat",
+						"countries": ["US"],
+						"method": "Standard",
+						"days": None,
+						"tiers": [{"from": None, "to": None, "price": 25.0}],
+					}
+				],
+			},
+		],
+	}
 
 
 def canonical(value):
@@ -881,6 +953,37 @@ def busy_policy():
 	"""A policy with a value of its own, different from every default, in every field."""
 	return {
 		"active": False,
+		"price_source": "rate_card",
+		"rate_card": {
+			"version": 1,
+			"currency": "USD",
+			"unit": "lb",
+			"profiles": [
+				{
+					"name": "Profil d'\u00e9t\u00e9",
+					"match": ["A-*"],
+					"zones": [
+						{
+							"name": "Zone A",
+							"countries": ["AE", "QA"],
+							"method": "Express (4-7 days)",
+							"days": 7,
+							"tiers": [
+								{"from": 0.5, "to": 2.5, "price": 12.25},
+								{"from": 2.51, "to": 5.0, "price": 40.0},
+							],
+						},
+						{
+							"name": "Flat",
+							"countries": ["BH"],
+							"method": "Free",
+							"days": None,
+							"tiers": [{"from": None, "to": None, "price": 0.0}],
+						},
+					],
+				}
+			],
+		},
 		"not_covered": "no_delivery",
 		"default_fallback": {"method": "fixed", "amount": 12.5},
 		"zones": [
@@ -954,6 +1057,8 @@ def test_every_field_survives_the_round_trip_with_a_value_of_its_own():
 	assert back == policy
 	assert canonical(back) == canonical(policy)
 	# and in the rows themselves
+	assert rows["policy"]["price_source"] == "Rate card"
+	assert json.loads(rows["policy"]["rate_card"]) == policy["rate_card"]
 	assert rows["policy"]["default_fallback_amount"] == 12.5
 	assert rows["policy"]["default_fallback_method"] == "Charge a fixed amount"
 	assert [row["fallback_amount"] for row in rows["zones"]] == [1.25, 2.5]
@@ -1059,6 +1164,8 @@ def test_rows_use_the_doctype_field_names():
 	}
 	assert {key: rows["policy"][key] for key in POLICY_ROW_KEYS - {"rules"}} == {
 		"active": 1,
+		"price_source": "Carrier",
+		"rate_card": "",
 		"not_covered": "Pass the carrier price through",
 		"default_fallback_method": "Don't offer delivery",
 		"default_fallback_amount": 0.0,
@@ -1086,6 +1193,8 @@ def policy_with_code(kind, code):
 		policy["zones"][0]["fallback"]["method"] = code
 	elif kind == "default_fallback":
 		policy["default_fallback"]["method"] = code
+	elif kind == "price_source":
+		policy["price_source"] = code
 	else:
 		policy["not_covered"] = code
 	return policy
@@ -1097,6 +1206,7 @@ def label_in_rows(kind, rows):
 		"zone_fallback": rows["zones"][0]["fallback_method"],
 		"default_fallback": rows["policy"]["default_fallback_method"],
 		"not_covered": rows["policy"]["not_covered"],
+		"price_source": rows["policy"]["price_source"],
 	}[kind]
 
 
@@ -1120,13 +1230,13 @@ def test_an_unknown_select_label_passes_through_unchanged_and_validate_policy_re
 		back = policy_from_rows(rows["policy"], rows["zones"], rows["item_sets"], COUNTRY_CODES)
 		assert back == policy, "and read back as it is"
 		assert validate_policy(back), f"the engine's checker reports an unknown {kind}"
-	# a label the doctype never offered is read as its own code, in all four fields
+	# a label the doctype never offered is read as its own code, in every field
 	rows = rows_from_policy(example(), COUNTRY_NAMES)
 	for kind in LABELS:
 		put_label_in_rows(kind, rows, "Surprise")
 	read = policy_from_rows(rows["policy"], rows["zones"], rows["item_sets"], COUNTRY_CODES)
-	assert [code_in_policy(kind, read) for kind in LABELS] == ["Surprise"] * 4
-	assert len(validate_policy(read)) >= 4
+	assert [code_in_policy(kind, read) for kind in LABELS] == ["Surprise"] * len(LABELS) == ["Surprise"] * 5
+	assert len(validate_policy(read)) >= 5
 
 
 def put_label_in_rows(kind, rows, label):
@@ -1137,6 +1247,8 @@ def put_label_in_rows(kind, rows, label):
 		rows["zones"][0]["fallback_method"] = label
 	elif kind == "default_fallback":
 		rows["policy"]["default_fallback_method"] = label
+	elif kind == "price_source":
+		rows["policy"]["price_source"] = label
 	else:
 		rows["policy"]["not_covered"] = label
 
@@ -1147,6 +1259,7 @@ def code_in_policy(kind, policy):
 		"zone_fallback": policy["zones"][0]["fallback"]["method"],
 		"default_fallback": policy["default_fallback"]["method"],
 		"not_covered": policy["not_covered"],
+		"price_source": policy["price_source"],
 	}[kind]
 
 
@@ -1238,6 +1351,8 @@ def test_rows_from_the_database_are_made_into_clean_values():
 	policy = policy_from_rows(policy_row, zone_rows, set_rows, {"Qatar": "qa", "Oman": "om "})
 	assert policy == {
 		"active": True,
+		"price_source": "",  # a row that says nothing of it
+		"rate_card": None,
 		"not_covered": "no_delivery",
 		"default_fallback": {"method": "fixed", "amount": 0.0},
 		"zones": [
@@ -1283,6 +1398,8 @@ def test_rows_from_the_database_are_made_into_clean_values():
 def test_a_row_with_no_values_reads_as_empty_not_as_an_error():
 	assert policy_from_rows({}, [], [], {}) == {
 		"active": False,
+		"price_source": "",
+		"rate_card": None,
 		"not_covered": "",
 		"default_fallback": {"method": "", "amount": 0.0},
 		"zones": [],
@@ -1293,6 +1410,8 @@ def test_a_row_with_no_values_reads_as_empty_not_as_an_error():
 	assert rows_from_policy({}, {}) == {
 		"policy": {
 			"active": 0,
+			"price_source": "",
+			"rate_card": "",
 			"not_covered": "",
 			"default_fallback_method": "",
 			"default_fallback_amount": 0.0,
@@ -1564,9 +1683,20 @@ def make_order(country="AE", *, quotes=None, served=True, boxes=None):
 	}
 
 
+def card_order(country="US", weight_kg=0.9, key="{F-CR-CSE-W-40}"):
+	"""An order as a call in rate card mode sends it: items with their product code and unit weight, and no
+	cartons and no carrier quotes."""
+	items = [{"item_code": "PERF-1", "qty": 1, "groups": [], "index_key": key, "weight_kg": weight_kg}]
+	return {**make_order(country, boxes=[], quotes=[]), "items": items}
+
+
 def results():
 	"""Real results of the engine on the example policy, each with its trace and rule position."""
 	policy = example()
+	fallback = {
+		**card_policy(price_source="carrier"),
+		"default_fallback": {"method": "rate_card", "amount": 0.0},
+	}
 	broken = example()
 	broken["rules"][3]["formula"] = "carrier_price / (weight_kg - 1)"
 	broken["zones"][2]["fallback"] = {"method": "fixed", "amount": 12.0}
@@ -1583,6 +1713,11 @@ def results():
 		"formula error with a fallback": resolve(broken, make_order("FR")),
 		"formula error without one": resolve(example() | {"rules": broken["rules"]}, make_order("FR")),
 		"policy off": resolve(off, make_order("AE")),
+		"rate card price": resolve(card_policy(), card_order("US")),
+		"rate card price for nothing": resolve(card_policy(), card_order("BH")),
+		"rate card too heavy": resolve(card_policy(), card_order("US", weight_kg=10.0)),
+		"rate card not shipped": resolve(card_policy(), card_order("RU")),
+		"rate card fallback": resolve(fallback, card_order("US")),
 	}
 
 
@@ -1628,12 +1763,20 @@ def test_guest_response_for_a_priced_order():
 	response = response_from(resolve(example(), make_order("AE")), Translator())
 	assert response == {
 		"policy_active": True,
+		"price_source": "carrier",
 		"zone": "GCC",
 		"offered": True,
 		"reason": None,
 		"message": "",
 		"offers": [
-			{"service_id": "PDX", "name": "Priority", "amount": 39.0, "source": "rule", "reason": None}
+			{
+				"service_id": "PDX",
+				"name": "Priority",
+				"amount": 39.0,
+				"source": "rule",
+				"reason": None,
+				"estimated_days": None,
+			}
 		],
 	}
 
@@ -1642,6 +1785,7 @@ def test_guest_response_for_a_refusal_carries_the_translated_message_and_the_rea
 	response = response_from(resolve(example(), make_order("RU")), Translator())
 	assert response == {
 		"policy_active": True,
+		"price_source": "carrier",
 		"zone": "Not shipped",
 		"offered": False,
 		"reason": "not_shipped",
@@ -1659,6 +1803,7 @@ def test_guest_response_for_the_fallback_offer():
 			"amount": 35.0,
 			"source": "fallback",
 			"reason": "fallback_offer",
+			"estimated_days": None,
 		}
 	]
 	assert (response["offered"], response["reason"], response["message"]) == (True, "fallback_offer", "")
@@ -1669,12 +1814,20 @@ def test_guest_response_with_the_policy_off_echoes_the_quotes():
 	response = response_from(resolve(off, make_order("AE")), Translator())
 	assert response == {
 		"policy_active": False,
+		"price_source": "carrier",
 		"zone": None,
 		"offered": True,
 		"reason": None,
 		"message": "",
 		"offers": [
-			{"service_id": "PDX", "name": "Priority", "amount": 38.2, "source": "carrier", "reason": None}
+			{
+				"service_id": "PDX",
+				"name": "Priority",
+				"amount": 38.2,
+				"source": "carrier",
+				"reason": None,
+				"estimated_days": None,
+			}
 		],
 	}
 
@@ -1790,6 +1943,7 @@ def test_diff_reports_added_removed_changed_zones_and_rule_order():
 			],
 			"order_changed": True,
 		},
+		"rate_card": {"added": [], "removed": [], "changed": []},
 		"settings": ["active", "not_covered"],
 	}
 
@@ -2095,3 +2249,447 @@ def test_odd_country_lists_and_results_never_raise(junk):
 			assert all(set(offer) == OFFER_KEYS for offer in response["offers"])
 	for odd in (junk, [junk], {"offers": junk}, {"offers": [junk]}, {"message": junk}):
 		assert set(response_from(odd, Translator())) == RESPONSE_KEYS
+
+
+# ---------------------------------------------------------------- the rate card
+def test_rate_card_round_trips_through_rows_and_the_fixture_still_matches():
+	# the example file says what a policy with no card holds
+	policy = example()
+	assert (policy["price_source"], policy["rate_card"]) == ("carrier", None)
+	rows = rows_from_policy(policy, COUNTRY_NAMES)
+	assert (rows["policy"]["price_source"], rows["policy"]["rate_card"]) == ("Carrier", "")
+	back = policy_from_rows(rows["policy"], rows["zones"], rows["item_sets"], COUNTRY_CODES)
+	assert back == policy
+	assert canonical(back) == canonical(policy), "the same types too: no card stays None"
+
+	# a policy with a card: the label of the source, and the card as JSON text a person can read in the form
+	policy = card_policy()
+	rows = rows_from_policy(policy, COUNTRY_NAMES)
+	assert rows["policy"]["price_source"] == "Rate card"
+	text = rows["policy"]["rate_card"]
+	assert text == json.dumps(policy["rate_card"], ensure_ascii=False, sort_keys=True, indent=1)
+	assert json.loads(text) == policy["rate_card"]
+	assert text.startswith("{\n ") and EN_DASH in text and "\\u2013" not in text, "indented, and not escaped"
+	back = policy_from_rows(rows["policy"], rows["zones"], rows["item_sets"], COUNTRY_CODES)
+	assert back == policy
+	assert canonical(back) == canonical(policy), (
+		"prices stay floats, days stay whole numbers, no days stay None"
+	)
+	# the order of the card's keys does not change what is written
+	reordered = {**policy, "rate_card": reversed_keys(policy["rate_card"])}
+	assert rows_from_policy(reordered, COUNTRY_NAMES)["policy"]["rate_card"] == text
+	# a row that already holds the card as a dict is read as it is, and not held on to
+	row = {**rows["policy"], "rate_card": copy.deepcopy(policy["rate_card"])}
+	read = policy_from_rows(row, rows["zones"], rows["item_sets"], COUNTRY_CODES)
+	assert read["rate_card"] == policy["rate_card"] and read["rate_card"] is not row["rate_card"]
+	# neither direction changes what it is given
+	snapshot = copy.deepcopy(policy)
+	rows_from_policy(policy, COUNTRY_NAMES)
+	assert policy == snapshot
+	rows_snapshot = copy.deepcopy(rows)
+	policy_from_rows(rows["policy"], rows["zones"], rows["item_sets"], COUNTRY_CODES)
+	assert rows == rows_snapshot
+
+	# a policy that has neither field writes empty ones; it does not raise
+	bare = example()
+	del bare["price_source"], bare["rate_card"]
+	written = rows_from_policy(bare, COUNTRY_NAMES)["policy"]
+	assert (written["price_source"], written["rate_card"]) == ("", "")
+	# only a dict is a card: anything else writes nothing
+	for junk in (None, [], ["profiles"], "text", "{}", 5, 1.5, True):
+		assert rows_from_policy({"rate_card": junk}, {})["policy"]["rate_card"] == "", junk
+	# a card that holds what JSON cannot is written as well as it can be, and never makes the call raise
+	odd = rows_from_policy({"rate_card": {"note": {1, 2}}}, {})["policy"]["rate_card"]
+	assert json.loads(odd) == {"note": "{1, 2}"}
+	loop = {}
+	loop["me"] = loop
+	deep = []
+	for _ in range(100_000):  # built, not parsed: JSON this deep cannot be read, but a caller can hold it
+		deep = [deep]
+	for card in (loop, {1: "a", "b": 2}, {"deep": deep}):
+		assert rows_from_policy({"rate_card": card}, {})["policy"]["rate_card"] == ""
+
+
+def test_broken_card_text_reads_as_no_card():
+	for text in (
+		"",
+		" \n\t",
+		"not json",
+		"{",
+		"[",
+		'{"a": }',
+		'{"a": 1',
+		"{'a': 1}",
+		"[1, 2]",
+		"[]",
+		"5",
+		"1.5",
+		"null",
+		"true",
+		'"x"',
+		"1" * 5000,  # an integer with more digits than Python will read
+		"[" * 100_000,  # nested deeper than Python will read
+		"{" * 100_000,
+		"\ud800",
+	):
+		policy = policy_from_rows({"active": 1, "rate_card": text}, [], [], {})
+		assert policy["rate_card"] is None, text[:20]
+		assert policy["active"] is True, "the rest of the row is read as usual"
+		assert set(policy) == POLICY_KEYS
+	# anything that is not text and not a dict is no card either, and a missing field is none
+	for value in (None, 5, 1.5, True, [], ["x"], b'{"a": 1}', Decimal("1"), object()):
+		assert policy_from_rows({"rate_card": value}, [], [], {})["rate_card"] is None, value
+	assert policy_from_rows({}, [], [], {})["rate_card"] is None
+	# a JSON object is a card, however little is in it; the card is the object as it was written
+	for text, expected in (
+		("{}", {}),
+		(' {"profiles": []}\n', {"profiles": []}),
+		('{"version": 1, "x": [1, 2.5, null, true, "a"]}', {"version": 1, "x": [1, 2.5, None, True, "a"]}),
+	):
+		assert policy_from_rows({"rate_card": text}, [], [], {})["rate_card"] == expected
+	nan = policy_from_rows({"rate_card": '{"a": NaN}'}, [], [], {})["rate_card"]
+	assert math.isnan(nan["a"]), "the checker will say what is wrong with it"
+	# a dict that is too deep to copy is no card
+	deep = []
+	for _ in range(5000):
+		deep = [deep]
+	assert policy_from_rows({"rate_card": {"deep": deep}}, [], [], {})["rate_card"] is None
+	# the source reads as a Select does: the label becomes the code, and a label of nobody's passes through
+	for label, code in (
+		("Carrier", "carrier"),
+		("Rate card", "rate_card"),
+		("Surprise", "Surprise"),
+		(None, ""),
+		("", ""),
+	):
+		assert policy_from_rows({"price_source": label}, [], [], {})["price_source"] == code
+
+
+def profile_names(card):
+	return [profile["name"] for profile in card["profiles"]]
+
+
+def test_diff_reports_rate_card_profile_changes_and_price_source():
+	current = card_policy(price_source="carrier")
+	assert profile_names(current["rate_card"]) == [
+		"Dangerous Goods Petite",
+		"Refill Service",
+		"Dangerous Goods",
+		"Rest of the World Allowed Items",
+	]
+	assert diff_policy(current, copy.deepcopy(current)) == NOTHING_CHANGED
+
+	# one profile removed, one changed (a price), one added, and the price source switched
+	draft = copy.deepcopy(current)
+	draft["price_source"] = "rate_card"
+	profiles = draft["rate_card"]["profiles"]
+	del profiles[1]  # Refill Service
+	profiles[1]["zones"][0]["tiers"][0]["price"] = 61.0  # Dangerous Goods
+	profiles.append({"name": "Gift cards", "match": ["G-*"], "zones": []})
+	diff = diff_policy(current, draft)
+	assert diff["rate_card"] == {
+		"added": ["Gift cards"],
+		"removed": ["Refill Service"],
+		"changed": ["Dangerous Goods"],
+	}
+	assert diff["settings"] == ["price_source", "rate_card"]
+	# the rest of the policy is untouched, and the card changes nothing there
+	assert {key: diff[key] for key in ("zones", "item_sets", "rules")} == {
+		key: NOTHING_CHANGED[key] for key in ("zones", "item_sets", "rules")
+	}
+	assert set(diff) == set(NOTHING_CHANGED) and set(diff["rate_card"]) == {"added", "removed", "changed"}
+
+	# only the source differs
+	switched = {**current, "price_source": "rate_card"}
+	assert diff_policy(current, switched) == {**NOTHING_CHANGED, "settings": ["price_source"]}
+	# only the card differs: the source is not named
+	assert diff_policy(current, draft | {"price_source": "carrier"})["settings"] == ["rate_card"]
+	# the names are sorted, each once, and a rename is one removed and one added
+	renamed = copy.deepcopy(current)
+	renamed["rate_card"]["profiles"][0]["name"] = "Small bottles"
+	renamed["rate_card"]["profiles"][1]["name"] = "Another"
+	assert diff_policy(current, renamed)["rate_card"] == {
+		"added": ["Another", "Small bottles"],
+		"removed": ["Dangerous Goods Petite", "Refill Service"],
+		"changed": [],
+	}
+	# a profile is changed when anything about it differs: a pattern, a country, the method, the days, a tier
+	for mutate in (
+		lambda p: p["match"].append("X-*"),
+		lambda p: p["zones"][0]["countries"].append("EG"),
+		lambda p: p["zones"][0].update(method="Other (1-2 days)"),
+		lambda p: p["zones"][0].update(days=9),
+		lambda p: p["zones"][0]["tiers"].pop(),
+		lambda p: p["zones"].reverse(),
+	):
+		changed = copy.deepcopy(current)
+		mutate(changed["rate_card"]["profiles"][2])
+		assert diff_policy(current, changed)["rate_card"] == {
+			"added": [],
+			"removed": [],
+			"changed": ["Dangerous Goods"],
+		}
+	# the order of the profiles decides which one takes an item, so a card with its profiles in another order
+	# is another card, even though no profile changed
+	shuffled = copy.deepcopy(current)
+	shuffled["rate_card"]["profiles"].reverse()
+	found = diff_policy(current, shuffled)
+	assert found["rate_card"] == NOTHING_CHANGED["rate_card"]
+	assert found["settings"] == ["rate_card"]
+
+	# a card appearing, and disappearing
+	none = {**current, "rate_card": None}
+	added = diff_policy(none, current)
+	assert added["rate_card"] == {
+		"added": [
+			"Dangerous Goods",
+			"Dangerous Goods Petite",
+			"Refill Service",
+			"Rest of the World Allowed Items",
+		],
+		"removed": [],
+		"changed": [],
+	}
+	assert added["settings"] == ["rate_card"]
+	removed = diff_policy(current, none)
+	assert removed["rate_card"] == {"added": [], "removed": added["rate_card"]["added"], "changed": []}
+	assert removed["settings"] == ["rate_card"]
+	# a policy that does not say is a policy with the carrier and no card
+	bare = example()
+	del bare["price_source"], bare["rate_card"]
+	assert diff_policy(bare, example()) == NOTHING_CHANGED
+	assert diff_policy(example(), bare) == NOTHING_CHANGED
+	assert diff_policy(bare, {**bare, "price_source": ""}) == NOTHING_CHANGED
+	assert diff_policy({}, {}) == NOTHING_CHANGED
+	# neither policy is altered
+	before = copy.deepcopy((current, draft))
+	diff_policy(current, draft)
+	assert (current, draft) == before
+
+
+def test_diff_copes_with_a_card_that_is_not_a_card():
+	current = card_policy()
+	for junk in (
+		None,
+		[],
+		"card",
+		5,
+		True,
+		{},
+		{"profiles": None},
+		{"profiles": "x"},
+		{"profiles": [None, 5, "x", []]},
+	):
+		draft = {**current, "rate_card": junk}
+		for diff in (diff_policy(current, draft), diff_policy(draft, current), diff_policy(draft, draft)):
+			assert set(diff) == set(NOTHING_CHANGED)
+			assert set(diff["rate_card"]) == {"added", "removed", "changed"}
+			assert all(isinstance(name, str) for names in diff["rate_card"].values() for name in names)
+		assert diff_policy(draft, draft) == NOTHING_CHANGED
+	# profiles with no name are one profile, named "": the first of them
+	nameless = {**current, "rate_card": {"profiles": [{"zones": []}, {"name": None}, {"name": ""}]}}
+	assert diff_policy(nameless, nameless)["rate_card"] == NOTHING_CHANGED["rate_card"]
+
+
+def marked_card():
+	"""A card whose names, patterns and weights are unmistakable, so that a leak cannot hide."""
+	return {
+		"version": 1,
+		"currency": "USD",
+		"unit": "lb",
+		"profiles": [
+			{
+				"name": "XQZ-profile",
+				"match": ["XQZ-KEY-*"],
+				"zones": [
+					{
+						"name": "XQZ-zone",
+						"countries": ["BH"],
+						"method": "Express (4-7 days)",
+						"days": 7,
+						"tiers": [{"from": 0.0, "to": 987.654, "price": 123.45}],
+					}
+				],
+			},
+			{
+				"name": "XQZ-everything",
+				"match": ["*"],
+				"zones": [
+					{
+						"name": "XQZ-other-zone",
+						"countries": ["BH"],
+						"method": "Express (4-7 days)",
+						"days": 3,
+						"tiers": [{"from": 0.0, "to": 654.321, "price": 11.0}],
+					}
+				],
+			},
+		],
+	}
+
+
+def test_guest_response_has_estimated_days_and_price_source_but_no_card_contents():
+	order = card_order("BH", key="{XQZ-KEY-1}")
+	order["items"].append(
+		{"item_code": "OTHER", "qty": 2, "groups": [], "index_key": "{OTHER-1}", "weight_kg": 0.1}
+	)
+	result = resolve(card_policy(rate_card=marked_card()), order)
+	assert result["offered"] is True and result["price_source"] == "rate_card"
+	# the engine's result does hold the card's workings, so there is something to hide
+	assert any("XQZ" in step["text"] for step in result["offers"][0]["trace"])
+	translate = Translator()
+	response = response_from(result, translate)
+	assert response == {
+		"policy_active": True,
+		"price_source": "rate_card",
+		"zone": "Bahrain",
+		"offered": True,
+		"reason": None,
+		"message": "",
+		"offers": [
+			{
+				"service_id": "rate-card",
+				"name": "Express (4-7 days)",
+				"amount": 134.45,
+				"source": "rate_card",
+				"reason": None,
+				"estimated_days": 7,
+			}
+		],
+	}
+	assert translate.asked == [], "there is no message to translate"
+	# walked from the top: no name, pattern, weight or key of the card, and no trace, anywhere in it
+	text = json.dumps(response)
+	for hidden in ("XQZ", "987.654", "654.321", "KEY", "OTHER"):
+		assert hidden not in text, hidden
+	for step in result["offers"][0]["trace"]:
+		assert step["text"] not in text
+	assert set(all_keys(response)) == RESPONSE_KEYS | OFFER_KEYS
+	for key in (
+		"profiles",
+		"zones",
+		"tiers",
+		"lines",
+		"match",
+		"countries",
+		"trace",
+		"rule",
+		"weight_lb",
+		"days",
+	):
+		assert key not in set(all_keys(response)), key
+
+	# a refusal says why, in the customer's language, and carries nothing of the card either
+	too_heavy = response_from(resolve(card_policy(), card_order("US", weight_kg=10.0)), Translator())
+	assert too_heavy == {
+		"policy_active": True,
+		"price_source": "rate_card",
+		"zone": "Rest of world",
+		"offered": False,
+		"reason": "too_heavy",
+		"message": "[ar] This order is heavier than our delivery rates cover.",
+		"offers": [],
+	}
+	# whatever the engine's result says of the source, a guest is told one of the two
+	for given, expected in (
+		("rate_card", "rate_card"),
+		("carrier", "carrier"),
+		("mystery", "carrier"),
+		(None, "carrier"),
+		(5, "carrier"),
+		(["rate_card"], "carrier"),
+	):
+		assert response_from({"price_source": given}, Translator())["price_source"] == expected
+	assert response_from({}, Translator())["price_source"] == "carrier"
+	assert response_from({}, Translator())["offers"] == []
+	# an offer is picked by name: the days are passed on, a card's inner key is not, a missing one is None
+	picked = response_from(
+		{
+			"offers": [
+				{"service_id": "s", "estimated_days": 4, "weight_lb": 1.5, "tiers": [1]},
+				{"service_id": "t"},
+			]
+		},
+		Translator(),
+	)["offers"]
+	assert picked == [
+		{
+			"service_id": "s",
+			"name": None,
+			"amount": None,
+			"source": None,
+			"reason": None,
+			"estimated_days": 4,
+		},
+		{
+			"service_id": "t",
+			"name": None,
+			"amount": None,
+			"source": None,
+			"reason": None,
+			"estimated_days": None,
+		},
+	]
+
+
+def test_snapshot_version_changes_with_the_card():
+	policy = card_policy()
+	version = snapshot_version(policy)
+	assert re.fullmatch(r"[0-9a-f]{16}", version)
+	assert snapshot_version(card_policy()) == version, "the same card gives the same version every time"
+	assert snapshot_version(reversed_keys(policy)) == version, "the order of the keys does not matter"
+	assert snapshot_version(json.loads(json.dumps(policy))) == version
+	changes = {}
+
+	def change(label, mutate):
+		changed = card_policy()
+		mutate(changed)
+		changes[label] = snapshot_version(changed)
+
+	def dangerous(policy):
+		return policy["rate_card"]["profiles"][2]
+
+	change("a price", lambda p: dangerous(p)["zones"][0]["tiers"][0].update(price=61.0))
+	change("a tier edge", lambda p: dangerous(p)["zones"][0]["tiers"][0].update(to=0.61))
+	change("a pattern", lambda p: dangerous(p)["match"].append("X-*"))
+	change("a country", lambda p: dangerous(p)["zones"][0]["countries"].append("EG"))
+	change("a method", lambda p: dangerous(p)["zones"][0].update(method="Other (1-2 days)"))
+	change("the days", lambda p: dangerous(p)["zones"][0].update(days=8))
+	change("a profile name", lambda p: dangerous(p).update(name="Fragrances"))
+	change("a profile removed", lambda p: p["rate_card"]["profiles"].pop(1))
+	change("the order of the profiles", lambda p: p["rate_card"]["profiles"].reverse())
+	change("the card removed", lambda p: p.update(rate_card=None))
+	change("the source", lambda p: p.update(price_source="carrier"))
+	assert version not in changes.values()
+	assert len(set(changes.values())) == len(changes), "each change gives its own version"
+	# a card written to its row and read back is the same card, so the wizard's version matches the saved one
+	rows = rows_from_policy(policy, COUNTRY_NAMES)
+	back = policy_from_rows(rows["policy"], rows["zones"], rows["item_sets"], COUNTRY_CODES)
+	assert snapshot_version(back) == version
+	# a policy with no card does not share a version with one that has a card
+	assert snapshot_version({**policy, "rate_card": None}) != version
+
+
+@pytest.mark.parametrize("junk", JUNK, ids=JUNK_IDS)
+def test_a_policy_with_a_rate_card_and_odd_content_never_raises_in_any_function(junk):
+	reference = named(card_policy(rate_card=small_card()))
+	for variant in with_junk_at_every_place(reference, junk):
+		rows = rows_from_policy(variant, COUNTRY_NAMES)
+		assert set(rows["policy"]) == POLICY_ROW_KEYS
+		assert type(rows["policy"]["price_source"]) is str and type(rows["policy"]["rate_card"]) is str
+		back = policy_from_rows(rows["policy"], rows["zones"], rows["item_sets"], COUNTRY_CODES)
+		assert set(back) == POLICY_KEYS
+		assert isinstance(back["price_source"], str)
+		assert back["rate_card"] is None or isinstance(back["rate_card"], dict)
+		assert re.fullmatch(r"[0-9a-f]{16}", snapshot_version(variant))
+		public_summary_from(variant, COUNTRY_NAMES, Translator())
+		for diff in (
+			diff_policy(reference, variant),
+			diff_policy(variant, reference),
+			diff_policy(variant, variant),
+		):
+			assert set(diff) == set(NOTHING_CHANGED)
+			assert set(diff["rate_card"]) == {"added", "removed", "changed"}
+			assert all(isinstance(name, str) for names in diff["rate_card"].values() for name in names)
+		same = diff_policy(variant, variant)
+		assert same["rate_card"] == NOTHING_CHANGED["rate_card"] and "rate_card" not in same["settings"]

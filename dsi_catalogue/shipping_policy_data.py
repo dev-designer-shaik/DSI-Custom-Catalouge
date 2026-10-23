@@ -6,7 +6,8 @@ arguments and hands them to these functions; `shipping_engine` prices an order f
 that come out. The only thing taken from the engine is `LABELS`, the Select strings the doctypes store.
 The policy shape is the one `shipping_engine` documents. The rows are the doctypes' own fields:
 
-	policy row = {"active", "not_covered", "default_fallback_method", "default_fallback_amount",
+	policy row = {"active", "price_source", "rate_card", "not_covered", "default_fallback_method",
+	              "default_fallback_amount",
 	              "rules": [{"name"?, "enabled", "label", "zone", "item_set", "min_order_value",
 	                         "max_order_value", "min_weight_kg", "max_weight_kg", "min_volume_l",
 	                         "max_volume_l", "method", "formula", "round_up"}]}
@@ -24,13 +25,16 @@ Four jobs:
    downstream can write them).
 2. `policy_from_rows` and `rows_from_policy` turn database rows into the policy and back. Select labels
    become the engine's codes (an unknown label passes through unchanged, for the engine to fail closed
-   on and `validate_policy` to report), Country names become upper-case ISO codes. Neither raises on odd
-   content: it is read as empty, or left for `validate_policy` to report.
+   on and `validate_policy` to report), Country names become upper-case ISO codes, and the rate card is
+   kept as JSON text in its row and is a dict in the policy. Neither raises on odd content: it is read as
+   empty (a card that is not JSON is no card), or left for `validate_policy` to report.
 3. `public_summary_from` and `response_from` shape what a customer is told: the zones, and the answer to
-   one order. Both build their output field by field, so nothing else can reach a customer.
+   one order. Both build their output field by field, so nothing else can reach a customer, and nothing
+   of the rate card does: only the price it gave.
 4. `snapshot_version` names a policy's content, and `diff_policy` lists what a draft would change.
 """
 
+import copy
 import hashlib
 import json
 from decimal import Decimal
@@ -51,8 +55,9 @@ _LIMITS = (
 	"min_volume_l",
 	"max_volume_l",
 )
-_OFFER_KEYS = ("service_id", "name", "amount", "source", "reason")
-_SETTINGS = ("active", "default_fallback", "not_covered")  # in alphabetical order, as they are reported
+_OFFER_KEYS = ("service_id", "name", "amount", "source", "reason", "estimated_days")
+# in alphabetical order, as they are reported
+_SETTINGS = ("active", "default_fallback", "not_covered", "price_source", "rate_card")
 
 # The code behind each Select label, the other way round.
 _LABEL_OF_CODE = {kind: {code: label for label, code in labels.items()} for kind, labels in LABELS.items()}
@@ -300,6 +305,21 @@ def _codes(countries):
 	return [text.upper() for text in (code.strip() for code in _texts(_list(countries))) if text]
 
 
+def _card_from(value):
+	"""The rate card of a row: the dict that a Code field's JSON text holds, or a dict already. Text that is
+	not JSON, JSON that is not an object, and anything else are no card (None)."""
+	try:
+		if isinstance(value, dict):
+			return copy.deepcopy(value)
+		if not isinstance(value, str) or not value.strip():
+			return None
+		card = json.loads(value)
+	except (ValueError, RecursionError, TypeError):
+		# not JSON, an integer of over 4300 digits, nesting too deep, or a dict that cannot be copied
+		return None
+	return card if isinstance(card, dict) else None
+
+
 def _upper_keys(names):
 	"""A map of code to Country name, keyed by upper-case code: the ERP stores country codes in lower case."""
 	return {_text(code).upper(): name for code, name in _dict(names).items()}
@@ -363,11 +383,14 @@ def policy_from_rows(
 
 	Flags become bools, an empty number 0.0, an empty text "", and an empty `item_set` None. A rule keeps
 	its row `name` (None when it has none). Select labels become codes; a label that is not one of the
-	doctype's passes through unchanged. It does not raise on odd content.
+	doctype's passes through unchanged. The row's `rate_card` text becomes the card (a dict), or None when
+	there is none or the text is not a JSON object. It does not raise on odd content.
 	"""
 	policy_row, codes = _dict(policy_row), _dict(country_codes)
 	return {
 		"active": _flag(policy_row.get("active")),
+		"price_source": _to_code("price_source", policy_row.get("price_source")),
+		"rate_card": _card_from(policy_row.get("rate_card")),
 		"not_covered": _to_code("not_covered", policy_row.get("not_covered")),
 		"default_fallback": {
 			"method": _to_code("default_fallback", policy_row.get("default_fallback_method")),
@@ -418,6 +441,18 @@ def _rule_row(rule):
 	return {"name": name, **row} if name else row
 
 
+def _card_text(card):
+	"""The rate card as the JSON text its field holds, written to be read in the form: indented, keys in
+	order, letters as they are. No card, and a value that is not a card, are "". A card JSON cannot hold (a
+	loop, keys of two kinds) is "" too, so that writing never raises."""
+	if not isinstance(card, dict):
+		return ""
+	try:
+		return json.dumps(card, ensure_ascii=False, sort_keys=True, indent=1, default=str)
+	except (TypeError, ValueError, RecursionError):
+		return ""
+
+
 def rows_from_policy(policy: dict, country_names: dict[str, str]) -> dict:
 	"""The rows of the three doctypes for a policy: {"policy": policy row (with its `rules` rows),
 	"zones": [zone row], "item_sets": [set row]}. The exact inverse of `policy_from_rows`.
@@ -425,14 +460,16 @@ def rows_from_policy(policy: dict, country_names: dict[str, str]) -> dict:
 	`country_names` maps an ISO code (in either case) to its Country name; a code it has no name for is
 	written as the code, so that saving the row fails loudly rather than the country being lost quietly.
 	Flags become the 1 and 0 a database holds, Select codes become their labels (a code that has no label
-	is written as it is), and a rule row has a `name` only when the rule has one. It does not raise on
-	odd content.
+	is written as it is), the rate card becomes JSON text, and a rule row has a `name` only when the rule
+	has one. It does not raise on odd content.
 	"""
 	policy, names = _dict(policy), _upper_keys(country_names)
 	fallback = _dict(policy.get("default_fallback"))
 	return {
 		"policy": {
 			"active": _check(policy.get("active")),
+			"price_source": _to_label("price_source", policy.get("price_source")),
+			"rate_card": _card_text(policy.get("rate_card")),
 			"not_covered": _to_label("not_covered", policy.get("not_covered")),
 			"default_fallback_method": _to_label("default_fallback", fallback.get("method")),
 			"default_fallback_amount": _float(fallback.get("amount")),
@@ -481,16 +518,19 @@ def public_summary_from(policy: dict, country_names: dict[str, str], translate) 
 
 
 def response_from(result: dict, translate) -> dict:
-	"""What a guest is told about one order, from the engine's result: {"policy_active", "zone", "offered",
-	"reason", "message", "offers": [{"service_id", "name", "amount", "source", "reason"}]}.
+	"""What a guest is told about one order, from the engine's result: {"policy_active", "price_source",
+	"zone", "offered", "reason", "message", "offers": [{"service_id", "name", "amount", "source", "reason",
+	"estimated_days"}]}.
 
-	`message` is put through `translate(text)` when there is one. The result's `rule` position and each
-	offer's `trace` are not copied: they hold formulas and the policy's inner workings. Each field is
-	picked by name, so nothing else can reach the guest.
+	`price_source` is "rate_card" or "carrier" (the carrier for anything else). `message` is put through
+	`translate(text)` when there is one. The result's `rule` position and each offer's `trace` are not copied:
+	they hold formulas, the lines of the rate card and the policy's inner workings. Each field is picked by
+	name, so nothing else can reach the guest, and nothing of the rate card but the price it gave.
 	"""
 	result = _dict(result)
 	return {
 		"policy_active": bool(result.get("policy_active")),
+		"price_source": "rate_card" if result.get("price_source") == "rate_card" else "carrier",
 		"zone": result.get("zone"),
 		"offered": bool(result.get("offered")),
 		"reason": result.get("reason"),
@@ -566,7 +606,22 @@ def _diff_rules(current, draft):
 
 
 def _setting(policy, key):
-	return bool(policy.get(key)) if key == "active" else policy.get(key)
+	if key == "active":
+		return bool(policy.get(key))
+	if key == "price_source":  # a policy that does not say prices from the carrier, as the engine reads it
+		value = policy.get(key)
+		return "carrier" if value is None or value == "" else value
+	if key == "rate_card":  # what is not a card is no card
+		card = policy.get(key)
+		return card if isinstance(card, dict) else None
+	return policy.get(key)
+
+
+def _diff_card(current, draft):
+	"""The rate card's profiles that a draft adds, removes and changes, by name."""
+	return _diff_named(
+		_dict(current.get("rate_card")).get("profiles"), _dict(draft.get("rate_card")).get("profiles")
+	)
 
 
 def diff_policy(current: dict, draft: dict) -> dict:
@@ -575,6 +630,7 @@ def diff_policy(current: dict, draft: dict) -> dict:
 		{"zones":     {"added": [name], "removed": [name], "changed": [name]},
 		 "item_sets": {"added": [name], "removed": [name], "changed": [name]},
 		 "rules":     {"added": [entry], "removed": [entry], "changed": [entry], "order_changed": bool},
+		 "rate_card": {"added": [name], "removed": [name], "changed": [name]},
 		 "settings":  [key]}
 
 	Zones and item sets are identified by `name`; the name lists are sorted. "Changed" means the same
@@ -590,13 +646,20 @@ def diff_policy(current: dict, draft: dict) -> dict:
 	same name with different content. `order_changed` is True when the rules present in both sit in a
 	different relative order; adding, removing or editing rules does not change it.
 
-	`settings` lists, sorted, the top-level settings among `active`, `default_fallback` and
-	`not_covered` whose value differs. Identical policies give empty lists and False.
+	The rate card's profiles are identified by `name`, like zones: `rate_card` lists, sorted, the profiles the
+	draft's card adds and removes, and those it changes (the same name with other patterns, zones or tiers).
+	A card that is missing or not a card has no profiles. What the lists cannot show, such as the profiles
+	trading places (the first one that matches an item takes it), is in `settings`.
+
+	`settings` lists, sorted, the top-level settings among `active`, `default_fallback`, `not_covered`,
+	`price_source` and `rate_card` whose value differs; a policy that does not say what its price source is
+	prices from the carrier. Identical policies give empty lists and False.
 	"""
 	current, draft = _dict(current), _dict(draft)
 	return {
 		"zones": _diff_named(current.get("zones"), draft.get("zones")),
 		"item_sets": _diff_named(current.get("item_sets"), draft.get("item_sets")),
 		"rules": _diff_rules(current.get("rules"), draft.get("rules")),
+		"rate_card": _diff_card(current, draft),
 		"settings": [key for key in _SETTINGS if _setting(current, key) != _setting(draft, key)],
 	}

@@ -1,5 +1,7 @@
 {
 	"active": true,
+	"price_source": "carrier",
+	"rate_card": null,
 	"not_covered": "pass_through",
 	"default_fallback": {"method": "no_delivery", "amount": 0.0},
 	"zones": [

@@ -8,6 +8,9 @@ Most cases run against the example policy in fixtures/shipping_policy_example.js
 	1  GCC, the Watches set, free
 	2  GCC, every item, the carrier price, rounded up
 	3  Rest of world, every item, max(carrier_price * 1.1, 45), rounded up
+
+The last sections are about the interim rate card: the same policy with the rate card as its price source
+(or as a fallback), holding the trimmed Shopify export of fixtures/shopify_shipping_config_sample.csv.
 """
 
 import ast
@@ -15,6 +18,7 @@ import copy
 import json
 import math
 import random
+import string
 import sys
 from pathlib import Path
 
@@ -26,6 +30,7 @@ from dsi_catalogue.shipping_engine import (
 	FALLBACK_SERVICE_ID,
 	FALLBACK_SERVICE_NAME,
 	LABELS,
+	RATE_CARD_SERVICE_ID,
 	REASONS,
 	normalize_country,
 	resolve,
@@ -36,10 +41,21 @@ from dsi_catalogue.shipping_engine import (
 	to_cents,
 	validate_policy,
 )
+from dsi_catalogue.shipping_rate_card import parse_shopify_export, validate_card
 
 FIXTURE = Path(__file__).parent / "fixtures" / "shipping_policy_example.json"
+SAMPLE_CARD_CSV = Path(__file__).parent / "fixtures" / "shopify_shipping_config_sample.csv"
 
-POLICY_KEYS = {"active", "not_covered", "default_fallback", "zones", "item_sets", "rules"}
+POLICY_KEYS = {
+	"active",
+	"price_source",
+	"rate_card",
+	"not_covered",
+	"default_fallback",
+	"zones",
+	"item_sets",
+	"rules",
+}
 ZONE_KEYS = {
 	"name",
 	"enabled",
@@ -66,10 +82,10 @@ RULE_KEYS = {
 	"formula",
 	"round_up",
 }
-RESULT_KEYS = {"policy_active", "zone", "rule", "offered", "reason", "message", "offers"}
-OFFER_KEYS = {"service_id", "name", "amount", "source", "reason", "trace"}
+RESULT_KEYS = {"policy_active", "price_source", "zone", "rule", "offered", "reason", "message", "offers"}
+OFFER_KEYS = {"service_id", "name", "amount", "source", "reason", "estimated_days", "trace"}
 STEP_KEYS = {"kind", "text", "amount"}
-STEP_KINDS = {"carrier", "rule", "formula", "round", "fallback", "result"}
+STEP_KINDS = {"carrier", "rule", "formula", "round", "fallback", "rate_card", "result"}
 
 
 # ---------------------------------------------------------------- helpers
@@ -150,6 +166,7 @@ def check_shape(result):
 	"""A result has the documented shape, whatever the policy or the order."""
 	assert set(result) == RESULT_KEYS, result
 	assert isinstance(result["policy_active"], bool)
+	assert result["price_source"] in ("carrier", "rate_card")
 	assert isinstance(result["offered"], bool)
 	assert result["offered"] == bool(result["offers"])
 	assert result["reason"] is None or result["reason"] in REASONS
@@ -157,8 +174,10 @@ def check_shape(result):
 	assert result["rule"] is None or (isinstance(result["rule"], int) and result["rule"] >= 0)
 	for offer in result["offers"]:
 		assert set(offer) == OFFER_KEYS, offer
-		assert offer["source"] in ("carrier", "rule", "fallback")
+		assert offer["source"] in ("carrier", "rule", "fallback", "rate_card")
 		assert offer["reason"] is None or offer["reason"] in REASONS
+		days = offer["estimated_days"]
+		assert days is None or (type(days) is int and days >= 0), days
 		assert offer["trace"], "an offer always explains itself"
 		for step in offer["trace"]:
 			assert set(step) == STEP_KEYS, step
@@ -214,19 +233,21 @@ def test_the_example_policy_is_the_one_the_plan_describes():
 
 
 def test_labels_are_the_select_strings_mapped_to_codes_in_the_order_the_doctypes_list_them():
-	assert list(LABELS) == ["method", "zone_fallback", "default_fallback", "not_covered"]
+	# What the first four tables held before the rate card stays where it was; the entries the rate card added
+	# are pinned in test_labels_keep_their_order_and_gain_the_new_entries.
+	assert list(LABELS)[:4] == ["method", "zone_fallback", "default_fallback", "not_covered"]
 	assert list(LABELS["method"].items()) == [
 		("Carrier price", "carrier_price"),
 		("Free", "free"),
 		("Custom formula", "formula"),
 	]
-	assert list(LABELS["zone_fallback"].items()) == [
+	assert list(LABELS["zone_fallback"].items())[:4] == [
 		("Use the policy default", "policy_default"),
 		("Don't offer delivery", "no_delivery"),
 		("Charge a fixed amount", "fixed"),
 		("Free", "free"),
 	]
-	assert list(LABELS["default_fallback"].items()) == [
+	assert list(LABELS["default_fallback"].items())[:3] == [
 		("Don't offer delivery", "no_delivery"),
 		("Charge a fixed amount", "fixed"),
 		("Free", "free"),
@@ -248,8 +269,11 @@ def test_reasons_service_and_messages():
 		"not_covered",
 		"fallback_offer",
 		"formula_error",
+		"too_heavy",
 	)
+	assert DEFAULT_MESSAGES["too_heavy"] == "This order is heavier than our delivery rates cover."
 	assert (FALLBACK_SERVICE_ID, FALLBACK_SERVICE_NAME) == ("policy-fallback", "Standard delivery")
+	assert RATE_CARD_SERVICE_ID == "rate-card"
 	assert set(DEFAULT_MESSAGES) == set(REASONS)
 	for message in DEFAULT_MESSAGES.values():
 		assert message.isascii() and message[0].isupper() and message.endswith(".")
@@ -1331,6 +1355,18 @@ def broken_policies():
 			lambda p: p["item_sets"][0].update(item_groups=None, items="x")
 		),
 		"not_covered is junk": lambda: mutated(lambda p: p.update(not_covered="maybe")),
+		"unknown price source": lambda: mutated(lambda p: p.update(price_source="maybe")),
+		"price source is a list": lambda: mutated(lambda p: p.update(price_source=["rate_card"])),
+		"rate card mode without a card": lambda: mutated(lambda p: p.update(price_source="rate_card")),
+		"rate card mode with a junk card": lambda: mutated(
+			lambda p: p.update(price_source="rate_card", rate_card=[1, 2])
+		),
+		"rate card mode with a card of nothing": lambda: mutated(
+			lambda p: p.update(price_source="rate_card", rate_card={"profiles": [None, [], {"zones": 5}]})
+		),
+		"fallback to a card that is not there": lambda: mutated(
+			lambda p: p["zones"][1].update(fallback={"method": "rate_card", "amount": 0.0})
+		),
 	}
 	return cases
 
@@ -1400,6 +1436,7 @@ def test_a_missing_setting_reads_as_its_default():
 		"policy_default",
 		"no_delivery",
 		"pass_through",
+		"carrier",
 	]
 	policy = example()
 	del policy["not_covered"]  # pass the carrier price through
@@ -1731,3 +1768,1127 @@ def test_validate_policy_checks_a_formula_the_way_saving_it_does():
 	policy["rules"][3]["formula"] = "cost * 2"
 	(problem,) = validate_policy(policy)
 	assert "Unknown name 'cost'" in problem and "Rule 4" in problem
+
+
+# ---------------------------------------------------------------- the rate card
+# One product code of each kind, written the way the website keeps them (with braces).
+DANGEROUS = "{F-CR-CSE-W-40}"  # a full-size fragrance: the Dangerous Goods profile
+ALLOWED = "{P-AA-AT1-IG}"  # anything else: Rest of the World Allowed Items
+REFILL = "{F-CR-OSA-M-100-RF}"  # the Refill Service profile
+PETITE = "{F-CR-OSA-M-PT}"  # the Dangerous Goods Petite profile
+
+EXPRESS = "International Express (4-7 days)"
+SHIPPING = "International Shipping (10-15 days)"
+
+# The reasons a refusal can carry, and the keys a guest-facing price may be built from.
+REFUSALS = {"not_served", "not_shipped", "not_covered", "too_heavy", "not_offered"}
+
+
+def sample_card():
+	"""The trimmed Shopify export of Task 11, parsed afresh so a test can change it. Its four profiles are, in
+	this order, Dangerous Goods Petite, Refill Service, Dangerous Goods and Rest of the World Allowed Items."""
+	return parse_shopify_export(SAMPLE_CARD_CSV.read_bytes().decode("utf-8"))["card"]
+
+
+def card_policy(**changes):
+	"""The example policy with the rate card as its price source, holding the sample card."""
+	return {**example(), "price_source": "rate_card", "rate_card": sample_card(), **changes}
+
+
+def card_item(key=DANGEROUS, weight_kg=0.9, qty=1):
+	"""An item as a rate card order carries it: its product code and its unit weight."""
+	return {"item_code": f"ITEM-{key}", "qty": qty, "groups": [], "index_key": key, "weight_kg": weight_kg}
+
+
+def card_order(country="US", *items, **changes):
+	"""An order for the rate card: items, and no cartons and no carrier quotes (a call in rate card mode sends
+	none). With no item given it holds one fragrance."""
+	order = make_order(country, items=list(items) or [card_item()], boxes=[], quotes=[])
+	return {**order, **changes}
+
+
+def zone_of(card, profile, zone):
+	"""The zone of a card by the names of its profile and zone."""
+	(found,) = [z for p in card["profiles"] if p["name"] == profile for z in p["zones"] if z["name"] == zone]
+	return found
+
+
+def without_card_fields(offer):
+	return {key: value for key, value in offer.items() if key != "trace"}
+
+
+def test_rate_card_mode_prices_the_example_orders():
+	policy = card_policy()
+	# 0.9 kg is 1.984 lb: in the 0.7 to 2 lb tier of the USA zone
+	result = resolve(policy, card_order("US", card_item(DANGEROUS, 0.9)))
+	check_shape(result)
+	assert (result["policy_active"], result["price_source"], result["zone"], result["rule"]) == (
+		True,
+		"rate_card",
+		"Rest of world",
+		None,
+	)
+	assert (result["offered"], result["reason"], result["message"]) == (True, None, "")
+	offer = only_offer(result)
+	assert without_card_fields(offer) == {
+		"service_id": "rate-card",
+		"name": EXPRESS,
+		"amount": 60.0,
+		"source": "rate_card",
+		"reason": None,
+		"estimated_days": 7,
+	}
+	assert type(offer["amount"]) is float and type(offer["estimated_days"]) is int
+	assert offer["trace"] == [
+		{"kind": "rate_card", "text": "Dangerous Goods, USA: 1.984 lb -> $60.00", "amount": 60.0},
+		{"kind": "result", "text": "Customer pays 60.00.", "amount": 60.0},
+	]
+	# 1 kg is 2.205 lb: the next tier up
+	one_kilo = only_offer(resolve(policy, card_order("US", card_item(DANGEROUS, 1.0))))
+	assert one_kilo["amount"] == 80.0
+	assert one_kilo["trace"][0]["text"] == "Dangerous Goods, USA: 2.205 lb -> $80.00"
+	# the unit weight is multiplied by the quantity: two of 0.45 kg weigh what one of 0.9 kg does
+	assert amount_of(resolve(policy, card_order("US", card_item(DANGEROUS, 0.45, qty=2)))) == 60.0
+
+	# a cart of two kinds adds the prices: 60 for the fragrance and 40 for an allowed item of 1.001 lb
+	cart = resolve(policy, card_order("US", card_item(DANGEROUS, 0.9), card_item(ALLOWED, 0.454)))
+	check_shape(cart)
+	offer = only_offer(cart)
+	assert (offer["amount"], offer["name"], offer["estimated_days"]) == (100.0, EXPRESS, 7)
+	assert [(step["kind"], step["amount"]) for step in offer["trace"]] == [
+		("rate_card", 60.0),
+		("rate_card", 40.0),
+		("result", 100.0),
+	]
+	assert (
+		offer["trace"][1]["text"]
+		== "Rest of the World Allowed Items, Worldwide (Allowed Items): 1.001 lb -> $40.00"
+	)
+	assert offer["trace"][2]["text"] == "Customer pays 100.00."
+	# the order of the items in the cart does not matter
+	assert resolve(policy, card_order("US", card_item(ALLOWED, 0.454), card_item(DANGEROUS, 0.9))) == cart
+	# methods that differ: the offer is named after the slower one and promises the longest time
+	slow = only_offer(resolve(policy, card_order("US", card_item(DANGEROUS, 0.9), card_item(REFILL, 0.5))))
+	assert (slow["amount"], slow["name"], slow["estimated_days"]) == (120.0, SHIPPING, 15)
+	# the first profile that matches takes the item: a petite bottle is not a full-size fragrance
+	petite = only_offer(resolve(policy, card_order("US", card_item(PETITE, 0.5))))
+	assert (petite["amount"], petite["name"]) == (80.0, SHIPPING)
+	assert petite["trace"][0]["text"].startswith("Dangerous Goods Petite, ")
+
+	# Bahrain is free, and delivery is still offered, at 0.00
+	free = resolve(policy, card_order("BH", card_item(DANGEROUS, 0.9)))
+	check_shape(free)
+	assert (free["zone"], free["offered"], free["reason"], free["message"]) == ("Bahrain", True, None, "")
+	offer = only_offer(free)
+	assert (offer["amount"], offer["name"], offer["estimated_days"]) == (0.0, "Free Shipping (1-2 days)", 2)
+	assert type(offer["amount"]) is float and math.copysign(1.0, offer["amount"]) == 1.0
+	assert offer["trace"][0]["text"].endswith(": 1.984 lb -> $0.00")
+	assert offer["trace"][-1] == {"kind": "result", "text": "Customer pays 0.00.", "amount": 0.0}
+	# a flat zone charges its one price at any weight
+	gcc = only_offer(resolve(policy, card_order("AE", card_item(DANGEROUS, 25.0))))
+	assert (gcc["amount"], gcc["name"]) == (35.0, EXPRESS)
+
+
+def test_rate_card_mode_flags_a_weight_it_had_to_guess():
+	policy = card_policy()
+	# no weight at all counts as 0.35 kg (0.772 lb), and the receipt says so
+	guessed = card_item(DANGEROUS)
+	del guessed["weight_kg"]
+	line = only_offer(resolve(policy, card_order("US", guessed)))["trace"][0]
+	assert line == {
+		"kind": "rate_card",
+		"text": "Dangerous Goods, USA: 0.772 lb -> $60.00 (weight estimated)",
+		"amount": 60.0,
+	}
+	# so does a weight that is not a number above zero
+	for weight in (None, 0, -1, True, float("nan"), "heavy"):
+		offer = only_offer(resolve(policy, card_order("US", card_item(DANGEROUS, weight))))
+		assert offer["trace"][0]["text"].endswith("0.772 lb -> $60.00 (weight estimated)"), weight
+	# a weight that is real is not flagged, even when another profile of the cart is guessed
+	both = only_offer(resolve(policy, card_order("US", card_item(DANGEROUS, 0.9), card_item(ALLOWED, None))))
+	assert "estimated" not in both["trace"][0]["text"] and both["trace"][1]["text"].endswith(
+		"(weight estimated)"
+	)
+
+
+def test_rate_card_mode_reads_the_product_code_the_way_the_website_writes_it():
+	policy = card_policy()
+	for key in ("{F-CR-CSE-W-40}", "{f-cr-cse-w-40}", "F-CR-CSE-W-40", "  { F-CR-CSE-W-40 }  "):
+		offer = only_offer(resolve(policy, card_order("US", card_item(key, 0.9))))
+		assert offer["trace"][0]["text"].startswith("Dangerous Goods, USA"), key
+	# an item with no product code (no Website Item) is not a fragrance: the profile that takes everything has it
+	for item in (
+		{"item_code": "X", "qty": 1, "weight_kg": 0.454},
+		{"item_code": "X", "qty": 1, "weight_kg": 0.454, "index_key": None},
+		{"item_code": "X", "qty": 1, "weight_kg": 0.454, "index_key": ""},
+	):
+		offer = only_offer(resolve(policy, card_order("US", item)))
+		assert offer["trace"][0]["text"].startswith("Rest of the World Allowed Items, "), item
+		assert offer["amount"] == 40.0
+
+
+def test_rate_card_mode_ignores_carrier_quotes_and_served():
+	policy = card_policy()
+	plain = resolve(policy, card_order("US", card_item(DANGEROUS, 0.9)))
+	assert amount_of(plain) == 60.0
+	loud = make_quote(999.0)
+	for changes in (
+		{"served": False},
+		{"quotes": [loud]},
+		{"quotes": [make_quote(1.0, boxes_quoted=0)]},  # a partial quote is not even looked at
+		{"quotes": "junk", "boxes": None},
+		{"boxes": [{"weight_kg": 1e6, "volume_l": 1e6}], "order_value": 1e9},
+		{"served": False, "quotes": [loud], "boxes": [{"weight_kg": 40.0, "volume_l": 99.0}]},
+	):
+		assert resolve(policy, {**card_order("US", card_item(DANGEROUS, 0.9)), **changes}) == plain, changes
+	order = card_order("US", card_item(DANGEROUS, 0.9))
+	del order["served"], order["quotes"], order["boxes"], order["order_value"]
+	assert resolve(policy, order) == plain, "an order that says nothing of them is priced the same"
+	# the rules, "Anything not covered" and the fallbacks have nothing to say either
+	policy["not_covered"] = "no_delivery"
+	policy["default_fallback"] = {"method": "free", "amount": 0.0}
+	policy["rules"] = [make_rule("Rest of world", method="free"), *policy["rules"]]
+	assert resolve(policy, card_order("US", card_item(DANGEROUS, 0.9))) == plain
+	# the country need not be in a zone of the policy at all
+	without_zone(policy, "Rest of world")
+	nowhere = resolve(policy, card_order("US", card_item(DANGEROUS, 0.9)))
+	assert (nowhere["zone"], amount_of(nowhere)) == (None, 60.0)
+	assert nowhere["offers"][0]["trace"] == plain["offers"][0]["trace"]
+
+
+def test_rate_card_mode_still_honours_not_shipped_zones():
+	policy = card_policy()
+	for code in ("RU", "BY"):
+		result = resolve(policy, card_order(code, card_item(DANGEROUS, 0.9)))
+		check_shape(result)
+		assert (result["policy_active"], result["price_source"], result["zone"], result["rule"]) == (
+			True,
+			"rate_card",
+			"Not shipped",
+			None,
+		)
+		assert (result["offered"], result["reason"], result["offers"]) == (False, "not_shipped", [])
+		assert result["message"] == "We don't deliver to this country."
+	# the card has no say: a country the card lists is refused all the same
+	policy["zones"][3]["countries"].append("US")
+	for quotes in ([], [make_quote(1.0)]):
+		result = resolve(policy, card_order("US", card_item(DANGEROUS, 0.9), quotes=quotes))
+		assert (result["zone"], result["offered"], result["reason"]) == ("Not shipped", False, "not_shipped")
+	# the zone is judged before the card, so a missing card does not change the reason
+	policy["rate_card"] = None
+	assert resolve(policy, card_order("US", card_item(DANGEROUS, 0.9)))["reason"] == "not_shipped"
+	# a zone that is switched off refuses nobody
+	policy = card_policy()
+	policy["zones"][3].update(countries=["US"], enabled=False)
+	assert amount_of(resolve(policy, card_order("US", card_item(DANGEROUS, 0.9)))) == 60.0
+	# an Everywhere-else zone that is Not shipped refuses every country no other zone lists
+	policy["zones"][2]["not_shipped"] = True
+	assert resolve(policy, card_order("US", card_item(DANGEROUS, 0.9)))["reason"] == "not_shipped"
+	assert amount_of(resolve(policy, card_order("AE", card_item(DANGEROUS, 0.9)))) == 35.0
+
+
+def test_rate_card_mode_refusals():
+	policy = card_policy()
+	policy["zones"][1]["not_offered_message"] = "Please write to us for a delivery price."  # GCC
+	policy["zones"][2]["not_offered_message"] = "Rest of world words."
+
+	def refused(order, reason, message=None, zone=None, policy=policy):
+		result = resolve(policy, order)
+		check_shape(result)
+		assert (result["policy_active"], result["price_source"], result["rule"]) == (True, "rate_card", None)
+		assert (result["offered"], result["reason"], result["offers"]) == (False, reason, [])
+		assert result["zone"] == zone
+		assert result["message"] == (DEFAULT_MESSAGES[reason] if message is None else message)
+		return result
+
+	# heavier than the highest tier (20 lb): 10 kg is 22.046 lb. The zone's own words are not used for this.
+	refused(card_order("US", card_item(DANGEROUS, 10.0)), "too_heavy", zone="Rest of world")
+	assert DEFAULT_MESSAGES["too_heavy"] == "This order is heavier than our delivery rates cover."
+	# the card does not deliver a refill to the Gulf: the zone's own words are used
+	refused(
+		card_order("AE", card_item(REFILL, 0.5)),
+		"not_covered",
+		"Please write to us for a delivery price.",
+		"GCC",
+	)
+	refused(
+		card_order("ZZ", card_item(DANGEROUS, 0.5)), "not_covered", "Rest of world words.", "Rest of world"
+	)
+	# words that are only white space are no words
+	policy["zones"][1]["not_offered_message"] = " \n"
+	refused(card_order("AE", card_item(REFILL, 0.5)), "not_covered", zone="GCC")
+	# no item to price: not offered, and again not in the zone's words
+	for items in (
+		[],
+		[None, 5, "x", []],
+		[card_item(DANGEROUS, 0.9, qty=0)],
+		[card_item(DANGEROUS, 0.9, qty=-2)],
+	):
+		refused(card_order("US", items=items), "not_offered", zone="Rest of world")
+	# a card with no profile for the item
+	only_dangerous = card_policy()
+	only_dangerous["rate_card"]["profiles"] = [
+		p for p in only_dangerous["rate_card"]["profiles"] if p["name"] == "Dangerous Goods"
+	]
+	refused(
+		card_order("US", card_item(ALLOWED, 0.5)), "not_offered", zone="Rest of world", policy=only_dangerous
+	)
+	# a country that is not a country is not served; nothing else is looked at
+	for code in ("UAE", "", " ", None, 7, "A-E"):
+		refused(card_order(code, card_item(DANGEROUS, 0.9)), "not_served")
+
+	# one kind of item that cannot be priced makes the whole order not offered, not a lower price
+	refused(card_order("AE", card_item(DANGEROUS, 0.5), card_item(REFILL, 0.5)), "not_covered", zone="GCC")
+	refused(
+		card_order("US", card_item(ALLOWED, 0.5), card_item(DANGEROUS, 10.0)),
+		"too_heavy",
+		zone="Rest of world",
+	)
+
+	# no rate card at all: not covered, in the zone's words
+	policy["zones"][1]["not_offered_message"] = "Please write to us for a delivery price."
+	words = "Please write to us for a delivery price."
+	for card in (None, {}, [], "card", 5, {"profiles": []}, {"profiles": None}, {"profiles": [None, 5, "x"]}):
+		policy["rate_card"] = card
+		refused(card_order("AE", card_item(DANGEROUS, 0.5)), "not_covered", words, "GCC")
+	del policy["rate_card"]  # the key itself missing
+	refused(card_order("AE", card_item(DANGEROUS, 0.5)), "not_covered", words, "GCC")
+
+
+def test_carrier_fallback_can_use_the_rate_card():
+	policy = example()
+	policy["rate_card"] = sample_card()  # the price source stays the carrier
+	policy["zones"][1]["fallback"] = {"method": "rate_card", "amount": 0.0}  # GCC
+	fragrance = [card_item(DANGEROUS, 0.5)]  # 1.102 lb: the flat 35 of the Gulf zone
+
+	# the carrier gave no quote at all
+	result = resolve(policy, make_order("AE", items=fragrance, quotes=[]))
+	check_shape(result)
+	assert (result["policy_active"], result["price_source"], result["zone"], result["rule"]) == (
+		True,
+		"carrier",
+		"GCC",
+		None,
+	)
+	assert (result["offered"], result["reason"], result["message"]) == (True, "fallback_offer", "")
+	offer = only_offer(result)
+	assert without_card_fields(offer) == {
+		"service_id": "rate-card",
+		"name": EXPRESS,
+		"amount": 35.0,
+		"source": "rate_card",
+		"reason": "fallback_offer",
+		"estimated_days": 7,
+	}
+	assert [(step["kind"], step["amount"]) for step in offer["trace"]] == [
+		("fallback", None),
+		("rate_card", 35.0),
+		("result", 35.0),
+	]
+	assert offer["trace"][0]["text"] == (
+		"The carrier gave no price for the whole shipment. The fallback applies: the rate card."
+	)
+	assert (
+		offer["trace"][1]["text"].startswith("Dangerous Goods, GCC")
+		and "1.102 lb -> $35.00" in offer["trace"][1]["text"]
+	)
+
+	# every service quoted too few cartons
+	boxes = [{"weight_kg": 1.2, "volume_l": 3.0}, {"weight_kg": 1.2, "volume_l": 3.0}]
+	partial = resolve(
+		policy, make_order("AE", items=fragrance, boxes=boxes, quotes=[make_quote(30.0, boxes_quoted=1)])
+	)
+	assert (partial["reason"], amount_of(partial), only_offer(partial)["source"]) == (
+		"fallback_offer",
+		35.0,
+		"rate_card",
+	)
+	# the carrier does quote: the rules price it and the card is not used
+	quoted = resolve(policy, make_order("AE", items=fragrance))
+	assert (quoted["rule"], amount_of(quoted), only_offer(quoted)["source"]) == (2, 39.0, "rule")
+
+	# the policy default is the card, and Bahrain says "use the policy default": a fragrance is free there
+	policy["default_fallback"] = {"method": "rate_card", "amount": 0.0}
+	bahrain = resolve(policy, make_order("BH", items=fragrance, quotes=[]))
+	check_shape(bahrain)
+	assert (bahrain["zone"], bahrain["offered"], bahrain["reason"]) == ("Bahrain", True, "fallback_offer")
+	offer = only_offer(bahrain)
+	assert (offer["amount"], offer["name"], offer["estimated_days"], offer["source"]) == (
+		0.0,
+		"Free Shipping (1-2 days)",
+		2,
+		"rate_card",
+	)
+	us = resolve(policy, make_order("US", items=[card_item(DANGEROUS, 0.9)], quotes=[]))
+	assert (us["zone"], amount_of(us), only_offer(us)["reason"]) == ("Rest of world", 60.0, "fallback_offer")
+	# a zone that decides for itself does not ask the default
+	policy["zones"][1]["fallback"] = {"method": "fixed", "amount": 12.0}
+	fixed = resolve(policy, make_order("AE", items=fragrance, quotes=[]))
+	assert (only_offer(fixed)["source"], amount_of(fixed)) == ("fallback", 12.0)
+
+	# the card cannot price the order: no delivery, for the card's reason (and the zone's words only for
+	# "not covered")
+	policy["zones"][1]["fallback"] = {"method": "rate_card", "amount": 0.0}
+	policy["zones"][1]["not_offered_message"] = "Please write to us."
+	heavy = resolve(policy, make_order("US", items=[card_item(DANGEROUS, 10.0)], quotes=[]))
+	check_shape(heavy)
+	assert (heavy["zone"], heavy["offered"], heavy["reason"], heavy["offers"]) == (
+		"Rest of world",
+		False,
+		"too_heavy",
+		[],
+	)
+	assert heavy["message"] == DEFAULT_MESSAGES["too_heavy"]
+	uncovered = resolve(policy, make_order("AE", items=[card_item(REFILL, 0.5)], quotes=[]))
+	assert (uncovered["zone"], uncovered["reason"], uncovered["message"]) == (
+		"GCC",
+		"not_covered",
+		"Please write to us.",
+	)
+	nothing = resolve(policy, make_order("AE", items=[], quotes=[]))
+	assert (nothing["reason"], nothing["message"]) == ("not_offered", DEFAULT_MESSAGES["not_offered"])
+	# no card to use: the same, never a free delivery
+	for card in (None, {}, "card"):
+		policy["rate_card"] = card
+		missing = resolve(policy, make_order("AE", items=fragrance, quotes=[]))
+		check_shape(missing)
+		assert (missing["offered"], missing["reason"], missing["offers"]) == (False, "not_covered", [])
+	policy["rate_card"] = sample_card()
+
+	# nobody delivers there: the card is no help, since a fallback never applies to a country that is not served
+	unserved = resolve(policy, make_order("AE", items=fragrance, quotes=[], served=False))
+	assert (unserved["offered"], unserved["reason"]) == (False, "not_served")
+	# and a Not shipped zone is still refused
+	assert resolve(policy, make_order("RU", items=fragrance, quotes=[]))["reason"] == "not_shipped"
+
+
+def test_carrier_fallback_to_the_rate_card_after_a_formula_error():
+	policy = example()
+	policy["rate_card"] = sample_card()
+	policy["zones"][1]["fallback"] = {"method": "rate_card", "amount": 0.0}
+	policy["rules"][2] = make_rule(method="formula", formula="carrier_price / (order_value - 310)")
+	fragrance = [card_item(DANGEROUS, 0.5)]
+	result = resolve(policy, make_order("AE", items=fragrance, order_value=310.0))
+	check_shape(result)
+	assert (result["zone"], result["rule"], result["offered"], result["reason"], result["message"]) == (
+		"GCC",
+		2,  # the rule that held but could not be priced
+		True,
+		"formula_error",
+		"",
+	)
+	offer = only_offer(result)
+	assert (offer["service_id"], offer["amount"], offer["source"], offer["reason"]) == (
+		"rate-card",
+		35.0,
+		"rate_card",
+		"formula_error",
+	)
+	assert [step["kind"] for step in offer["trace"]] == ["fallback", "rate_card", "result"]
+	assert offer["trace"][0]["text"].startswith("Rule 3 could not be priced.")
+	assert offer["trace"][0]["text"].endswith("The fallback applies: the rate card.")
+	# a card that cannot price the order leaves it not offered, still pointing at the rule
+	nothing = resolve(policy, make_order("AE", items=[card_item(REFILL, 0.5)], order_value=310.0))
+	assert (nothing["offered"], nothing["reason"], nothing["rule"], nothing["offers"]) == (
+		False,
+		"not_covered",
+		2,
+		[],
+	)
+	# the same formula prices when it can
+	assert amount_of(resolve(policy, make_order("AE", items=fragrance, order_value=320.0))) == 3.82
+
+
+def test_anything_not_covered_is_unchanged_by_the_rate_card():
+	policy = without_zone(example(), "Rest of world")
+	policy.update(rate_card=sample_card(), default_fallback={"method": "rate_card", "amount": 0.0})
+	fragrance = [card_item(DANGEROUS, 0.9)]
+	# "don't offer delivery" is still no delivery, although the card could price it
+	policy["not_covered"] = "no_delivery"
+	refused = resolve(policy, make_order("US", items=fragrance, quotes=[]))
+	assert (refused["zone"], refused["offered"], refused["reason"]) == (None, False, "not_covered")
+	assert resolve(policy, make_order("US", items=fragrance))["reason"] == "not_covered"
+	# passing the carrier's price through has nothing to pass when there is no quote: the policy default decides
+	policy["not_covered"] = "pass_through"
+	through = resolve(policy, make_order("US", items=fragrance, quotes=[]))
+	assert (through["zone"], through["reason"], amount_of(through)) == (None, "fallback_offer", 60.0)
+	assert only_offer(through)["source"] == "rate_card"
+	# and with a quote it passes the quote through
+	passed = resolve(policy, make_order("US", items=fragrance, quotes=[make_quote(107.61)]))
+	assert (amount_of(passed), only_offer(passed)["source"]) == (107.61, "carrier")
+
+
+@pytest.mark.parametrize("source", ["carrier", "rate_card", "mystery", "", None, 5, ["rate_card"], "MISSING"])
+def test_policy_off_returns_quotes_unchanged_in_every_price_source(source):
+	quotes = [
+		make_quote(38.2, "a", "Express"),
+		make_quote(107.615, "b", "Economy", boxes_quoted=0),  # a partial quote is kept too
+		make_quote(41, "d", "Whole dollars"),
+	]
+	order = make_order("AE", quotes=quotes)
+	off = {**example(), "active": False}
+	expected = resolve(off, order)
+	policy = {**off, "rate_card": sample_card()}
+	if source == "MISSING":
+		del policy["price_source"]
+	else:
+		policy["price_source"] = source
+	result = resolve(policy, order)
+	check_shape(result)
+	assert result == {**expected, "price_source": "rate_card" if source == "rate_card" else "carrier"}
+	assert [
+		(o["service_id"], o["name"], o["amount"], o["source"], o["reason"], o["estimated_days"])
+		for o in result["offers"]
+	] == [
+		("a", "Express", 38.2, "carrier", None, None),
+		("b", "Economy", 107.615, "carrier", None, None),
+		("d", "Whole dollars", 41, "carrier", None, None),
+	]
+	assert type(result["offers"][2]["amount"]) is int  # not even the type changes
+	assert (result["policy_active"], result["zone"], result["rule"], result["reason"]) == (
+		False,
+		None,
+		None,
+		None,
+	)
+	# off means off: the country need not be served, in a zone or even a country, and no card is read
+	for country, served in (("RU", True), ("AE", False), ("", True), ("US", True)):
+		other = resolve(policy, make_order(country, quotes=quotes, served=served))
+		assert [o["amount"] for o in other["offers"]] == [38.2, 107.615, 41]
+		assert other["policy_active"] is False
+	nothing = resolve(policy, make_order("AE", quotes=[]))
+	assert (nothing["offered"], nothing["reason"], nothing["offers"]) == (False, None, [])
+	# an order of items for the card, as the website sends it in rate card mode, still gets the quotes it has
+	assert (
+		resolve(policy, card_order("US", card_item(), quotes=[make_quote(9.0)]))["offers"][0]["amount"] == 9.0
+	)
+
+
+def test_offers_carry_estimated_days_and_carrier_offers_carry_none():
+	def days(result):
+		check_shape(result)
+		return [offer["estimated_days"] for offer in result["offers"]]
+
+	policy = example()
+	# everything the carrier's price makes: a rule, a pass-through, the quotes of a policy that is off, a fallback
+	assert days(resolve(policy, make_order("AE"))) == [None]
+	assert days(resolve(policy, make_order("AE", quotes=[make_quote(38.2, "a"), make_quote(60.0, "b")]))) == [
+		None,
+		None,
+	]
+	assert days(resolve(policy, make_order("AE", quotes=[]))) == [None]  # a fixed amount
+	assert days(resolve(without_zone(example(), "Rest of world"), make_order("JP"))) == [
+		None
+	]  # passed through
+	policy["zones"][1]["fallback"] = {"method": "free", "amount": 0.0}
+	assert days(resolve(policy, make_order("AE", quotes=[]))) == [None]
+	assert days(resolve({**example(), "active": False}, make_order("AE"))) == [None]
+	# a rate card offer promises the longest time of its profiles
+	cart = card_policy()
+	assert days(resolve(cart, card_order("US", card_item(DANGEROUS, 0.9)))) == [7]
+	assert days(resolve(cart, card_order("BH", card_item(DANGEROUS, 0.9)))) == [2]
+	assert days(resolve(cart, card_order("US", card_item(DANGEROUS, 0.9), card_item(REFILL, 0.5)))) == [15]
+	# and none when the card's zone does not say, or says something that is not a number of days
+	for junk in (None, "7", True, -1, 61, 3.5, [7]):
+		cart = card_policy()
+		zone_of(cart["rate_card"], "Dangerous Goods", "USA")["days"] = junk
+		assert days(resolve(cart, card_order("US", card_item(DANGEROUS, 0.9)))) == [None], junk
+	# the number of days is a whole number, not a float that happens to be whole
+	assert type(only_offer(resolve(card_policy(), card_order("US", card_item())))["estimated_days"]) is int
+
+
+def test_an_unknown_price_source_prices_nothing_and_a_missing_one_means_the_carrier():
+	for source in ("maybe", "Rate card", "RATE_CARD", " carrier", 5, 0, False, True, [], ["rate_card"], {}):
+		policy = {**example(), "price_source": source, "rate_card": sample_card()}
+		for order in (
+			make_order("AE"),
+			card_order("US", card_item()),
+			make_order("AE", quotes=[]),
+			make_order("RU"),
+		):
+			result = resolve(policy, order)
+			check_shape(result)
+			assert (result["price_source"], result["zone"], result["rule"]) == ("carrier", None, None), source
+			assert (result["offered"], result["reason"], result["offers"]) == (False, "not_covered", []), (
+				source
+			)
+			assert result["message"] == DEFAULT_MESSAGES["not_covered"]
+		assert validate_policy(policy), f"validate_policy reports {source!r}"
+	# a source that is missing, None or empty is the default, the carrier
+	baseline = resolve(example(), make_order("AE"))
+	for source in (None, ""):
+		assert resolve({**example(), "price_source": source}, make_order("AE")) == baseline
+	absent = example()
+	del absent["price_source"]
+	assert resolve(absent, make_order("AE")) == baseline
+	assert (baseline["price_source"], amount_of(baseline)) == ("carrier", 39.0)
+	assert resolve({}, make_order("AE"))["price_source"] == "carrier"
+
+
+def test_every_result_names_the_price_source():
+	orders = [
+		make_order("AE"),
+		make_order("AE", quotes=[]),
+		make_order("RU"),
+		make_order("AE", served=False),
+		make_order("", served=False),
+		make_order("JP"),
+		card_order("US", card_item()),
+		card_order("US", items=[]),
+		card_order("BH", card_item(DANGEROUS, 40.0)),
+	]
+	for source in ("carrier", "rate_card"):
+		policy = {**example(), "price_source": source, "rate_card": sample_card()}
+		for active in (True, False):
+			for order in orders:
+				result = resolve({**policy, "active": active}, order)
+				check_shape(result)
+				assert result["price_source"] == source, (source, active, order["country_code"])
+				assert result["policy_active"] is active
+
+
+def test_labels_keep_their_order_and_gain_the_new_entries():
+	# the tables keep the order they had, and the new table comes last
+	assert list(LABELS) == ["method", "zone_fallback", "default_fallback", "not_covered", "price_source"]
+	assert list(LABELS["price_source"].items()) == [("Carrier", "carrier"), ("Rate card", "rate_card")]
+	# "Use the rate card" is the last choice of both fallback lists, after everything they offered before
+	assert list(LABELS["zone_fallback"].items()) == [
+		("Use the policy default", "policy_default"),
+		("Don't offer delivery", "no_delivery"),
+		("Charge a fixed amount", "fixed"),
+		("Free", "free"),
+		("Use the rate card", "rate_card"),
+	]
+	assert list(LABELS["default_fallback"].items()) == [
+		("Don't offer delivery", "no_delivery"),
+		("Charge a fixed amount", "fixed"),
+		("Free", "free"),
+		("Use the rate card", "rate_card"),
+	]
+	# the other two lists did not change, and the first label of each is still its default
+	assert list(LABELS["method"].values()) == ["carrier_price", "free", "formula"]
+	assert list(LABELS["not_covered"].values()) == ["pass_through", "no_delivery"]
+	assert next(iter(LABELS["price_source"])) == "Carrier"
+	for labels in LABELS.values():
+		assert all(label.isascii() for label in labels), "a straight apostrophe, so a Select option matches"
+		assert len(set(labels.values())) == len(labels), "two labels never share a code"
+
+
+# ---------------------------------------------------------------- validate_policy and the rate card
+NO_CARD_YET = "The price source is the rate card, but there is no rate card yet."
+
+
+def card_with(mutate):
+	"""The sample card after `mutate` changed it."""
+	card = sample_card()
+	mutate(card)
+	return card
+
+
+def test_validate_policy_rate_card_problems():
+	card = sample_card()
+	assert validate_card(card) == [], "the sample card is a good card"
+	assert validate_policy(card_policy()) == []
+	# a card nobody uses is no problem: the carrier prices and no fallback points at it
+	assert validate_policy({**example(), "rate_card": card}) == []
+	assert validate_policy({**example(), "price_source": "carrier", "rate_card": None}) == []
+
+	def only_problem(policy):
+		(problem,) = validate_policy(policy)
+		assert problem[0].isupper() and problem.endswith("."), "a plain sentence for an ERP user"
+		assert not any(jargon in problem for jargon in ("Traceback", "Error", "dict", "{", "None"))
+		return problem
+
+	# a price source that is not one
+	for source in ("maybe", "Rate card", 5, ["rate_card"], False):
+		problem = only_problem({**example(), "price_source": source})
+		assert 'The setting for "Price source" is not valid.' in problem
+		assert "carrier" in problem and "rate card" in problem
+	# the rate card as the price source, with nothing to price from
+	for nothing in (None, "card", 5, [card]):
+		assert only_problem({**example(), "price_source": "rate_card", "rate_card": nothing}) == NO_CARD_YET
+	assert only_problem({**example(), "price_source": "rate_card"}) == NO_CARD_YET
+	# a fallback that is the rate card, with nothing to price from: each one says where it is
+	policy = example()
+	policy["zones"][1]["fallback"] = {"method": "rate_card", "amount": 0.0}
+	assert only_problem(policy) == (
+		'Zone "GCC" uses the rate card when the carrier can\'t quote, but there is no rate card yet.'
+	)
+	policy = example()
+	policy["default_fallback"] = {"method": "rate_card", "amount": 0.0}
+	assert only_problem(policy) == (
+		"The policy default uses the rate card when the carrier can't quote, but there is no rate card yet."
+	)
+	policy = example()
+	policy["zones"][0]["fallback"] = {"method": "rate_card", "amount": 0.0}
+	policy["zones"].append(
+		{**copy.deepcopy(policy["zones"][0]), "name": " ", "enabled": False, "countries": []}
+	)
+	policy["price_source"] = "rate_card"
+	problems = validate_policy(policy)
+	assert NO_CARD_YET in problems
+	assert any(p.startswith('Zone "Bahrain" uses the rate card') for p in problems)
+	assert any(p.startswith("Zone number 5 uses the rate card") for p in problems), problems
+	# every problem of the card is reported with its own sentence, after "Rate card: "
+	broken = card_with(lambda c: c["profiles"][2]["zones"][0]["tiers"][0].update(price=-5.0))
+	problems = validate_policy({**example(), "rate_card": broken})
+	assert problems == [f"Rate card: {problem}" for problem in validate_card(broken)] != []
+	assert only_problem({**example(), "rate_card": broken}).startswith("Rate card: ")
+	assert "Dangerous Goods" in problems[0] and "USA" in problems[0]
+	many = card_with(lambda c: c["profiles"][2].update(match=[], zones=[]))
+	many["profiles"][3]["zones"][0]["countries"].append("US")
+	many["currency"] = "EUR"
+	problems = validate_policy({**card_policy(), "rate_card": many})
+	assert problems == [f"Rate card: {problem}" for problem in validate_card(many)]
+	assert len(problems) >= 3 and all(p.startswith("Rate card: ") for p in problems)
+	# the card's problems stand beside the policy's own
+	both = {**card_policy(), "rate_card": broken, "not_covered": "maybe"}
+	assert len(validate_policy(both)) == 2
+	# a fallback is fine when the card is there, and a card that is there but not used is still checked
+	policy = {**example(), "rate_card": card}
+	policy["default_fallback"] = {"method": "rate_card", "amount": 0.0}
+	policy["zones"][1]["fallback"] = {"method": "rate_card", "amount": 0.0}
+	assert validate_policy(policy) == []
+	assert validate_policy({**example(), "rate_card": {}}), "an empty card is a card with problems"
+
+
+def test_validate_policy_never_raises_on_a_hostile_rate_card():
+	for card in (
+		None,
+		"",
+		[],
+		{},
+		5,
+		{"profiles": "x"},
+		{"profiles": [None, 5, "x", [], {}]},
+		{
+			"version": float("nan"),
+			"currency": [],
+			"unit": {},
+			"profiles": [{"zones": [[], None, {"tiers": 5}]}],
+		},
+		card_with(
+			lambda c: c["profiles"][2]["zones"][0].update(
+				tiers=[{"from": float("nan"), "to": "x", "price": [1]}]
+			)
+		),
+		card_with(lambda c: c["profiles"][2]["zones"][0].update(countries=["US"] * 100_000)),
+		card_with(lambda c: c.update(profiles=c["profiles"] * 500)),
+	):
+		for source in ("rate_card", "carrier", "mystery"):
+			problems = validate_policy({**example(), "price_source": source, "rate_card": card})
+			assert isinstance(problems, list) and all(isinstance(p, str) and p for p in problems)
+
+
+# ---------------------------------------------------------------- the card and the policy are left alone
+def test_pricing_from_the_card_leaves_the_policy_and_the_order_alone():
+	policy = card_policy()
+	policy["default_fallback"] = {"method": "rate_card", "amount": 0.0}
+	orders = [
+		card_order("US", card_item(DANGEROUS, 0.9), card_item(ALLOWED, None)),
+		card_order("BH", card_item(DANGEROUS, 0.9)),
+		card_order("AE", card_item(REFILL, 0.5)),
+		card_order("RU", card_item()),
+		card_order("US", items=[]),
+	]
+	policy_before, orders_before = copy.deepcopy(policy), copy.deepcopy(orders)
+	for order in orders:
+		resolve(policy, order)
+		rule_previews(policy, order)
+		resolve({**policy, "price_source": "carrier"}, order)  # the card is also read as a fallback
+		resolve({**policy, "active": False}, order)
+	validate_policy(policy)
+	assert policy == policy_before
+	assert orders == orders_before
+
+
+def test_rule_previews_do_not_depend_on_the_price_source():
+	"""Rules are not used when the card prices, but the function keeps working on the draft as it is."""
+	for order in (make_order("AE"), make_order("US", quotes=[make_quote(38.2)]), card_order("US")):
+		assert rule_previews(card_policy(), order) == rule_previews(example(), order)
+	assert [p["amount"] for p in rule_previews(card_policy(), make_order("AE"))][2] == 39.0
+
+
+# ---------------------------------------------------------------- hostile cards and items
+HOSTILE = [
+	None,
+	True,
+	False,
+	0,
+	-1,
+	1,
+	2.5,
+	float("nan"),
+	float("inf"),
+	float("-inf"),
+	10**400,
+	1e308,
+	"",
+	"5",
+	"abc",
+	"\ud800",
+	[],
+	{},
+	[1],
+	{"a": 1},
+]
+DELETED = object()
+
+
+def paths_in(node, prefix=()):
+	"""Every place in a nested structure (each dict key and list position, at any depth) as a path."""
+	if isinstance(node, dict):
+		for key, value in node.items():
+			yield (*prefix, key)
+			yield from paths_in(value, (*prefix, key))
+	elif isinstance(node, list):
+		for position, value in enumerate(node):
+			yield (*prefix, position)
+			yield from paths_in(value, (*prefix, position))
+
+
+def follow(node, path):
+	for step in path:
+		node = node[step]
+	return node
+
+
+def junk_variants(card):
+	"""The card with each of its places, in turn, holding each hostile value, and with each key, in turn, gone."""
+	for path in list(paths_in(card)):
+		for junk in HOSTILE:
+			variant = copy.deepcopy(card)
+			follow(variant, path[:-1])[path[-1]] = copy.deepcopy(junk)
+			yield junk, variant
+		if isinstance(follow(card, path[:-1]), dict):
+			variant = copy.deepcopy(card)
+			del follow(variant, path[:-1])[path[-1]]
+			yield DELETED, variant
+
+
+def small_card():
+	"""A card with two profiles and every price above zero, small enough to be broken at every place."""
+	return {
+		"version": 1,
+		"currency": "USD",
+		"unit": "lb",
+		"profiles": [
+			{
+				"name": "Fragrances",
+				"match": ["F-*"],
+				"zones": [
+					{
+						"name": "World",
+						"countries": ["US", "BH"],
+						"method": "Express (4-7 days)",
+						"days": 7,
+						"tiers": [
+							{"from": 0.0, "to": 2.0, "price": 60.0},
+							{"from": 2.01, "to": 5.0, "price": 80.0},
+						],
+					}
+				],
+			},
+			{
+				"name": "Everything else",
+				"match": ["*"],
+				"zones": [
+					{
+						"name": "Flat",
+						"countries": ["US"],
+						"method": "Standard",
+						"days": None,
+						"tiers": [{"from": None, "to": None, "price": 25.0}],
+					}
+				],
+			},
+		],
+	}
+
+
+def sweep_orders():
+	return [
+		card_order("US", card_item(DANGEROUS, 0.9)),
+		card_order("US", card_item(DANGEROUS, 1.0)),
+		card_order("US", card_item(ALLOWED, 0.454)),
+		card_order("US", card_item(DANGEROUS, 0.9), card_item(ALLOWED, 0.454)),
+		card_order("US", card_item(DANGEROUS, 0.9), card_item(REFILL, 0.5), card_item(PETITE, 0.2, qty=3)),
+		card_order("BH", card_item(DANGEROUS, 0.9)),
+		card_order("AE", card_item(REFILL, 0.5)),
+		card_order("US", items=[]),
+		card_order("ZZ", card_item()),
+		card_order("US", {"item_code": "X", "qty": 1}),
+	]
+
+
+def card_policies(card):
+	"""The same card in the two ways it can price: as the price source, and as every fallback of a carrier."""
+	fallback = {"method": "rate_card", "amount": 0.0}
+	carrier = {**example(), "rate_card": card, "default_fallback": fallback}
+	for zone in carrier["zones"]:
+		zone["fallback"] = dict(fallback)
+	return {"rate card": card_policy(rate_card=card), "carrier with the card as its fallback": carrier}
+
+
+def check_card_answers(policy, orders, *, free_is_a_fault=False):
+	"""Whatever the card holds, an order gets one finite price from the card, or a refusal that offers nothing."""
+	for order in orders:
+		result = resolve(policy, order)
+		check_shape(result)
+		json.dumps(result, allow_nan=False)  # it goes over the wire, so there is no NaN or infinity in it
+		for offer in result["offers"]:
+			assert offer["service_id"] == RATE_CARD_SERVICE_ID and offer["source"] == "rate_card", offer
+			assert type(offer["amount"]) is float and math.isfinite(offer["amount"]) and offer["amount"] >= 0
+			assert math.copysign(1.0, offer["amount"]) == 1.0
+			assert isinstance(offer["name"], str) and offer["name"]
+			assert not free_is_a_fault or offer["amount"] > 0, (
+				"a price of nothing out of a card that was broken"
+			)
+		if result["offers"]:
+			assert result["offered"] and len(result["offers"]) == 1 and result["message"] == ""
+		else:
+			assert not result["offered"] and result["reason"] in REFUSALS and result["message"]
+		for preview in rule_previews(policy, order):
+			assert set(preview) == {"index", "in_zone", "matches", "amount"}
+	problems = validate_policy(policy)
+	assert isinstance(problems, list) and all(isinstance(p, str) and p for p in problems)
+
+
+def test_a_rate_card_broken_at_any_one_place_is_answered_and_never_priced_at_nothing():
+	card = small_card()
+	assert validate_card(card) == []
+	orders = [
+		card_order("US", card_item(DANGEROUS, 0.9)),
+		card_order("US", card_item(DANGEROUS, 1.0)),
+		card_order("US", card_item(ALLOWED, 0.454)),
+		card_order("US", card_item(DANGEROUS, 0.9), card_item(ALLOWED, 0.454)),
+		card_order("BH", card_item(ALLOWED, 0.9)),
+		card_order("US", items=[]),
+	]
+	variants = 0
+	for junk, variant in junk_variants(card):
+		# every price of the good card is above zero. A card may price at 0.00 only for a number that says so: a 0,
+		# or a negative price, which a price list never goes below.
+		says_nothing = isinstance(junk, (int, float)) and not isinstance(junk, bool) and junk <= 0
+		for policy in card_policies(variant).values():
+			check_card_answers(policy, orders, free_is_a_fault=not says_nothing)
+		variants += 1
+	assert variants > 800, "every place was broken in every way"
+
+
+def test_no_mix_of_junk_in_a_rate_card_policy_makes_the_engine_raise():
+	"""A seeded fuzz over the policy and the sample card together: overwrite or delete a few values, then price,
+	preview and validate."""
+	rng = random.Random(20261023)
+	orders = sweep_orders()
+	for _ in range(150):
+		for name, make in (
+			("rate card", card_policy),
+			("fallback", lambda: card_policies(sample_card())["carrier with the card as its fallback"]),
+		):
+			policy = make()
+			for _ in range(rng.randint(1, 6)):
+				container, key = rng.choice(places_to_break(policy))
+				if isinstance(container, dict) and rng.random() < 0.2:
+					del container[key]
+				else:
+					container[key] = copy.deepcopy(rng.choice([*JUNK, *HOSTILE]))
+			for order in orders:
+				result = resolve(policy, order)
+				check_shape(result)
+				assert all(math.isfinite(o["amount"]) and o["amount"] >= 0 for o in result["offers"]), name
+				for preview in rule_previews(policy, order):
+					assert set(preview) == {"index", "in_zone", "matches", "amount"}
+			problems = validate_policy(policy)
+			assert isinstance(problems, list) and all(isinstance(p, str) and p for p in problems)
+
+
+def test_hostile_item_facts_never_raise_and_never_make_a_free_delivery():
+	policy = card_policy()
+
+	def priced(**changes):
+		item = {**card_item(DANGEROUS, 0.9), **changes}
+		result = resolve(policy, card_order("US", item))
+		check_shape(result)
+		return result
+
+	# a weight that is not a number above zero counts as 0.35 kg, and the receipt says so
+	for weight in (
+		None,
+		True,
+		False,
+		0,
+		-1,
+		-0.0,
+		float("nan"),
+		float("inf"),
+		float("-inf"),
+		10**400,
+		-(10**400),
+		"0.9",
+		"heavy",
+		[],
+		{},
+		[1],
+		{"kg": 1},
+	):
+		result = priced(weight_kg=weight)
+		assert (result["offered"], amount_of(result)) == (True, 60.0), weight
+		assert only_offer(result)["trace"][0]["text"].endswith("(weight estimated)"), weight
+	# a weight too big to be a number of pounds is no tier's: too heavy, never free
+	for weight in (1e308, sys.float_info.max):
+		result = priced(weight_kg=weight)
+		assert (result["offered"], result["reason"], result["offers"]) == (False, "too_heavy", []), weight
+	# a quantity that is not a number above zero leaves the item out; with nothing left, nothing is offered
+	for qty in (
+		None,
+		True,
+		False,
+		0,
+		-1,
+		-0.0,
+		float("nan"),
+		float("inf"),
+		float("-inf"),
+		10**400,
+		"2",
+		[],
+		{},
+	):
+		result = priced(qty=qty)
+		assert (result["offered"], result["reason"], result["offers"]) == (False, "not_offered", []), qty
+	assert priced(qty=1e308)["reason"] == "too_heavy"
+	# the product code can be anything: what is not text has no code, and an item with no code is not a fragrance
+	for key in (
+		None,
+		5,
+		1.5,
+		True,
+		[],
+		["F-X"],
+		{},
+		{"F-X": 1},
+		b"F-CR",
+		"",
+		"   ",
+		"{}",
+		"*",
+		"\x00",
+		"\ud800",
+	):
+		result = priced(index_key=key)
+		assert (result["offered"], amount_of(result)) == (True, 40.0), key
+		assert only_offer(result)["trace"][0]["text"].startswith("Rest of the World Allowed Items"), key
+	# things that are not items are left out and the real ones are priced; with only those, nothing is offered
+	not_items = [None, 5, "x", [], ["F-X"], {}, {"index_key": DANGEROUS}, float("nan")]  # none has a quantity
+	assert amount_of(resolve(policy, card_order("US", *not_items, card_item(DANGEROUS, 0.9)))) == 60.0
+	only_junk = resolve(policy, card_order("US", items=not_items))
+	assert (only_junk["offered"], only_junk["reason"]) == (False, "not_offered")
+	for items in (None, "x", 5, True, {"qty": 1}):
+		result = resolve(policy, card_order("US", items=items))
+		assert (result["offered"], result["reason"]) == (False, "not_offered"), items
+	# the same in the other place the card prices: a carrier's fallback
+	fallback = card_policies(sample_card())["carrier with the card as its fallback"]
+	for weight in (None, float("nan"), -1, "x"):
+		result = resolve(fallback, card_order("US", {**card_item(DANGEROUS, 0.9), "weight_kg": weight}))
+		assert (result["reason"], amount_of(result)) == ("fallback_offer", 60.0), weight
+
+
+def test_oversized_rate_cards_are_priced_without_trouble():
+	letters = string.ascii_uppercase
+	codes = [a + b for a in letters for b in letters if a + b != "US"]
+	order = card_order("US", card_item(DANGEROUS, 0.9))
+
+	def price_with(change):
+		card = sample_card()
+		change(card)
+		result = resolve(card_policy(rate_card=card), order)
+		check_shape(result)
+		return result
+
+	def many_countries(card):  # 10,000 countries, the one that matters last
+		zone_of(card, "Dangerous Goods", "USA")["countries"] = [*(codes * 15)[:10_000], "US"]
+
+	def many_tiers(card):  # 10,000 tiers, from 0 to 1 lb, 1 to 2 lb and so on
+		zone_of(card, "Dangerous Goods", "USA")["tiers"] = [
+			{"from": float(i), "to": float(i) + 0.9, "price": float(i)} for i in range(10_000)
+		]
+
+	def many_zones(card):  # 10,000 zones in the profile, the one that matters last
+		profile = card["profiles"][2]
+		profile["zones"] = [
+			{"name": f"Z{i}", "countries": [codes[i % len(codes)]], "method": "M", "days": 1, "tiers": []}
+			for i in range(10_000)
+		] + [zone_of(card, "Dangerous Goods", "USA")]
+
+	def many_profiles(card):  # 10,000 profiles that take nothing, then the real ones
+		card["profiles"] = [
+			{"name": f"P{i}", "match": ["NOTHING-*"], "zones": []} for i in range(10_000)
+		] + card["profiles"]
+
+	def many_patterns(card):
+		card["profiles"][2]["match"] = [f"NOTHING-{i}-*" for i in range(10_000)] + card["profiles"][2][
+			"match"
+		]
+
+	def very_deep(card):  # nesting nobody reads
+		deep = []
+		for _ in range(900):
+			deep = [deep]
+		card["notes"] = deep
+
+	assert amount_of(price_with(many_countries)) == 60.0
+	assert amount_of(price_with(many_tiers)) == 2.0  # the first tier whose upper weight reaches 1.984 lb
+	assert amount_of(price_with(many_zones)) == 60.0
+	assert amount_of(price_with(many_profiles)) == 60.0
+	assert amount_of(price_with(many_patterns)) == 60.0
+	assert amount_of(price_with(very_deep)) == 60.0
+	# and checking them costs about the same as pricing them
+	for change in (many_countries, many_tiers, many_zones, many_profiles, many_patterns):
+		card = sample_card()
+		change(card)
+		problems = validate_policy(card_policy(rate_card=card))
+		assert all(isinstance(problem, str) for problem in problems)
+
+
+def test_a_reason_the_card_does_not_know_is_read_as_not_covered(monkeypatch):
+	"""The engine only ever speaks its own reasons, whatever the card module says."""
+	for given in ("mystery", None, 5, ["too_heavy"]):
+		monkeypatch.setattr(
+			shipping_engine,
+			"price_card",
+			lambda card, order, given=given: {"priced": False, "reason": given, "total": 0.0, "lines": []},
+		)
+		policy = card_policy()
+		policy["zones"][2]["not_offered_message"] = "Rest of world words."
+		result = resolve(policy, card_order("US", card_item()))
+		check_shape(result)
+		assert (result["offered"], result["reason"], result["message"]) == (
+			False,
+			"not_covered",
+			"Rest of world words.",
+		)
+		assert result["offers"] == []
+
+
+def test_a_profile_that_is_not_a_profile_is_skipped_not_fatal():
+	card = sample_card()
+	card["profiles"].insert(0, ["Dangerous Goods", "F-*"])
+	card["profiles"].insert(1, "Dangerous Goods")
+	card["profiles"].insert(2, None)
+	result = resolve(card_policy(rate_card=card), card_order("US", card_item(DANGEROUS, 0.9)))
+	check_shape(result)
+	assert amount_of(result) == 60.0
+	card["profiles"] = [["Dangerous Goods"], "x", None, 5]
+	refused = resolve(card_policy(rate_card=card), card_order("US", card_item(DANGEROUS, 0.9)))
+	assert (refused["offered"], refused["reason"]) == (False, "not_covered")
+	# a zone that is a list, a tier that is text, a prices that is not a number: the zone prices nothing
+	card = sample_card()
+	zone_of(card, "Dangerous Goods", "USA")["tiers"] = [[0.7, 2.0, 60.0], "tier", None]
+	refused = resolve(card_policy(rate_card=card), card_order("US", card_item(DANGEROUS, 0.9)))
+	assert (refused["offered"], refused["reason"]) == (False, "not_covered")
+	for price in (float("nan"), float("inf"), "60", True, None, [60]):
+		card = sample_card()
+		zone_of(card, "Dangerous Goods", "USA")["tiers"][1]["price"] = price
+		refused = resolve(card_policy(rate_card=card), card_order("US", card_item(DANGEROUS, 0.9)))
+		assert (refused["offered"], refused["reason"], refused["offers"]) == (False, "not_covered", []), price

@@ -6,31 +6,43 @@ are calculated by `shipping_formula`, never by `eval`.
 
 The inputs are plain dicts (the ERP layer fills every key; a missing one reads as its default):
 
-	policy = {"active", "not_covered", "default_fallback": {"method", "amount"},
+	policy = {"active", "price_source", "rate_card", "not_covered", "default_fallback": {"method", "amount"},
 	          "zones": [{"name", "enabled", "countries", "not_shipped", "everywhere_else",
 	                     "customer_line", "not_offered_message", "fallback": {"method", "amount"}}],
 	          "item_sets": [{"name", "item_groups", "items"}],
 	          "rules": [{"name", "enabled", "label", "zone", "item_set", "min_order_value",
 	                     "max_order_value", "min_weight_kg", "max_weight_kg", "min_volume_l",
 	                     "max_volume_l", "method", "formula", "round_up"}]}
-	order  = {"country_code", "items": [{"item_code", "qty", "groups"}], "order_value",
-	          "boxes": [{"weight_kg", "volume_l"}],
-	          "quotes": [{"service_id", "name", "amount", "boxes_quoted"}], "served"}
+	order  = {"country_code", "order_value", "boxes": [{"weight_kg", "volume_l"}], "served",
+	          "items": [{"item_code", "qty", "groups", "index_key", "weight_kg"}],
+	          "quotes": [{"service_id", "name", "amount", "boxes_quoted"}]}
+
+`price_source` is "carrier" (the default) or "rate_card"; `rate_card` is the interim rate card of
+`shipping_rate_card` (or None). An item's `index_key` and its unit `weight_kg` only matter to the rate card.
 
 `resolve` prices an order like this:
 
-1. A policy that is off returns every quote exactly as posted.
-2. A country code that is not two letters, or a destination no carrier serves, is `not_served`.
-   No fallback applies: the policy does not sell to places nobody delivers to.
-3. The zone is the destination's enabled zone, else the enabled Everywhere-else zone, else none.
+1. A policy that is off returns every quote exactly as posted, whatever its price source.
+2. A price source this engine does not know offers no delivery (`not_covered`).
+3. A country code that is not two letters is `not_served`. In carrier mode so is a destination no carrier
+   serves, and no fallback applies: the policy does not sell to places nobody delivers to.
+4. The zone is the destination's enabled zone, else the enabled Everywhere-else zone, else none.
    A Not shipped zone offers no delivery (`not_shipped`).
-4. A service that did not quote every carton is dropped, because its total would be too low.
-5. With a zone but no whole quote, the zone's fallback decides and no rule is used.
-6. Otherwise the first enabled rule of the zone whose conditions hold prices every service, each with
+5. With the rate card as the price source, `price_card` prices the order from the items alone. The carrier's
+   quotes, the cartons, `served`, the rules and "Anything not covered" are not looked at. The one offer is the
+   service "rate-card"; if the card cannot price the order nothing is offered, for the card's reason
+   (`not_covered`, `too_heavy` or `not_offered`). The steps below are for the carrier.
+6. A service that did not quote every carton is dropped, because its total would be too low.
+7. With a zone but no whole quote, the zone's fallback decides and no rule is used.
+8. Otherwise the first enabled rule of the zone whose conditions hold prices every service, each with
    its own quote. When no rule holds, or there is no zone, "Anything not covered" decides: pass the
    carrier's price through, or offer no delivery (`not_covered`).
-7. A rule whose formula cannot be calculated sends the whole order to the fallback (`formula_error`).
+9. A rule whose formula cannot be calculated sends the whole order to the fallback (`formula_error`).
    A failure never becomes a price of zero.
+
+A fallback of "Use the rate card" (a zone's, or the policy default it points at) prices the order from the card
+when the carrier could not (steps 7 and 9). It gives the same offer as the rate card does, with the reason
+`fallback_offer` or `formula_error`, and a card that cannot price the order leaves it not offered.
 
 The weight and volume a rule's bands and a formula see are the sums over the cartons, rounded to six
 decimals. `boxes` is the number of cartons and `item_count` the sum of the item quantities.
@@ -43,6 +55,7 @@ import math
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Context, Decimal
 
 from dsi_catalogue.shipping_formula import FormulaError, check_formula, evaluate
+from dsi_catalogue.shipping_rate_card import price_card, validate_card
 
 # The Select strings the doctypes store, mapped to the codes used here. The order is the order of the
 # Select options, and the first string of each is that field's default.
@@ -53,20 +66,32 @@ LABELS = {
 		"Don't offer delivery": "no_delivery",
 		"Charge a fixed amount": "fixed",
 		"Free": "free",
+		"Use the rate card": "rate_card",
 	},
 	"default_fallback": {
 		"Don't offer delivery": "no_delivery",
 		"Charge a fixed amount": "fixed",
 		"Free": "free",
+		"Use the rate card": "rate_card",
 	},
 	"not_covered": {"Pass the carrier price through": "pass_through", "Don't offer delivery": "no_delivery"},
+	"price_source": {"Carrier": "carrier", "Rate card": "rate_card"},
 }
 
-REASONS = ("not_served", "not_shipped", "not_offered", "not_covered", "fallback_offer", "formula_error")
+REASONS = (
+	"not_served",
+	"not_shipped",
+	"not_offered",
+	"not_covered",
+	"fallback_offer",
+	"formula_error",
+	"too_heavy",
+)
 
-# The delivery method that stands in for a carrier that gave no price.
+# The delivery method that stands in for a carrier that gave no price, and the one the rate card gives.
 FALLBACK_SERVICE_ID = "policy-fallback"
 FALLBACK_SERVICE_NAME = "Standard delivery"
+RATE_CARD_SERVICE_ID = "rate-card"
 
 # English text for each reason. The website translates the reason codes itself.
 DEFAULT_MESSAGES = {
@@ -76,10 +101,16 @@ DEFAULT_MESSAGES = {
 	"not_covered": "No delivery option applies to this order.",
 	"fallback_offer": "The carrier could not give a price, so the standard delivery charge applies.",
 	"formula_error": "The delivery price could not be worked out for this order.",
+	"too_heavy": "This order is heavier than our delivery rates cover.",
 }
 
 # For these reasons a zone's own message, when it has one, replaces the standard text.
 _ZONE_MESSAGE_REASONS = ("not_shipped", "not_offered", "not_covered")
+
+# What a policy's `price_source` may hold, and why the rate card can refuse an order. A reason the card gives
+# that is not listed here is read as "not covered".
+_SOURCES = tuple(LABELS["price_source"].values())
+_CARD_REASONS = ("not_covered", "too_heavy", "not_offered")
 
 # Each band: the name in `_totals`, the "from" key, the "up to" key, and how a sentence names it.
 _BANDS = (
@@ -312,13 +343,14 @@ def _step(kind, text, amount):
 	return {"kind": kind, "text": text, "amount": amount}
 
 
-def _offer(service_id, name, amount, source, reason, trace):
+def _offer(service_id, name, amount, source, reason, trace, estimated_days=None):
 	return {
 		"service_id": service_id,
 		"name": name,
 		"amount": amount,
 		"source": source,
 		"reason": reason,
+		"estimated_days": estimated_days,
 		"trace": trace,
 	}
 
@@ -326,6 +358,7 @@ def _offer(service_id, name, amount, source, reason, trace):
 def _result(zone, rule, reason, message, offers, *, active=True):
 	return {
 		"policy_active": active,
+		"price_source": None,  # `resolve` fills it in: it is the policy's, which the steps below do not see
 		"zone": None if zone is None else zone.get("name"),
 		"rule": rule,
 		"offered": bool(offers),
@@ -364,6 +397,83 @@ def _unchanged(order):
 		]
 		offers.append(_offer(quote.get("service_id"), quote.get("name"), amount, "carrier", None, trace))
 	return _result(None, None, None, "", offers, active=False)
+
+
+# ---------------------------------------------------------------- the rate card
+def _source(policy):
+	"""The policy's price source: the carrier when it says nothing, None when it names one this engine
+	does not know."""
+	source = policy.get("price_source")
+	if source is None or source == "":
+		return "carrier"
+	return source if source in _SOURCES else None
+
+
+def _lb(pounds):
+	"""A weight in pounds as a receipt prints it: 1.984, 2."""
+	return f"{pounds:.10g}"
+
+
+def _card_line(line):
+	"""One profile's share of a card price, as a line of the receipt."""
+	where = ", ".join(part for part in (line["profile"] or "A profile with no name", line["zone"]) if part)
+	text = f"{where}: {_lb(line['weight_lb'])} lb -> ${_fmt(line['price'])}"
+	if line["defaulted_weight"]:
+		text += " (weight estimated)"
+	return _step("rate_card", text, line["price"])
+
+
+def _card_price(policy, order):
+	"""What the policy's rate card says the order pays: `price_card`'s answer for the order's items."""
+	items = [
+		{"index_key": item.get("index_key"), "weight_kg": item.get("weight_kg"), "qty": item.get("qty")}
+		for item in map(_as_dict, _as_list(order.get("items")))
+	]
+	country = normalize_country(order.get("country_code"))
+	return price_card(policy.get("rate_card"), {"country_code": country, "items": items})
+
+
+def _card_offer(priced, reason, *lead):
+	"""The one offer a card makes, from a `price_card` answer that priced the order: the service "rate-card",
+	named after the card's delivery method. `lead` are the receipt lines before the card's own."""
+	total = priced["total"]
+	trace = [
+		*lead,
+		*map(_card_line, priced["lines"]),
+		_step("result", f"Customer pays {_fmt(total)}.", total),
+	]
+	name = priced["name"] or FALLBACK_SERVICE_NAME
+	return _offer(RATE_CARD_SERVICE_ID, name, total, "rate_card", reason, trace, priced["days"])
+
+
+def _card_declined(zone, priced, rule=None):
+	"""The card could not price the order: no delivery, for the reason the card gives. The zone's own words
+	replace the standard text only when the card does not cover the destination."""
+	reason = priced["reason"] if priced["reason"] in _CARD_REASONS else "not_covered"
+	return _result(zone, rule, reason, _message(zone if reason == "not_covered" else None, reason), [])
+
+
+def _resolve_by_card(policy, order, country):
+	"""The rate card is the price source. Only a bad country and a Not shipped zone can stop the card from
+	pricing; the quotes, the cartons and `served` are not looked at, and neither are the rules."""
+	if not country:
+		return _declined(None, "not_served")
+	zone = select_zone(policy, country)
+	if zone is not None and zone.get("not_shipped"):
+		return _declined(zone, "not_shipped")
+	priced = _card_price(policy, order)
+	if not priced["priced"]:
+		return _card_declined(zone, priced)
+	return _result(zone, None, None, "", [_card_offer(priced, None)])
+
+
+def _fallback_by_card(policy, zone, order, rule, reason, cause):
+	"""The fallback is to price the order from the rate card, because the carrier could not."""
+	priced = _card_price(policy, order)
+	if not priced["priced"]:
+		return _card_declined(zone, priced, rule)
+	lead = _step("fallback", f"{cause} The fallback applies: the rate card.", None)
+	return _result(zone, rule, reason, "", [_card_offer(priced, reason, lead)])
 
 
 # ---------------------------------------------------------------- pricing
@@ -422,19 +532,19 @@ def _rule_offer(index, rule, zone, quote, totals):
 	return _offer(service_id, name, final, "rule", None, trace)
 
 
-def _priced(policy, zone, index, quotes, totals):
+def _priced(policy, zone, index, quotes, totals, order):
 	"""Price every usable quote with the rule at `index`, or send the whole order to the fallback."""
 	rule = _as_dict(_as_list(policy.get("rules"))[index])
 	try:
 		offers = [_rule_offer(index, rule, zone, quote, totals) for quote in quotes]
 	except FormulaError as error:
-		return _fallback(policy, zone, index, f"Rule {index + 1} could not be priced. {error}")
+		return _fallback(policy, zone, order, index, f"Rule {index + 1} could not be priced. {error}")
 	return _result(zone, index, None, "", offers)
 
 
 # ---------------------------------------------------------------- fallbacks
 def _fallback_choice(policy, zone):
-	"""How the fallback ends: ("none", 0.0), ("free", 0.0) or ("fixed", the amount in cents).
+	"""How the fallback ends: ("none", 0.0), ("free", 0.0), ("rate_card", 0.0) or ("fixed", an amount in cents).
 
 	A fixed amount that is missing, not a number or below zero gives "none" rather than a free delivery.
 	"""
@@ -445,6 +555,8 @@ def _fallback_choice(policy, zone):
 		method = own.get("method") or "no_delivery"
 	if method == "free":
 		return "free", 0.0
+	if method == "rate_card":
+		return "rate_card", 0.0
 	if method == "fixed":
 		amount = _number(own.get("amount"))
 		if amount is not None and amount >= 0:
@@ -452,7 +564,7 @@ def _fallback_choice(policy, zone):
 	return "none", 0.0
 
 
-def _fallback(policy, zone, rule=None, failure=None):
+def _fallback(policy, zone, order, rule=None, failure=None):
 	"""The carrier gave no usable price, or a rule could not be priced: the fallback decides.
 
 	`failure` is the sentence saying why a rule could not be priced; `rule` is that rule's position.
@@ -462,6 +574,8 @@ def _fallback(policy, zone, rule=None, failure=None):
 		return _declined(zone, "formula_error" if failure else "not_offered", rule)
 	reason = "formula_error" if failure else "fallback_offer"
 	cause = failure or "The carrier gave no price for the whole shipment."
+	if kind == "rate_card":
+		return _fallback_by_card(policy, zone, order, rule, reason, cause)
 	what = "free delivery" if kind == "free" else f"a fixed charge of {_fmt(amount)}"
 	trace = [
 		_step("fallback", f"{cause} The fallback applies: {what}.", amount),
@@ -471,12 +585,12 @@ def _fallback(policy, zone, rule=None, failure=None):
 	return _result(zone, rule, reason, "", [offer])
 
 
-def _not_covered(policy, zone, quotes):
+def _not_covered(policy, zone, quotes, order):
 	"""No zone, or no rule in the zone, covers the order: pass the carrier's price on, or offer nothing."""
 	if (policy.get("not_covered") or "pass_through") != "pass_through":
 		return _declined(zone, "not_covered")
 	if not quotes:  # there is nothing to pass through, so the policy default decides
-		return _fallback(policy, zone)
+		return _fallback(policy, zone, order)
 	offers = []
 	for service_id, name, amount in quotes:
 		price = to_cents(amount)
@@ -490,18 +604,35 @@ def _not_covered(policy, zone, quotes):
 
 # ---------------------------------------------------------------- the public entry points
 def resolve(policy: dict, order: dict) -> dict:
-	"""Price an order. The result is {"policy_active", "zone", "rule", "offered", "reason", "message",
-	"offers": [{"service_id", "name", "amount", "source", "reason", "trace"}]}.
+	"""Price an order. The result is {"policy_active", "price_source", "zone", "rule", "offered", "reason",
+	"message", "offers": [{"service_id", "name", "amount", "source", "reason", "estimated_days", "trace"}]}.
 
-	`rule` is the position (from 0) of the rule that priced the order, or of the rule that held but
-	could not be priced (`formula_error`). `message` is empty whenever delivery is offered. Each trace
-	step is {"kind", "text", "amount"}: what the carrier quoted, the rule, any formula, any rounding and
-	what the customer pays.
+	`price_source` is the policy's, "carrier" or "rate_card" (the carrier when it says nothing or something
+	unknown), in every result. `rule` is the position (from 0) of the rule that priced the order, or of the
+	rule that held but could not be priced (`formula_error`); the rate card has none. `message` is empty
+	whenever delivery is offered. Each trace step is {"kind", "text", "amount"}: what the carrier quoted, the
+	rule, any formula, any rounding, a line of the rate card for each profile, and what the customer pays.
+
+	An offer from the rate card has the service id "rate-card", the source "rate_card", the card's delivery
+	method as its name and `estimated_days` the longest time the card promises (None when it does not say).
+	Every other offer has `estimated_days` None.
 	"""
 	policy, order = _as_dict(policy), _as_dict(order)
+	source = _source(policy)
+	result = _resolve(policy, order, source)
+	result["price_source"] = "rate_card" if source == "rate_card" else "carrier"
+	return result
+
+
+def _resolve(policy, order, source):
+	"""The steps of `resolve`, once the price source is read (`source` is None when it is not known)."""
 	if not policy.get("active"):
 		return _unchanged(order)
+	if source is None:  # a price source this engine does not know: it prices nothing rather than guess
+		return _declined(None, "not_covered")
 	country = normalize_country(order.get("country_code"))
+	if source == "rate_card":
+		return _resolve_by_card(policy, order, country)
 	if not country or not order.get("served"):
 		return _declined(None, "not_served")
 	zone = select_zone(policy, country)
@@ -509,14 +640,14 @@ def resolve(policy: dict, order: dict) -> dict:
 		return _declined(zone, "not_shipped")
 	quotes = _usable_quotes(order)
 	if zone is None:
-		return _not_covered(policy, None, quotes)
+		return _not_covered(policy, None, quotes, order)
 	if not quotes:
-		return _fallback(policy, zone)
+		return _fallback(policy, zone, order)
 	totals = _totals(order)
 	index = _first_rule(policy, zone, order, totals)
 	if index is None:
-		return _not_covered(policy, zone, quotes)
-	return _priced(policy, zone, index, quotes, totals)
+		return _not_covered(policy, zone, quotes, order)
+	return _priced(policy, zone, index, quotes, totals, order)
 
 
 def rule_previews(policy: dict, order: dict) -> list[dict]:
@@ -570,7 +701,7 @@ def _name_of(entry):
 	return name.strip() if isinstance(name, str) else ""
 
 
-def _fallback_problems(subject, fallback, allowed):
+def _fallback_problems(subject, fallback, allowed, has_card):
 	"""`subject` starts the sentence: 'Zone "GCC"' or 'The policy default'."""
 	fallback = _as_dict(fallback)
 	method = fallback.get("method")
@@ -578,6 +709,8 @@ def _fallback_problems(subject, fallback, allowed):
 		return []
 	if method not in allowed.values():
 		return [f"{subject} has a choice for when the carrier can't quote that is not valid."]
+	if method == "rate_card" and not has_card:
+		return [f"{subject} uses the rate card when the carrier can't quote, but there is no rate card yet."]
 	if method != "fixed":
 		return []
 	amount = _number(fallback.get("amount"))
@@ -590,20 +723,30 @@ def _fallback_problems(subject, fallback, allowed):
 	return []
 
 
-def _setting_problems(policy):
+def _price_source_problems(policy, has_card):
+	source = policy.get("price_source")
+	if source not in (None, "", *_SOURCES):
+		return ['The setting for "Price source" is not valid. It has to be the carrier or the rate card.']
+	if source == "rate_card" and not has_card:
+		return ["The price source is the rate card, but there is no rate card yet."]
+	return []
+
+
+def _setting_problems(policy, has_card):
 	problems = []
 	if policy.get("not_covered") not in (None, "", *LABELS["not_covered"].values()):
 		problems.append(
 			'The setting for "Anything not covered" is not valid. It has to pass the carrier price through, '
 			"or not offer delivery."
 		)
+	problems += _price_source_problems(policy, has_card)
 	problems += _fallback_problems(
-		"The policy default", policy.get("default_fallback"), LABELS["default_fallback"]
+		"The policy default", policy.get("default_fallback"), LABELS["default_fallback"], has_card
 	)
 	return problems
 
 
-def _zone_problems(zones):
+def _zone_problems(zones, has_card):
 	problems = []
 	refs = []  # how a sentence names each zone
 	for position, zone in enumerate(zones, start=1):
@@ -620,7 +763,7 @@ def _zone_problems(zones):
 		for country in listed:
 			if not normalize_country(country):
 				problems.append(f'Zone {ref} lists "{country}", which is not a two-letter country code.')
-		problems += _fallback_problems(f"Zone {ref}", zone.get("fallback"), LABELS["zone_fallback"])
+		problems += _fallback_problems(f"Zone {ref}", zone.get("fallback"), LABELS["zone_fallback"], has_card)
 		if not zone.get("enabled"):
 			continue
 		if zone.get("everywhere_else"):
@@ -719,17 +862,29 @@ def _rule_problems(rules, zones, item_sets):
 	return problems
 
 
+def _card_problems(card):
+	"""What `validate_card` says of a card that is there, each sentence after "Rate card: "."""
+	return [f"Rate card: {problem}" for problem in validate_card(card)] if isinstance(card, dict) else []
+
+
 def validate_policy(policy: dict) -> list[str]:
 	"""Everything wrong with a policy, as plain sentences naming the zone, the rule (counted from 1) or
 	the country. An empty list means it can go live. It never raises, whatever the content.
+
+	The rate card is checked when there is one, used or not (`validate_card`, each sentence starting "Rate
+	card: "), and a price source or a fallback that is the rate card needs one. A good card that nothing uses
+	is no problem.
 	"""
 	if not isinstance(policy, dict):
 		return ["The policy is missing."]
 	zones = [_as_dict(zone) for zone in _as_list(policy.get("zones"))]
 	item_sets = [_as_dict(item_set) for item_set in _as_list(policy.get("item_sets"))]
+	card = policy.get("rate_card")
+	has_card = isinstance(card, dict)
 	return [
-		*_setting_problems(policy),
-		*_zone_problems(zones),
+		*_setting_problems(policy, has_card),
+		*_zone_problems(zones, has_card),
 		*_item_set_problems(item_sets),
 		*_rule_problems(_as_list(policy.get("rules")), zones, item_sets),
+		*_card_problems(card),
 	]
