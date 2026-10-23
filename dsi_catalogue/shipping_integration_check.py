@@ -32,6 +32,7 @@ import json
 import math
 import re
 import socket
+from decimal import ROUND_HALF_UP, Decimal
 from fnmatch import fnmatchcase
 from urllib.parse import urlsplit
 
@@ -79,18 +80,28 @@ def _text(value, limit) -> str:
 	return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
+_CENT = Decimal("0.01")
+
+
+def _cents(amount) -> Decimal:
+	"""`amount` (a finite number) in cents, rounded half up from the decimal text of the number, as the engine
+	rounds money: 2.675 is 2.68, not the 2.67 that Python's own formatting makes of its binary value."""
+	return Decimal(str(amount)).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
 def _money(amount, currency="USD") -> str:
-	"""$100.00 for dollars, 4.20 BHD for anything else."""
+	"""$100.00 for dollars, 4.20 BHD for anything else, in cents rounded half up (see `_cents`)."""
+	cents = _cents(amount)
 	if currency == "USD":
-		return f"${amount:,.2f}"
-	return f"{amount:,.2f} {currency}"
+		return f"${cents:,.2f}"
+	return f"{cents:,.2f} {currency}"
 
 
 def _same_cents(one, other) -> bool:
-	"""Are two amounts the same to the cent? Both missing is the same; only one missing is not."""
+	"""Are two amounts the same to the cent, rounded half up? Both missing is the same; only one missing is not."""
 	if one is None or other is None:
 		return one is None and other is None
-	return round(one * 100) == round(other * 100)
+	return _cents(one) == _cents(other)
 
 
 def _dict(value) -> dict:

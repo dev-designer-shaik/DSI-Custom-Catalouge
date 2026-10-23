@@ -199,6 +199,7 @@ def test_the_module_is_pure_python_with_no_frappe_and_no_http_library():
 			imported.add((node.module or "").split(".")[0])
 	assert not imported & {"frappe", "requests", "urllib3", "http", "dsi_core"}, imported
 	assert imported <= {
+		"decimal",
 		"dsi_catalogue",
 		"fnmatch",
 		"ipaddress",
@@ -923,6 +924,47 @@ def test_the_carrier_check_lists_the_rates_it_returned():
 			}
 		],
 	}
+
+
+@pytest.mark.parametrize(
+	("amount", "dollars"),
+	[(3.675, "$3.68"), (2.675, "$2.68"), (1.005, "$1.01"), (0.125, "$0.13"), (38.2, "$38.20")],
+)
+def test_amounts_are_shown_in_cents_rounded_half_up_like_the_engine(amount, dollars):
+	# Python's own formatting rounds the binary value (2.675 is really 2.67499...), which is not what the engine
+	# does with money: it rounds the decimal text half up, so these have to agree with it.
+	rate = {"service_id": "a", "service_name": "A", "cost": amount, "currency": "USD"}
+	assert summarize_carrier_response({"success": True, "rates": [rate]})["summary"] == (
+		f"The carrier returned 1 rate: A {dollars}."
+	)
+	other = summarize_carrier_response({"success": True, "rates": [{**rate, "currency": "BHD"}]})
+	assert other["summary"] == f"The carrier returned 1 rate: A {dollars[1:]} BHD."
+	site = summarize_website_response(200, 5, site_body(site_method(amount=amount)), None)
+	assert f"International Express {dollars}." in site["summary"]
+	policy = summarize_policy_response(200, 5, policy_body(offers=[{**OFFER, "amount": amount}]), amount)
+	assert policy["summary"].endswith(f"1 offer, {dollars}.")
+
+
+@pytest.mark.parametrize(
+	("one", "other", "same"),
+	[
+		(2.675, 2.68, True),
+		(1.005, 1.01, True),
+		(0.125, 0.13, True),
+		(3.675, 3.68, True),
+		(1.005, 1.0, False),
+		(1.004, 1.0, True),
+		(100, 100.004, True),
+		(99.996, 100, True),
+		(100.01, 100, False),
+		(99.98, 100, False),
+	],
+)
+def test_two_amounts_are_the_same_when_they_are_the_same_cents_rounded_half_up(one, other, same):
+	policy = summarize_policy_response(200, 5, policy_body(offers=[{**OFFER, "amount": one}]), other)
+	assert policy["ok"] is same, (one, other)
+	site = summarize_website_response(200, 5, site_body(site_method(amount=one)), other)
+	assert site["ok"] is same, (one, other)
 
 
 def test_the_carrier_check_with_several_rates_names_the_first_few():
