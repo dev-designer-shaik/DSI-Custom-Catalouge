@@ -582,14 +582,17 @@ def summarize_carrier_response(rates_or_error, *, ms=0) -> dict:
 
 # ---------------------------------------------------------------- the third check: the website
 def _methods(body) -> list[tuple[str, str, float]]:
-	"""(id, name, amount) of the delivery methods in the website's reply."""
+	"""(id, label, amount) of the delivery methods in the website's reply. The id is as the website wrote it,
+	for comparing (is it the rate card's?); the label is what a sentence shows: the method's name, else its id,
+	cleaned and cut like every text of an answer, else "a method with no name"."""
 	listed = _dict(body).get("methods")
 	methods = []
 	for entry in listed if isinstance(listed, list) else []:
 		entry = _dict(entry)
 		method_id, amount = entry.get("id"), _number(entry.get("shippingAmount"))
 		if isinstance(method_id, str) and method_id and amount is not None:
-			methods.append((method_id, _text(entry.get("serviceName"), 140) or method_id, amount))
+			label = _text(entry.get("serviceName"), 140) or _text(method_id, 140) or "a method with no name"
+			methods.append((method_id, label, amount))
 	return methods
 
 

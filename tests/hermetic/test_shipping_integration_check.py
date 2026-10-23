@@ -12,6 +12,7 @@ import ast
 import ipaddress
 import json
 import socket
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -1073,6 +1074,33 @@ def test_the_website_check_names_the_first_few_methods_only():
 	check = summarize_website_response(200, 640, site_body(*methods), None)
 	assert "8 delivery methods" in check["summary"] and check["summary"].count("$") == 5
 	assert check["summary"].endswith("and 3 more.")
+
+
+def test_a_method_with_no_name_is_shown_by_its_id_as_short_plain_text():
+	# The id of a method with no serviceName is the label, so it is cleaned like every other text of an answer:
+	# cut short, no control or bidi characters. (Its raw value is only ever compared, never shown.)
+	hostile = "<img src=x onerror=alert(1)>" + "\u202e" + "\x00" + "X" * 5000
+	method = {key: value for key, value in site_method(hostile, amount=100).items() if key != "serviceName"}
+	check = summarize_website_response(200, 640, site_body(method), 100.0)
+	assert len(check["summary"]) < 400, len(check["summary"])
+	assert not [char for char in check["summary"] if unicodedata.category(char) in ("Cc", "Cf")]
+	assert check["summary"].startswith(
+		"The website answered in 640 ms with 1 delivery method: <img src=x onerror"
+	)
+	assert "..." in check["summary"]
+	# An id with nothing printable in it has no label at all.
+	method["id"] = "\u202e\u200b \x00"
+	check = summarize_website_response(200, 640, site_body(method), None)
+	assert check["summary"] == (
+		"The website answered in 640 ms with 1 delivery method: a method with no name $100.00."
+	)
+	# The raw id still decides whether the website used the rate card.
+	rate_card = {key: value for key, value in site_method("rate-card").items() if key != "serviceName"}
+	check = summarize_website_response(200, 640, site_body(rate_card), 100.0)
+	assert check["ok"] is True
+	assert check["summary"].startswith(
+		"The website answered in 640 ms with 1 delivery method: rate-card $100.00."
+	)
 
 
 def test_the_website_check_with_no_methods_fails_and_says_so():
