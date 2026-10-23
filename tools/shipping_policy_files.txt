@@ -5,11 +5,12 @@
 # folders, the shipping_policy_wizard page folder, and the example-policy fixture. List every new file of
 # the Shipping Policy here; tests/hermetic/test_shipping_doctypes.py fails if the list and the tree differ.
 
-# Pure modules (the native tests import them inside the erp2 container) and the loader
+# Pure modules (the native tests import them inside the erp2 container), the loader and the wizard's methods
 dsi_catalogue/shipping_engine.py
 dsi_catalogue/shipping_formula.py
 dsi_catalogue/shipping_policy.py
 dsi_catalogue/shipping_policy_data.py
+dsi_catalogue/shipping_policy_wizard.py
 
 # Doctypes: the JSON that bench reload-doc loads, the controllers, the native tests, the form script
 dsi_catalogue/dsi_catalogue/doctype/shipping_item_set/__init__.py
@@ -27,6 +28,7 @@ dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.js
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.json
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy.py
+dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy_wizard.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy_rule/__init__.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy_rule/shipping_policy_rule.json
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy_rule/shipping_policy_rule.py
