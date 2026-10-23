@@ -325,3 +325,131 @@ tools/erp2_push.sh, tools/shipping_policy_files.txt
 - [ ] **Step 6: Docs:** README gains the Shipping Policy row in the modules table, the two guest methods under the public API surface (read-only, ungated), "no new site_config keys", and a short promotion note: push the live host's unpushed commits first, `bench migrate`, the policy arrives switched off. CHANGELOG gets an entry.
 - [ ] **Step 7: Cleanup on erp2:** delete the test user, the test zones, item sets, rules and Translation records the tests created, and set the policy back to off and empty; confirm the Custom Field, Property Setter and Custom DocPerm counts equal the Task 4 baseline.
 - [ ] **Step 8: Commit** `docs: shipping policy README and changelog`, then report the branch, the commit list and the erp2 evidence. Do not push.
+
+
+---
+
+## Part 1b: interim rate card, price source, integration test (added 2026-10-22)
+
+**Spec:** the section "Part 1b: the interim rate card" of the design. **Execution order of the whole plan:** Task 6 (done first), then 11, 12, 13, 14, 15, then 7, 8, 9, 16, 10. The numbers are labels, not the order.
+
+**Extra Global Constraints for Tasks 11-16**
+- The rate card lives on the Shipping Policy single (`rate_card`, JSON text) with `price_source`; no new doctypes, no Custom Fields. The real Shopify export stays outside this public repo (`~/shipping-interim-rates/`); the repo only holds a trimmed sample.
+- Units: weights in pounds on the card (2.20462262 pounds to the kilogram, rounded to three decimals before a tier is chosen); prices in USD; an item without a weight counts as 0.35 kg and is flagged.
+- Product code = Website Item index key without braces, upper-case. Profile precedence: first matching profile wins; `*` matches everything and must be last.
+- Price source default is "Carrier"; a policy that is switched off returns the carrier quotes unchanged whatever the price source says. In rate-card mode the carrier is never called and `served` is not checked; Not shipped zones still refuse.
+- New reason code: `too_heavy`. New offer field: `estimated_days` (integer or null). New guest response field: `price_source`.
+- The guest response never carries card contents (tiers, zones, patterns); only the priced offer.
+- The website change is committed locally; pushing is the owner's decision.
+
+**Extra Review Focus for Tasks 11-16**
+1. **Weights.** Unknown, zero, negative or non-numeric weights count as 0.35 kg and are flagged; quantities multiply; a weight exactly on a tier edge, inside a gap, below the first tier and above the last tier each have a pinned result. (Tasks 11, 13)
+2. **Mixed carts.** Profile prices add; one profile that cannot be priced makes the whole order not offered, never a partial price. (Task 11)
+3. **Hostile or broken cards.** A card with duplicate countries, overlapping tiers, huge lists, NaN prices or text where numbers belong is refused by validation and never crashes pricing. (Tasks 11, 12)
+4. **Import files as people send them.** BOM, Windows line endings, quoted commas, accented country names, trailing blanks, a file with the wrong columns, an empty file. (Task 11, 14)
+5. **The website fails safe.** ERP method missing, slow, or returning nothing useful falls back to today's behaviour, and the amount charged equals the amount shown. (Task 15)
+
+### Task 11: Rate card core
+
+**Files:**
+- Create: `dsi_catalogue/shipping_rate_card.py`, `tests/hermetic/fixtures/shopify_shipping_config_sample.csv`, `tests/hermetic/fixtures/shopify_countries_not_delivered_sample.csv`
+- Test: `tests/hermetic/test_shipping_rate_card.py`
+
+**Interfaces:**
+- Produces (pure, no `frappe` import):
+  - `LB_PER_KG = 2.20462262`, `DEFAULT_ITEM_WEIGHT_KG = 0.35`, `class RateCardError(ValueError)`, `KNOWN_PROFILES` = `{"Dangerous Goods Petite": ["F-*-PT", "F-CR-PC-*"], "Refill Service": ["F-*-RF"], "Dangerous Goods": ["F-*"], "Rest of the World Allowed Items": ["*"]}` in that order.
+  - Card shape: `{"version": 1, "currency": "USD", "unit": "lb", "profiles": [{"name", "match": [str], "zones": [{"name", "countries": [ISO2 upper], "method": str, "days": int|None, "tiers": [{"from": float|None, "to": float|None, "price": float}]}]}]}`; a flat zone has exactly one tier with `from` and `to` both None.
+  - `normalize_index_key(value) -> str`; `classify_item(card, index_key) -> int | None` (index of the first profile with a matching pattern; `fnmatch.fnmatchcase` on the normalised key and upper-cased pattern).
+  - `parse_shopify_export(config_csv: str, not_delivered_csv: str | None = None) -> {"card", "not_delivered": [ISO2], "notes": [str]}`.
+  - `validate_card(card) -> list[str]`; `card_summary(card) -> {"profiles","zones","tiers","countries"}`.
+  - `price_card(card, order) -> {"priced": bool, "reason": None|"not_covered"|"too_heavy"|"not_offered", "total": float, "name": str, "days": int|None, "lines": [{"profile","zone","weight_lb","price","tier","items","defaulted_weight"}], "detail": str}`; `order` is `{"country_code", "items": [{"index_key", "weight_kg" (unit weight, kg, may be missing), "qty"}]}`.
+- Consumes: nothing from earlier tasks.
+
+- [ ] **Step 1: Write the sample files** (trimmed from the real export, real prices): Dangerous Goods USA (first four tiers and the last), Europe (2 tiers, a few countries including accented names such as `CI - Côte d'Ivoire` in a Tier 2 zone and `AX - Åland Islands`), Bahrain free flat, GCC-4 flat 35, Allowed worldwide (3 tiers), Allowed GCC free, Refill USA (2 tiers), Petite GCC flat 20 and Petite International (2 tiers, including the odd `4.1` start); not-delivered sample with 3 countries.
+- [ ] **Step 2: Write the failing tests** in `test_shipping_rate_card.py`: `test_parse_reads_profiles_zones_tiers_and_flat_rows`; `test_parse_puts_the_catch_all_last_and_gives_known_profiles_their_patterns`; `test_parse_notes_what_it_cannot_use` (a bad country token, a row with only one weight, an unknown profile name which gets no patterns and a note, a bad price); `test_parse_not_delivered_countries`; `test_parse_refuses_a_file_without_the_expected_columns_or_rows` (empty text, wrong header, only blank lines, BOM and CRLF accepted); `test_validate_card_accepts_the_parsed_sample` and `test_validate_card_reports_each_problem` (parametrised: duplicate country in a profile, overlapping tiers, from above to, negative or non-finite price, flat zone with two tiers, zone with no countries, unknown country code, empty profile name, duplicate profile name, a catch-all profile that is not last, a profile with no patterns, oversized lists); `test_classify_item_by_product_code` (`{F-CR-OSA-M-PT}` and `{F-CR-PC-W}` are petite, `{F-CR-OSA-M-100-RF}` is refill, `{F-CR-CSE-W-40}` is dangerous goods, `{P-AA-AT1-IG}` and an empty key are allowed items; braces, case and spaces do not matter); `test_price_card_examples_from_the_export` (USA dangerous goods: 0.5 lb is 35, 0.65 lb in the gap is 60, exactly 2 lb is 60, 2.004 lb is 80, 1 kg is 60; Bahrain dangerous goods 0 named "Free Shipping (1-2 days)"; GCC-4 flat 35 at any weight; petite GCC flat 20; allowed items GCC 0); `test_price_card_adds_the_profiles_in_a_cart` (dangerous goods 1.5 lb plus allowed items 1.0 lb to the USA is 60 + 40 = 100, named after the slower profile, days the longest); `test_price_card_refuses_what_it_cannot_price` (8 lb dangerous goods to Europe is `too_heavy`; a refill to AE is `not_covered`; a country in no zone is `not_covered`; an empty cart is `not_offered`; one unpriceable profile makes the whole order not priced); `test_price_card_weights` (unit weight times quantity, several items of a profile add up, a missing, zero, negative, NaN or boolean weight counts as 0.35 kg per unit and sets `defaulted_weight`, quantity 0 is ignored); `test_price_card_tier_edges_and_float_noise` (0.6000000001 lb rounds to 0.600 and stays in the first tier; below the first `from` pays the first tier); `test_nothing_raises_on_odd_input` (sweep over a junk card, junk order, junk items, junk country).
+- [ ] **Step 3: Run to verify failure:** `python3 -m pytest tests/hermetic/test_shipping_rate_card.py -q` fails with an import error.
+- [ ] **Step 4: Implement the module** per the Interfaces. CSV with the standard `csv` module (`utf-8-sig`); header names matched case-insensitively with spaces collapsed; money and weights parsed from text (`float`, reject non-finite); `days` is the last whole number inside the method's brackets; country tokens split on `;`, code is the text before ` - ` (two ASCII letters, upper-cased); profile order is the `KNOWN_PROFILES` order, unknown profiles after the known non-catch-all ones, the catch-all profile last; prices to cents with `Decimal(str(x))` half up.
+- [ ] **Step 5: Run to verify they pass,** the whole hermetic suite and ruff on the two Python files.
+- [ ] **Step 6: Commit** `feat: interim rate card core`.
+
+### Task 12: Price source in the engine and the data module
+
+**Files:**
+- Modify: `dsi_catalogue/shipping_engine.py`, `dsi_catalogue/shipping_policy_data.py`, `tests/hermetic/fixtures/shipping_policy_example.json`
+- Test: `tests/hermetic/test_shipping_engine.py`, `tests/hermetic/test_shipping_policy_data.py` (extend; keep every existing test passing)
+
+**Interfaces:**
+- Consumes: Task 11 (`price_card`, `validate_card`).
+- Produces:
+  - Policy shape gains `"price_source": "carrier"|"rate_card"` and `"rate_card": card|None`. Order items gain optional `"index_key"` and `"weight_kg"` (unit weight). Every offer gains `"estimated_days": int|None`; trace entries may have `kind` `"rate_card"`.
+  - `LABELS["price_source"] = {"Carrier": "carrier", "Rate card": "rate_card"}`; `LABELS["zone_fallback"]` becomes `Use the policy default, Don't offer delivery, Charge a fixed amount, Free, Use the rate card`; `LABELS["default_fallback"]` becomes `Don't offer delivery, Charge a fixed amount, Free, Use the rate card` (codes `rate_card`).
+  - `REASONS` gains `too_heavy`; `DEFAULT_MESSAGES["too_heavy"]` ("This order is heavier than our delivery rates cover.").
+  - `resolve`: policy off returns quotes unchanged (as before). Otherwise a bad country is `not_served`. **Rate card mode**: the destination's zone with `not_shipped` refuses (`not_shipped`); quotes and `served` are ignored; `price_card` prices the order; success is one offer `{"service_id": "rate-card", "name": card name, "amount": total, "source": "rate_card", "reason": None, "estimated_days": days, "trace": [one `rate_card` entry per profile line, then the result]}`; failure is not offered with the card's reason (`not_covered`, `too_heavy`, `not_offered`), the zone's `not_offered_message` replacing the default text only for `not_covered`; no rate card at all is not offered with `not_covered`. **Carrier mode**: as before, and a fallback method `rate_card` (zone or policy default) prices the order from the card when the carrier cannot quote (offer `source` `rate_card`, `reason` `fallback_offer`; the card failing means not offered with the card's reason).
+  - `validate_policy` also reports: an unknown `price_source`; `price_source` `rate_card` or any fallback `rate_card` with no card; every `validate_card` problem prefixed `Rate card: `.
+  - Data module: `policy_from_rows` / `rows_from_policy` carry `price_source` (label) and `rate_card` (JSON text, `""` when none; invalid text reads as None); `response_from` adds `estimated_days` to each offer and `price_source` to the result; `diff_policy` adds `price_source` and `rate_card` to `settings` when they differ and a `rate_card` entry `{"added": [...], "removed": [...], "changed": [...]}` by profile name; `snapshot_version` changes when the card changes.
+
+- [ ] **Step 1: Write the failing tests:** engine: `test_rate_card_mode_prices_the_example_orders` (the Task 11 sample card inside a policy: US dangerous goods 1 kg is 60; a cart of dangerous goods plus allowed items adds; Bahrain is free and still offered at 0.00); `test_rate_card_mode_ignores_carrier_quotes_and_served`; `test_rate_card_mode_still_honours_not_shipped_zones`; `test_rate_card_mode_refusals` (`too_heavy`, `not_covered`, empty cart, no card, junk card never raises); `test_carrier_fallback_can_use_the_rate_card` (no quote, zone fallback `rate_card`: offer `rate-card`, source `rate_card`, reason `fallback_offer`; with the policy default `rate_card` through `policy_default`); `test_policy_off_returns_quotes_unchanged_in_every_price_source`; `test_offers_carry_estimated_days_and_carrier_offers_carry_none`; `test_validate_policy_rate_card_problems`; `test_labels_keep_their_order_and_gain_the_new_entries`; data: `test_rate_card_round_trips_through_rows_and_the_fixture_still_matches`; `test_diff_reports_rate_card_profile_changes_and_price_source`; `test_guest_response_has_estimated_days_and_price_source_but_no_card_contents`; `test_snapshot_version_changes_with_the_card`; `test_broken_card_text_reads_as_no_card`. Update the example fixture with `"price_source": "carrier"` and `"rate_card": null`.
+- [ ] **Step 2: Run to verify failure** (the new tests fail, the existing ones still pass).
+- [ ] **Step 3: Implement** the changes in both modules; keep the pure modules free of `frappe`.
+- [ ] **Step 4: Run to verify they pass:** `python3 -m pytest tests/hermetic -q` all green; ruff clean on the edited files.
+- [ ] **Step 5: Commit** `feat: price source and rate card fallback in the engine`.
+
+### Task 13: Price source in the Frappe layer and the guest method
+
+**Files:**
+- Modify: `dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.json`, `.../shipping_policy/shipping_policy.py`, `.../shipping_zone/shipping_zone.json`, `dsi_catalogue/shipping_policy.py`, `tests/hermetic/test_shipping_doctypes.py`, the native tests in `.../shipping_policy/test_shipping_policy.py`
+
+**Interfaces:**
+- Consumes: Tasks 11, 12 and Task 5's `build_order`, `price_delivery`.
+- Produces:
+  - Shipping Policy fields `price_source` (Select, options as `LABELS["price_source"]`, default `Carrier`) and `rate_card` (Code, options `JSON`, read only on the form with a description pointing to the wizard); `Use the rate card` added to the zone's `fallback_method` and the policy's `default_fallback_method` options; `ShippingPolicy.validate` parses `rate_card` (invalid JSON is refused in plain words) and `validate_policy` covers the rest.
+  - `load_policy` reads both fields.
+  - `build_order(country_code, items, boxes, quotes, order_value=None, item_facts=False)`: with `item_facts` each item gets `index_key` (Website Item `custom_index_key` by item code, any publish state, `""` when none) and `weight_kg` (Item `weight_per_unit`, 0 when none) in at most two queries.
+  - `price_delivery`: after loading the policy, in rate-card mode only the items are cleaned and used (boxes and quotes are not read; no `served` lookup), `item_facts` on; in carrier mode with any `rate_card` fallback configured, `item_facts` on; otherwise unchanged. The response carries `price_source`, and each offer `estimated_days`.
+- [ ] **Step 1: Write the failing tests:** hermetic: `test_policy_has_price_source_and_rate_card_fields_with_safe_defaults`, `test_every_select_still_matches_the_engine_labels`, `test_the_data_module_reads_the_new_fields`; native: `test_rate_card_mode_prices_a_guest_order_end_to_end` (seed a policy with the sample card and `price_source` Rate card, active; call as Guest with items only), `test_rate_card_mode_needs_no_boxes_or_quotes_and_never_calls_the_carrier`, `test_carrier_mode_fallback_uses_the_rate_card_when_no_quote`, `test_policy_off_is_unchanged_in_rate_card_mode`, `test_unknown_items_and_missing_weights_use_the_default_weight`, `test_item_facts_use_at_most_two_queries` (`assertQueryCount`), `test_policy_refuses_invalid_rate_card_json_and_card_problems_in_plain_words`, `test_guest_response_never_contains_card_contents`.
+- [ ] **Step 2: Run to verify failure** on erp2 (push, then `bench ... run-tests`).
+- [ ] **Step 3: Implement**; push with `tools/erp2_push.sh --restart`; reload the doctypes (the script does it).
+- [ ] **Step 4: Run to verify they pass** on erp2; over the wire, `curl` as a guest against `https://erp2.shaik.net` with a seeded active rate-card policy returns the priced offer with `estimated_days`; restore the policy to empty and off.
+- [ ] **Step 5: Commit** `feat: price source and rate card in the guest price method`.
+
+### Task 14: Wizard methods for the rate card, and the integration test
+
+**Files:**
+- Modify: `dsi_catalogue/shipping_policy_wizard.py`
+- Create: `dsi_catalogue/shipping_integration_check.py` (pure helpers: sample order choice, response summarisers, verdict), `tests/hermetic/test_shipping_integration_check.py`
+- Test: `dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy_wizard.py` (extend)
+
+**Interfaces:**
+- Consumes: Tasks 6, 11-13.
+- Produces (System Manager only):
+  - `import_rate_card(config_csv, not_delivered_csv=None) -> {"card", "not_delivered": [ISO2], "not_delivered_missing": [ISO2], "summary", "notes": [str], "problems": [str]}`: parses and validates only (files up to 1 MB each, text), marks country codes not in the ERP's Country list; writes nothing.
+  - `try_order` prices a draft in rate-card mode (`draft.price_source`) with item facts; `wizard_state`, `preview_changes`, `apply_policy` carry `price_source` and `rate_card` through the existing draft (the card is validated before anything is written).
+  - `test_integration(order=None) -> {"checks": [{"name": "erp_price_api"|"carrier"|"website", "ok": bool, "status": int|None, "ms": int, "summary": str, "detail": dict}], "verdict": str, "order": dict}`: default sample order = one published full-size fragrance and one published watch Website Item, quantity 1, destination `US`, city `New York`; check 1 POSTs `<site url>/api/method/dsi_catalogue.shipping_policy.price_delivery` (items, plus boxes and quotes only in carrier mode) and compares the offer amount with the amount `price_delivery` gives in-process for the saved policy; check 2 calls `dsi_shipping.api.get_shipping_rates` in-process for one sample parcel (ok means at least one rate; a carrier error is reported in plain words, today "account blocked"); check 3 POSTs `<website>/api/webshop/shipping/rates` where `<website>` is Storefront Settings `active_domain` (http or https only, no redirects followed, 15 s timeout, responses cut to 4 KB in `detail`) and reports the methods and amounts and whether they equal check 1. Nothing is written; no secrets or tokens in any output.
+- [ ] **Step 1: Write the failing tests:** hermetic for the pure helpers (`pick_sample_order`, `summarize_policy_response`, `summarize_carrier_response`, `summarize_website_response`, `verdict_for`, URL guard); native: `test_import_rate_card_previews_without_writing`, `test_import_refuses_oversized_or_malformed_files_in_plain_words`, `test_import_marks_countries_missing_from_the_erp`, `test_try_order_in_rate_card_mode_prices_a_draft`, `test_apply_writes_price_source_and_the_card_atomically_and_refuses_a_broken_card`, `test_test_integration_runs_all_three_checks_with_mocked_http`, `test_test_integration_only_calls_the_configured_website`, `test_test_integration_survives_timeouts_and_garbage`, `test_non_system_managers_are_refused`.
+- [ ] **Step 2: Run to verify failure,** **Step 3: Implement,** **Step 4: Run to verify they pass** on erp2 (the website check uses a mocked response in tests; one manual run against the real site is recorded in the report).
+- [ ] **Step 5: Commit** `feat: wizard rate card import and integration test`.
+
+### Task 15: The website asks the ERP for the price
+
+**Files (website repo `/home/mdad/Website/DSI WEB N`, branch main, commit locally, do not push):**
+- Create: `lib/shipping/policy-quote.ts`, `tests/shipping-policy-quote.test.mjs`
+- Modify: `lib/shipping/quote.ts`
+
+**Interfaces:**
+- Consumes: the guest method `dsi_catalogue.shipping_policy.price_delivery` (items only in this task) through `erpMethod`.
+- Produces: `askPolicyForOffers({ countryCode, cartItems }) -> Promise<PolicyOffers | null>` where `PolicyOffers` is `{ policyActive, priceSource, offered, reason, message, offers: [{ serviceId, name, amount, source, reason, estimatedDays }] }`, and `offersToShippingMethods(offers, currency) -> ShippingMethod[]`; `getShippingQuotes` calls the first before any carrier work: when `policyActive` and `priceSource === 'rate_card'`, a returned offer list becomes the methods (id `rate-card`, provider `DSI`, service name from the offer, `estimatedDays`, `shippingAmount` the offer amount, `scope` `International`, no dates), the carrier is not called, and a not-offered answer throws `ShippingQuoteError` with the ERP's message; anything else (policy off, carrier mode, ERP error, bad shape, timeout) leaves the current carrier path untouched. The packing plan and `package` in the result are still computed from the cart as today.
+- [ ] **Step 1: Write the failing tests** (`node --test` style used by `tests/*.test.mjs`, stub `erpMethod` through `loadModule`): `rate card answer replaces the carrier path`, `carrier is never called in rate card mode`, `policy off keeps the carrier path`, `carrier mode keeps the carrier path`, `ERP error or timeout falls back to the carrier path`, `a malformed answer falls back`, `not offered throws the ERP message`, `the same function serves the payment re-quote (resolveShippingCost picks the offered method and its amount)`, `offers map to methods exactly (id, name, days, amount, no dates)`, `no weights or boxes are needed from the client`.
+- [ ] **Step 2: Run to verify failure:** `npm test` (the new file fails, the 191 existing tests pass). **Step 3: Implement.** **Step 4:** `npm test` and `npx tsc --noEmit` clean. **Step 5: Commit** `Ask the ERP shipping policy for the delivery price first` (website repo commit rules: author `dev-designer-shaik`, same trailer, no push).
+
+### Task 16: Rates step and Test tab
+
+**Files:**
+- Modify: `shipping_policy_wizard.js`, `shipping_policy_wizard.css`, `tests/browser/shipping_policy_wizard.mjs`
+
+**Interfaces:**
+- Consumes: Task 7's shell and store, Task 14's `import_rate_card` and `test_integration`, Task 9's Review/Apply.
+- Produces hooks: `step-tab-rates`, `step-tab-test`, `price-source`, `rates-import`, `rates-file-config`, `rates-file-notdelivered`, `rates-import-preview`, `rates-import-apply`, `rates-summary`, `rates-profile`, `rates-zone`, `rates-tier-price`, `rates-problems`, `rates-not-used-note`, `test-run`, `test-check-erp-api`, `test-check-carrier`, `test-check-website`, `test-verdict`.
+- [ ] **Step 1: Extend the browser script (red):** import the real export (from `$RATES_DIR`) through the Rates step, check the preview counts (4 profiles, the zones, 49 tiers, 12 not-delivered countries) and that countries missing from the ERP are listed; keep the import in the draft; set price source to Rate card; assert the tape prices a USA order from the card; open Review and Apply; run the Test tab and assert three result rows and a verdict.
+- [ ] **Step 2: Build the Rates step:** price source switch with a plain sentence saying what it means; import panel (two file choosers plus paste boxes, preview, "Use these rates" puts the card and the Not shipped zone into the draft); a read view of each profile, zone, countries (chips), method text and tier prices; tier prices editable inline (money step 0.01), patterns editable per profile, countries editable through the same chips as Zones; problems from `validate_card` shown in plain words; a quiet note on the Rules step while the price source is the rate card ("Rules are not used while the price source is the rate card").
+- [ ] **Step 3: Build the Test tab:** "Run the tests" button, three result cards (status, time, summary, details collapsed), the verdict line, the sample order editable (country, city, items), keyboard operable, errors in plain words.
+- [ ] **Step 4: Run the script:** passes; light, dark and 760 px screenshots of both. **Step 5: Commit** `feat: wizard rates step and integration test tab`.

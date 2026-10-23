@@ -146,3 +146,63 @@ Field and method names beyond those above, validation wording, the structure of 
 - Zone text is English, with other languages through the ERP's Translation records; standard messages are reason codes the website translates.
 - Volume is in litres, the policy is a single document, and the delivery estimate stays on the Shipping Service.
 - One country, one enabled zone.
+
+
+## Part 1b: the interim rate card (added 2026-10-22, approved by the owner)
+
+### Why
+
+The Aramex account has been blocked since 1 October and the shipping partner is not final. The new website goes live on the rates the Shopify store charges today: weight tiers by zone and product profile, in pounds, in USD (the export sent by the Head of IT: 4 profiles, about 10 zones, 49 rates, plus 12 countries that get no delivery). Those rates must be the price customers pay, ahead of any carrier price, until the owner decides to show the carrier integration again. When a partner is confirmed, the card is replaced by their rate card.
+
+### What it is
+
+A **rate card** is kept on the Shipping Policy: profiles, each with the zones it serves and a weight tier table per zone. It is imported from the two Shopify CSV files, shown and edited in the wizard (a new Rates step), and applied with everything else in one Apply.
+
+- **Profile**: a name, a list of product code patterns that decide which items belong to it, and its zones. The first profile whose pattern matches an item takes it; a pattern of `*` catches everything left. The four Shopify profiles map to: Dangerous Goods Petite (`F-*-PT`, `F-CR-PC-*`), Refill Service (`F-*-RF`), Dangerous Goods (`F-*`, the fragrances), Rest of the World Allowed Items (`*`).
+- **Product code** here means the Website Item index key with the braces removed and upper-cased, for example `F-CR-OSA-M-PT` (the same normalisation the website uses). Patterns use `*` as a wildcard. Petite and refill bottles share item groups with the full-size fragrances, which is why item groups are not used.
+- **Zone**: a name, a list of countries (two-letter codes), the delivery method text from Shopify (for example "International Express (4-7 days)") and the days promised (the upper number), and either weight tiers or one flat price. A country sits in at most one zone of a profile.
+- **Tier**: weight from and up to, in pounds, and a price in USD.
+
+### Price source and fallback
+
+The policy gets a setting **Price source**: "Rate card" or "Carrier" (the default, so promoting changes nothing).
+
+- **Rate card**: customers are charged from the card. The carrier is not asked, its quotes are ignored, and the "is this country served by a carrier" check is skipped. A country in a Not shipped zone still gets no delivery. If the card cannot price the order, delivery is not offered.
+- **Carrier**: as designed in Part 1. Zones and the policy default gain one more fallback choice, **Use the rate card**: when the carrier cannot quote, the order is priced from the card instead of a fixed amount.
+
+A policy that is switched off still returns the carrier quotes unchanged, whatever the price source says.
+
+### How an order is priced from the card
+
+1. The destination must not be in a Not shipped zone, and must be two letters.
+2. Each item goes to the first profile whose pattern matches its product code. An item with no Website Item counts as unmatched and goes to the catch-all profile.
+3. A profile's weight is the sum of its items' unit weight times quantity, in kilograms, turned into pounds (2.20462262 pounds to the kilogram) and rounded to three decimals. An item with no weight counts as 0.35 kg and is flagged.
+4. The profile's zone is the one that lists the country. No zone means the card does not serve that country for that profile, and the whole order is not offered.
+5. A flat zone charges its one price whatever the weight. A tiered zone charges the first tier whose upper weight is at least the profile's weight, so a weight in a gap between tiers pays the next tier up, and a weight below the first tier pays the first. Heavier than the top tier: the whole order is not offered (reason `too_heavy`).
+6. The order's price is the sum of the profile prices (Shopify adds the rates of every profile in the cart). It never goes below zero.
+7. One delivery method is offered, service id `rate-card`, named after the profiles' method text (if they differ, the one that takes the most days), with `estimated_days` set to the longest promise. When the total is zero it is still offered, at 0.00.
+
+### Import
+
+The import reads the two CSV files exactly as exported (columns Profile, Zone (recommended), Country count, Countries (ISO-2 - Name), Shipping method, Weight from (lb), Weight to (lb), Price (USD); and ISO-2, Country). It shows what it found and what it could not use before anything is kept: profiles, zones, tiers, countries, rows it skipped, countries that are not in the ERP's Country list, unknown profile names (which get no product patterns until someone adds them), tier overlaps, and the 12 not-delivered countries as a Not shipped zone. Nothing is written until Apply.
+
+### Test the integration
+
+The wizard has a Test tab with three read-only checks that run against what is live, not the draft:
+
+1. **ERP price API**: calls the public `price_delivery` endpoint over HTTP exactly as the website does, with a sample order, and shows status, time, the answer and whether the amount matches the policy's own price for the saved policy.
+2. **Carrier API**: asks the carrier for one sample parcel through the existing shipping module and shows what comes back (today: account blocked).
+3. **Website**: posts the same sample cart to the website's shipping rates route and shows the methods and prices the site returns, with a verdict on whether the site is using the policy.
+
+Only the website address stored in Storefront Settings is ever called. Nothing is written.
+
+### The website
+
+The website asks the ERP for the delivery price first. When the policy is active and its price source is the rate card, the website uses the offer it gets and never calls the carrier; otherwise it behaves as before. The payment route's server-side re-quote goes through the same function, so the amount charged is the amount shown. If the ERP method is missing or fails, the website falls back to its current behaviour. The website change is committed locally and is pushed only when the owner says so.
+
+### Anti-goals added
+
+- Interim prices that differ from the Shopify export without anyone choosing to change them.
+- An order priced on a profile's rate that belongs to another profile.
+- A card that cannot price an order silently charging nothing.
+- A heavy order, or a country the card does not serve, being sold.
