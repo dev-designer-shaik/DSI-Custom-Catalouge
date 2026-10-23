@@ -2302,6 +2302,35 @@ def test_rate_card_mode_refusals():
 	refused(card_order("AE", card_item(DANGEROUS, 0.5)), "not_covered", words, "GCC")
 
 
+@pytest.mark.parametrize("method", ["", "   ", "\t\n", None, 5, ["x"]], ids=repr)
+def test_a_card_zone_with_no_method_text_is_offered_as_standard_delivery(method):
+	"""`validate_card` demands a method, so only a stored card can lack one. The order still prices, from the
+	zone's tiers and days, and the offer is named the way a carrier's fallback is."""
+	card = sample_card()
+	zone_of(card, "Dangerous Goods", "USA")["method"] = method
+	expected = {
+		"service_id": RATE_CARD_SERVICE_ID,
+		"name": FALLBACK_SERVICE_NAME,
+		"amount": 60.0,  # 0.9 kg is 1.984 lb: the 0.7 to 2 lb tier
+		"source": "rate_card",
+		"estimated_days": 7,
+	}
+	assert RATE_CARD_SERVICE_ID == "rate-card" and FALLBACK_SERVICE_NAME == "Standard delivery"
+	# as the price source
+	offer = only_offer(resolve(card_policy(rate_card=card), card_order("US", card_item(DANGEROUS, 0.9))))
+	assert {key: offer[key] for key in expected} == expected
+	# and as the fallback of a carrier that gave no price (a US order is in the Everywhere-else zone)
+	policy = example()
+	policy["rate_card"] = card
+	policy["zones"][2]["fallback"] = {"method": "rate_card", "amount": 0.0}
+	result = resolve(policy, make_order("US", items=[card_item(DANGEROUS, 0.9)], quotes=[]))
+	check_shape(result)
+	assert (result["zone"], result["reason"]) == ("Rest of world", "fallback_offer")
+	offer = only_offer(result)
+	assert {key: offer[key] for key in expected} == expected
+	assert offer["reason"] == "fallback_offer"
+
+
 def test_carrier_fallback_can_use_the_rate_card():
 	policy = example()
 	policy["rate_card"] = sample_card()  # the price source stays the carrier
@@ -3235,7 +3264,7 @@ def test_a_profile_that_is_not_a_profile_is_skipped_not_fatal():
 	card["profiles"] = [["Dangerous Goods"], "x", None, 5]
 	refused = resolve(card_policy(rate_card=card), card_order("US", card_item(DANGEROUS, 0.9)))
 	assert (refused["offered"], refused["reason"]) == (False, "not_covered")
-	# a zone that is a list, a tier that is text, a prices that is not a number: the zone prices nothing
+	# a zone that is a list, a tier that is text, a price that is not a number: the zone prices nothing
 	card = sample_card()
 	zone_of(card, "Dangerous Goods", "USA")["tiers"] = [[0.7, 2.0, 60.0], "tier", None]
 	refused = resolve(card_policy(rate_card=card), card_order("US", card_item(DANGEROUS, 0.9)))
