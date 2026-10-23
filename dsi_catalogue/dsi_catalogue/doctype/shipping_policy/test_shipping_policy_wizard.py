@@ -3021,6 +3021,61 @@ class TestRateCardDrafts(WizardTestCase):
 		wizard.apply_policy(draft, opened["version"])
 		self.assertEqual(wizard.wizard_state()["policy"]["price_source"], "")
 
+	def test_the_card_walk_refuses_a_big_value_before_it_looks_at_what_is_in_it(self):
+		class Counting(list):
+			"""A list that counts the values it hands out."""
+
+			handed_out = 0
+
+			def __iter__(self):
+				for item in super().__iter__():
+					type(self).handed_out += 1
+					yield item
+
+		class CountingKeys(dict):
+			"""A dict that counts the keys it hands out."""
+
+			handed_out = 0
+
+			def __iter__(self):
+				for key in super().__iter__():
+					type(self).handed_out += 1
+					yield key
+
+		limit = wizard.MAX_CARD_VALUES
+		big_list = Counting(
+			[0] * 3_000_000
+		)  # about 190 MB on the stack, and seconds, before the walk gave up
+		big_dict = CountingKeys.fromkeys(map(str, range(limit + 100_000)), 0)
+		for what, value, counter in (("a list", big_list, Counting), ("a dict", big_dict, CountingKeys)):
+			with self.subTest(what):
+				self.assertIs(wizard._is_plain_data(value), False)
+				self.assertEqual(counter.handed_out, 0, "it was refused by its size, not looked through")
+		# The same inside a draft: the problem is the one sentence, and nothing was looked through.
+		seed_policy(card_policy(), active=True)
+		opened = wizard.wizard_state()
+		for what, value, counter in (("a list", big_list, Counting), ("a dict", big_dict, CountingKeys)):
+			draft = {**opened["policy"], "rate_card": {**CARD, "extra": value}}
+			counter.handed_out = 0
+			with self.subTest(what, in_a="draft"):
+				self.assertEqual(
+					wizard.preview_changes(draft), {"changes": NO_CHANGES, "problems": [UNSAVABLE]}
+				)
+				with self.assertRaises(frappe.ValidationError) as caught:
+					apply(draft)
+				self.assertEqual(messages(caught), [UNSAVABLE])
+				self.assertLessEqual(counter.handed_out, limit)
+		# The limit is exact: the list and its values are values too.
+		self.assertIs(wizard._is_plain_data([0] * (limit - 1)), True)
+		self.assertIs(wizard._is_plain_data([0] * limit), False)
+		self.assertIs(wizard._is_plain_data({"a": [0] * (limit - 2)}), True)
+		self.assertIs(wizard._is_plain_data({"a": [0] * (limit - 1)}), False)
+		# What is queued counts too, not only what has been looked at: many small lists add up.
+		many = [[0] * 99] * 5_000  # 5,000 lists of 99 values, and the 5,000 lists, and the list of them
+		self.assertEqual(1 + 5_000 + 5_000 * 99, 500_001)
+		self.assertIs(wizard._is_plain_data(many), False)
+		self.assertIs(wizard._is_plain_data(many[:-1]), True)
+
 	def test_a_rate_card_that_cannot_be_saved_is_refused_and_the_stored_one_stays(self):
 		seed_policy(card_policy(), active=True)
 		opened = wizard.wizard_state()

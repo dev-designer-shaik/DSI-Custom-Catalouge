@@ -633,7 +633,10 @@ def _is_plain_data(value) -> bool:
 	"""Is `value` plain data of a size a rate card has: dicts with text keys, lists, texts, numbers, True, False
 	and None, nested at most MAX_CARD_DEPTH deep and made of at most MAX_CARD_VALUES values in all? It looks
 	with a loop of its own, not by recursion, so a value nested a hundred thousand deep or one that holds
-	itself is answered, not tripped over; the first value it finds out of bounds ends it."""
+	itself is answered, not tripped over; the first value it finds out of bounds ends it.
+
+	The values still to be looked at are counted before they are queued, so a list or dict of millions of
+	values is refused by its size, without being copied onto the stack or looked through."""
 	stack, seen = [(value, 1)], 0
 	while stack:
 		current, depth = stack.pop()
@@ -641,13 +644,18 @@ def _is_plain_data(value) -> bool:
 		if seen > MAX_CARD_VALUES or depth > MAX_CARD_DEPTH:
 			return False
 		if isinstance(current, dict):
-			if not all(isinstance(key, str) for key in current):
-				return False
-			stack.extend((item, depth + 1) for item in current.values())
+			children = current.values()
 		elif isinstance(current, list):
-			stack.extend((item, depth + 1) for item in current)
-		elif not (current is None or isinstance(current, str | int | float | bool)):
+			children = current
+		elif current is None or isinstance(current, str | int | float | bool):
+			continue
+		else:
 			return False
+		if seen + len(stack) + len(children) > MAX_CARD_VALUES:
+			return False
+		if isinstance(current, dict) and not all(isinstance(key, str) for key in current):
+			return False
+		stack.extend((item, depth + 1) for item in children)
 	return True
 
 
