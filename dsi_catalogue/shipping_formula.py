@@ -325,13 +325,20 @@ def _variable(name, values):
 
 
 def _number_against_a_word(text):
-	"""(number, word) of the first number written straight against the word after it, as in `1if boxes else 2`,
-	else None. Python reads that, but warns and may refuse it in a later version, so whether a formula was
-	accepted would depend on the version and on the warning settings. Text the tokenizer cannot read is left
-	to the parser, which says what is wrong with it."""
+	"""(number, word) of the first number written straight against the word after it, else None.
+
+	The word is a keyword (`1if boxes else 2`: Python reads that, but warns and may refuse it in a later
+	version, so whether a formula was accepted would depend on the version and on the warning settings) or a
+	name (`2boxes`: a syntax error already). Which of the two it is decides what `_glued_problem` tells the
+	person to do about it.
+
+	The scan only improves a message, so it never decides anything by itself: if the tokenizer fails for any
+	reason (it refuses some texts, and CPython 3.12.3 raises a SystemError for a few with a NUL in them) the
+	answer is "nothing found", and the parser has the say, with its own message.
+	"""
 	try:
 		tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
-	except (tokenize.TokenError, SyntaxError, ValueError):  # a null byte is a ValueError before Python 3.12
+	except Exception:  # advisory only: whatever the tokenizer does, the parser has the say
 		return None
 	for number, word in itertools.pairwise(tokens):
 		if number.type == tokenize.NUMBER and word.type == tokenize.NAME and number.end == word.start:
@@ -353,20 +360,25 @@ def _syntax_problem(source, text, err):
 	blanks. Python counts from the first character of `text`, but the person typed `source`, so the blanks and
 	blank lines in front are counted again; a formula of more than one line names the line. Python's wording is
 	kept, except where it is jargon (a backslash escape is a "unicode error") or ends badly ("Perhaps you
-	forgot a comma?" would end "comma?.")."""
-	message = (err.msg or "").strip()
+	forgot a comma?" would end "comma?.").
+
+	The parser gives a str phrase and an int line and column, or None for a line and a column it does not know.
+	Anything else is read as "not known" too (no phrase, line 1, no position), so that a sentence always comes
+	out, here, where nothing catches a failure."""
+	message = err.msg.strip() if isinstance(err.msg, str) else ""
 	if message.startswith("(unicode error)"):  # a backslash escape, in a text a formula cannot hold anyway
 		return "The formula contains a backslash (\\), which cannot be used."
 	message = message.rstrip("?.") or "invalid syntax"
-	if not err.offset:  # Python gave no position
+	offset = err.offset if type(err.offset) is int and err.offset > 0 else 0
+	lineno = err.lineno if type(err.lineno) is int and err.lineno > 0 else 1
+	if not offset:  # Python gave no position
 		return f"The formula is not written correctly: {message}."
 	leading = source[: len(source) - len(source.lstrip())]
 	if "\n" not in text and "\r" not in text:
-		return f"The formula is not written correctly near character {err.offset + len(leading)}: {message}."
-	first_line = (err.lineno or 1) == 1
-	line = (err.lineno or 1) + leading.count("\n")
+		return f"The formula is not written correctly near character {offset + len(leading)}: {message}."
+	line = lineno + leading.count("\n")
 	# on the first line the blanks in front come before the column, after the last of any blank lines
-	column = err.offset + (len(leading) - (leading.rfind("\n") + 1) if first_line else 0)
+	column = offset + (len(leading) - (leading.rfind("\n") + 1) if lineno == 1 else 0)
 	return f"The formula is not written correctly near line {line}, character {column}: {message}."
 
 
@@ -391,6 +403,8 @@ def compile_formula(source: str) -> ast.Expression:
 		raise FormulaError("The formula contains a character that cannot be used.") from None
 	except (RecursionError, MemoryError):
 		raise FormulaError(_TOO_BIG) from None
+	except Exception as err:  # only FormulaError may come out of here, whatever else the parser might do
+		raise FormulaError("The formula could not be read.") from err
 	# Counted before the tree is walked, so the walks below never go deeper than MAX_NODES.
 	if sum(isinstance(node, ast.expr) for node in ast.walk(tree)) > MAX_NODES:
 		raise FormulaError(_TOO_BIG)
@@ -404,7 +418,7 @@ def evaluate(source: str, variables: dict[str, float]) -> float:
 	tree = compile_formula(source)
 	try:
 		value = _eval(tree.body, variables)
-	except FormulaError:  # first: FormulaError is a ValueError, so the clause below would eat it
+	except FormulaError:  # first: FormulaError is an Exception, so the last clause below would eat it
 		raise
 	except ZeroDivisionError:
 		raise FormulaError("The formula tries to divide by zero.") from None
@@ -412,7 +426,7 @@ def evaluate(source: str, variables: dict[str, float]) -> float:
 		raise FormulaError(_TOO_LARGE) from None
 	except (RecursionError, MemoryError):
 		raise FormulaError(_TOO_BIG) from None
-	except (TypeError, ValueError) as err:  # not expected once the tree is checked
+	except Exception as err:  # not expected once the tree is checked, but only FormulaError may come out
 		raise FormulaError("The formula could not be calculated.") from err
 	if isinstance(value, bool):
 		raise FormulaError(_YES_NO)

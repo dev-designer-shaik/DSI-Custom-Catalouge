@@ -3,10 +3,12 @@ whitelist (everything else is refused in plain words), the size limits, and that
 nothing a user types can reach eval/exec."""
 
 import ast
+import decimal
 import itertools
 import math
 import random
 import re
+import tokenize
 import warnings
 from pathlib import Path
 
@@ -801,6 +803,88 @@ def test_a_formula_the_scan_cannot_read_gets_the_parsers_message():
 		assert not message.startswith("Put a space"), (source, message)
 
 
+class TokenizerThatFails:
+	"""Stands in for the tokenize module inside shipping_formula only: generate_tokens fails with `failure`, either
+	when it is called or when the first token is asked for."""
+
+	NUMBER, NAME, TokenError = tokenize.NUMBER, tokenize.NAME, tokenize.TokenError
+
+	def __init__(self, failure, when_called):
+		self.failure, self.when_called = failure, when_called
+
+	def generate_tokens(self, readline):
+		if self.when_called:
+			raise self.failure
+		return self._tokens()
+
+	def _tokens(self):
+		yield from ()
+		raise self.failure
+
+
+TOKENIZER_FAILURES = [
+	SystemError("<built-in method __new__ of type object> returned a result with an exception set"),
+	RuntimeError("boom"),
+	MemoryError(),
+	RecursionError("too deep"),
+	OSError("disk"),
+	KeyError("key"),
+	UnicodeError("text"),  # the kinds the scan already caught keep working
+	IndentationError("indent"),
+	tokenize.TokenError("EOF in multi-line statement"),
+]
+
+
+@pytest.mark.parametrize("when_called", [True, False], ids=["when called", "when read"])
+@pytest.mark.parametrize("failure", TOKENIZER_FAILURES, ids=lambda failure: type(failure).__name__)
+def test_a_tokenizer_that_fails_for_any_reason_leaves_the_text_to_the_parser(
+	monkeypatch, failure, when_called
+):
+	"""The scan for a number against a word only improves a message, so it decides nothing: whatever the tokenizer
+	does (CPython 3.12.3 raises a SystemError for a few texts with a NUL in them), the parser has the say and only
+	FormulaError comes out, with the sentence the parser's error gives."""
+	not_glued = [
+		"carrier_price $",
+		"max(carrier_price",
+		"1 +* 2",
+		"'unclosed",
+		"carrier_price \\ 1",
+		"1 +\n\n  )",
+	]
+	valid = ["carrier_price * 1.1", "1 if boxes else 2", "max(carrier_price * 1.1, 45)"]
+	usual = {source: _refusal(source) for source in not_glued}  # with the real tokenizer
+	with monkeypatch.context() as patch:
+		patch.setattr(shipping_formula, "tokenize", TokenizerThatFails(failure, when_called))
+		for source in not_glued:
+			assert _refusal(source) == usual[source], source
+			with pytest.raises(FormulaError):
+				compile_formula(source)
+		for source in valid:
+			assert isinstance(compile_formula(source), ast.Expression)
+			assert check_formula(source) is None
+
+
+@pytest.mark.parametrize(
+	"source",
+	[
+		"x\n\t-\n\x00",
+		"x\n\t-\n\x00y",
+		"\x00",
+		"a\x00b",
+		"1\x00if",
+		"x\n\t-\n\x00\x00",
+		"carrier_price\n\t-\n\x00",
+	],
+	ids=repr,
+)
+def test_a_null_byte_never_gets_past_the_formula_errors(source):
+	"""The first two are the ones whose tokenizer scan raised a SystemError on CPython 3.12.3 (3.14 does not);
+	whatever Python does with a NUL, only FormulaError comes out of the three entry points."""
+	for call in (compile_formula, check_formula, lambda text: evaluate(text, SAMPLE)):
+		with pytest.raises(FormulaError):
+			call(source)
+
+
 def test_a_syntax_error_says_what_and_where():
 	message = _refusal("max(carrier_price")
 	assert "not written correctly" in message
@@ -927,6 +1011,49 @@ def test_the_sentence_around_a_syntax_error_says_where_in_what_was_typed(
 
 
 @pytest.mark.parametrize(
+	("source", "python_says", "lineno", "offset", "sentence"),
+	[
+		# The real parser gives a str, an int line and an int column, or None. Should a Python ever fill the error in
+		# differently, the person still gets a sentence (the same one as for no phrase, no line or no position).
+		pytest.param(
+			"x", 5, 1, 2, f"{NOT_WRITTEN} near character 2: invalid syntax.", id="a number for a phrase"
+		),
+		pytest.param(
+			"x", b"bytes", 1, 2, f"{NOT_WRITTEN} near character 2: invalid syntax.", id="bytes for a phrase"
+		),
+		pytest.param(
+			"x", ["boom"], 1, 2, f"{NOT_WRITTEN} near character 2: invalid syntax.", id="a list for a phrase"
+		),
+		pytest.param("x", "boom", 1, "2", f"{NOT_WRITTEN}: boom.", id="text for a column"),
+		pytest.param("x", "boom", 1, 2.0, f"{NOT_WRITTEN}: boom.", id="a float for a column"),
+		pytest.param("x", "boom", 1, (2, 3), f"{NOT_WRITTEN}: boom.", id="a tuple for a column"),
+		pytest.param("x", "boom", 1, -3, f"{NOT_WRITTEN}: boom.", id="a negative column"),
+		pytest.param(
+			"1 +\n2", "boom", "2", 3, f"{NOT_WRITTEN} near line 1, character 3: boom.", id="text for a line"
+		),
+		pytest.param(
+			"1 +\n2",
+			"boom",
+			2.0,
+			3,
+			f"{NOT_WRITTEN} near line 1, character 3: boom.",
+			id="a float for a line",
+		),
+		pytest.param(
+			"1 +\n2", "boom", -1, 3, f"{NOT_WRITTEN} near line 1, character 3: boom.", id="a negative line"
+		),
+		pytest.param("x", "(unicode error) odd", "1", "2", BACKSLASH, id="backslash with odd position types"),
+	],
+)
+def test_a_syntax_error_filled_in_with_other_types_still_gives_a_sentence(
+	monkeypatch, source, python_says, lineno, offset, sentence
+):
+	with monkeypatch.context() as patch:
+		patch.setattr(shipping_formula.ast, "parse", parse_that_fails(python_says, lineno, offset))
+		assert _refusal(source) == sentence
+
+
+@pytest.mark.parametrize(
 	"source",
 	[
 		"carrier_price $",
@@ -1007,6 +1134,48 @@ def test_calculation_failures_never_escape_as_another_exception(monkeypatch, err
 	with pytest.raises(FormulaError) as caught:
 		evaluate("carrier_price", SAMPLE)
 	assert "boom" not in str(caught.value)
+
+
+# What nobody expected of the stdlib: the promise is that only FormulaError comes out, so it is kept by what the
+# module catches (anything) and not by a list of what it has seen.
+UNEXPECTED = [
+	SystemError,
+	RuntimeError,
+	OSError,
+	KeyError,
+	AttributeError,
+	IndexError,
+	decimal.InvalidOperation,
+]
+
+
+@pytest.mark.parametrize("error", UNEXPECTED)
+def test_a_parser_that_fails_in_a_way_nobody_expected_still_gives_a_formula_error(monkeypatch, error):
+	def explode(*args, **kwargs):
+		raise error("boom")
+
+	with monkeypatch.context() as patch:
+		patch.setattr(shipping_formula.ast, "parse", explode)
+		for call in (compile_formula, check_formula, lambda text: evaluate(text, SAMPLE)):
+			with pytest.raises(FormulaError) as caught:
+				call("carrier_price")
+			assert str(caught.value) == "The formula could not be read."
+			assert isinstance(caught.value.__cause__, error), (
+				"the cause stays for whoever reads the traceback"
+			)
+
+
+@pytest.mark.parametrize("error", UNEXPECTED)
+def test_a_calculation_that_fails_in_a_way_nobody_expected_still_gives_a_formula_error(monkeypatch, error):
+	def explode(*args, **kwargs):
+		raise error("boom")
+
+	monkeypatch.setattr(shipping_formula, "_eval", explode)
+	for call in (check_formula, lambda text: evaluate(text, SAMPLE)):
+		with pytest.raises(FormulaError) as caught:
+			call("carrier_price")
+		assert str(caught.value) == "The formula could not be calculated."
+		assert isinstance(caught.value.__cause__, error), "the cause stays for whoever reads the traceback"
 
 
 def test_a_value_too_big_for_a_float_is_a_formula_error():
