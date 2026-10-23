@@ -2333,7 +2333,7 @@ def test_the_real_export_is_looked_up_late_so_a_machine_with_no_home_folder_stil
 		real_text("shopify_shipping_config.csv")
 	# a folder named in RATES_DIR does not need a home folder at all
 	monkeypatch.setenv("RATES_DIR", str(FIXTURES))
-	assert real_text("shopify_shipping_config_sample.csv").startswith("﻿Profile")
+	assert real_text("shopify_shipping_config_sample.csv").startswith("\ufeffProfile")
 	monkeypatch.setenv("RATES_DIR", str(FIXTURES / "nowhere"))
 	with pytest.raises(pytest.skip.Exception, match="nowhere"):
 		real_text("shopify_shipping_config.csv")
