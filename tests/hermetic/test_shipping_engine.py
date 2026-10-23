@@ -794,8 +794,14 @@ BAND_KEYS = (
 UNREADABLE_LIMITS = ["abc", "5", " ", True, False, [], {}, float("nan"), float("inf"), float("-inf"), 10**400]
 
 
+def limit_id(value):
+	"""A test id for a limit: its repr, except for the integer of 401 digits, which would be the id."""
+	too_big = isinstance(value, int) and not isinstance(value, bool) and abs(value) > 10**300
+	return "an integer too big for a float" if too_big else repr(value)
+
+
 @pytest.mark.parametrize("key", BAND_KEYS)
-@pytest.mark.parametrize("value", UNREADABLE_LIMITS, ids=repr)
+@pytest.mark.parametrize("value", UNREADABLE_LIMITS, ids=limit_id)
 def test_a_limit_that_cannot_be_read_means_the_rule_never_holds(key, value):
 	"""An unreadable limit is not "no limit": that would let the rule price orders it was never meant for (free,
 	perhaps). Where a setting cannot be read the answer is "no delivery", not a free one."""
@@ -827,7 +833,7 @@ def test_an_empty_or_zero_limit_is_still_no_limit(key, empty):
 	assert rule_matches(rule, make_order("AE", order_value=0.0, boxes=[], quotes=[]), [])
 
 
-@pytest.mark.parametrize("value", UNREADABLE_LIMITS, ids=repr)
+@pytest.mark.parametrize("value", UNREADABLE_LIMITS, ids=limit_id)
 def test_an_unreadable_limit_is_reported_once_and_is_left_out_of_the_wrong_way_round_check(value):
 	"""validate_policy still says "not a number" for it, and it cannot also make a band look inverted."""
 	for low_key, high_key in (
@@ -1319,9 +1325,8 @@ def test_a_quote_too_big_for_a_float_is_handed_back_when_off_and_dropped_when_on
 	big, fine = make_quote(amount, "big", "Huge"), make_quote(38.2, "ok", "Express")
 	order = make_order("AE", quotes=[big, fine])
 	off = {**example(), "active": False}
-	result = resolve(
-		off, order
-	)  # (not check_shape: it wants int and float amounts, and this hands back a Decimal)
+	# (not check_shape: it wants int and float amounts, and this hands back a Decimal)
+	result = resolve(off, order)
 	assert (result["policy_active"], result["offered"]) == (False, True)
 	assert [o["service_id"] for o in result["offers"]] == ["big", "ok"]
 	assert result["offers"][0]["amount"] is amount, "handed back exactly as it was posted"
@@ -1396,9 +1401,8 @@ def test_a_vast_integer_is_shown_as_a_phrase_in_the_sentences_that_name_it():
 	policy["zones"][1]["countries"].append(VAST)  # not a country code
 	policy["zones"][2]["countries"].append(VAST)  # Rest of world is Everywhere else, so it cannot list any
 	problems = validate_policy(policy)
-	assert len(problems) == 5, (
-		problems
-	)  # (the Everywhere-else zone gets two: not a code, and not allowed to list)
+	# (the Everywhere-else zone gets two: not a code, and not allowed to list)
+	assert len(problems) == 5, problems
 	assert [TOO_LARGE_TO_SHOW in problem for problem in problems] == [True] * 5, problems
 	assert any(problem.startswith('Zone "Rest of world" is set to Everywhere else') for problem in problems)
 
