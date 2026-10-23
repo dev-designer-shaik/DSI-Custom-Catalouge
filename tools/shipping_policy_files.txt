@@ -8,6 +8,7 @@
 # Pure modules (the native tests import them inside the erp2 container), the loader and the wizard's methods
 dsi_catalogue/shipping_engine.py
 dsi_catalogue/shipping_formula.py
+dsi_catalogue/shipping_integration_check.py
 dsi_catalogue/shipping_policy.py
 dsi_catalogue/shipping_policy_data.py
 dsi_catalogue/shipping_policy_wizard.py

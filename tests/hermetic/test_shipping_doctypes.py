@@ -538,6 +538,7 @@ def test_the_push_list_carries_the_modules_the_native_tests_import_and_the_fixtu
 		"shipping_rate_card",
 		"shipping_engine",
 		"shipping_policy_data",
+		"shipping_integration_check",
 		"shipping_policy",
 	):
 		assert f"dsi_catalogue/{module}.py" in listed

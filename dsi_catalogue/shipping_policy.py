@@ -18,14 +18,19 @@ every lookup is one query over what the guest listed, so the cost of a call is b
 cleaners.
 
 `build_order` is the one place a carrier order is assembled (cleaned inputs, item groups, order value, served
-flag). `price_delivery` and the wizard's Try an order both call it, so the live price and the preview
-cannot drift apart. Its lookups (`item_groups_for`, `order_value_for`, `country_is_served`,
-`served_country_codes`, `translate`) are plain functions, not open to guests.
+flag). `price_delivery` calls it for a carrier price, and so does the wizard's Try an order. Its lookups
+(`item_groups_for`, `order_value_for`, `country_is_served`, `served_country_codes`, `translate`) are plain
+functions, not open to guests.
 
 The rate card prices from what the ERP knows about each item, not from what the website posts: the product
-code (the index key of its Website Item) and the unit weight (`item_facts_for`, which `build_order` adds to
-the items when asked). In rate-card mode the carrier plays no part, so `price_delivery` reads nothing but the
-items: no cartons, quotes, item groups or order value, and not the carrier's tables.
+code (the index key of its Website Item) and the unit weight (`item_facts_for`). In rate-card mode the carrier
+plays no part, so `price_delivery` reads nothing but the items (no cartons, quotes, item groups or order value,
+and not the carrier's tables) and prices the lean order that `_card_order` makes. The wizard's Try an order
+builds its order with `build_order(..., item_facts=True)` instead, and also when a fallback may price the order
+from the card (`fallback_may_use_the_card`). So the live price and the preview are not made from one assembly of
+the order, and what keeps them from drifting apart are the `test_try_order_and_price_delivery_...` parity tests
+of `test_shipping_policy_wizard.py`: the saved policy, a rate-card policy, and a carrier policy whose fallback
+is the card, each priced by Try an order and by `price_delivery` and compared.
 
 Nothing is cached, here or in the quote path: every call reads the database again, so a policy change takes
 effect on the next call.
@@ -405,9 +410,12 @@ def _card_order(country_code, items) -> dict:
 	}
 
 
-def _fallback_may_use_the_card(policy) -> bool:
+def fallback_may_use_the_card(policy) -> bool:
 	"""Does this policy price an order from the rate card when the carrier cannot quote it? That is so when
-	the policy default is "Use the rate card", or the fallback of an enabled zone is."""
+	the policy default is "Use the rate card", or the fallback of an enabled zone is.
+
+	Public because the wizard's Try an order asks the same question of a draft, so that the preview reads the
+	item facts exactly when the live method does."""
 	if policy["default_fallback"]["method"] == "rate_card":
 		return True
 	return any(zone["enabled"] and zone["fallback"]["method"] == "rate_card" for zone in policy["zones"])
@@ -430,7 +438,7 @@ def _order_for(policy, country_code, items, boxes, quotes) -> dict:
 		clean_items(items),
 		clean_boxes(boxes),
 		clean_quotes(quotes),
-		item_facts=_fallback_may_use_the_card(policy),
+		item_facts=fallback_may_use_the_card(policy),
 	)
 
 
