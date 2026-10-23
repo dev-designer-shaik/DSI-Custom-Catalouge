@@ -24,12 +24,14 @@
 # Running it twice changes nothing the second time. It never runs a migration, never touches another app,
 # site or container, and restarts only the backend container, and only when asked.
 #
-# Step 3 does what `bench reload-doc dsi_catalogue doctype <name>` does (it calls frappe.reload_doc) but in
-# a small Python process of its own, because the bench command fails on erp2 with "Module dsi_catalogue not
-# found": bench maps a module to its app through sites/apps.txt, and on erp2 that file does not list
-# dsi_catalogue (nor dsi_shipping or dsi_lucky_draw), although the site has all three installed. The process
-# adds the modules of the app being reloaded to its own module map. If apps.txt is ever fixed it changes
-# nothing.
+# Step 3 does what `bench reload-doc dsi_catalogue doctype <name>` does (it calls frappe.reload_doc), but for
+# every listed doctype in one small Python process of its own: one connection to the site, a commit after each
+# reload, and a line for each saying whether it was loaded or was already current, which the bench command
+# does not print. Until 2026-10-22 the bench command could not be used on erp2 at all: bench maps a module to
+# its app through sites/apps.txt, and that file did not list dsi_catalogue, so the command failed with "Module
+# dsi_catalogue not found". The file has been fixed since. The process still adds the modules of the app being
+# reloaded to its own module map first, which changes nothing now and keeps the script working on a site whose
+# apps.txt lacks the app.
 
 # The commands sent over ssh are built here on purpose, from constants and from names that passed the allow-list.
 # shellcheck disable=SC2029
@@ -77,6 +79,8 @@ site, app, *reloads = sys.argv[1:]
 frappe.init(site=site, sites_path=".")
 frappe.connect()
 try:
+	# A safety net: a no-op on a site whose apps.txt lists the app (erp2's has since 2026-10-22), and what lets
+	# the reload work on one whose apps.txt does not.
 	for module in frappe.get_module_list(app):
 		frappe.local.module_app.setdefault(frappe.scrub(module), app)
 	for item in reloads:
