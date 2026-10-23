@@ -964,6 +964,44 @@ def test_formula_variables_are_the_order_totals():
 	assert amount_of(resolve(policy, order)) == 20.0
 
 
+def test_negative_measures_and_quantities_read_as_zero_and_never_take_anything_off_the_rest():
+	"""A carton of -5 kg does not take 5 kg off the next one, -4 items do not cancel 2, and a negative order
+	value is none: what the bands and the formulas see is never below zero."""
+	policy = example()
+	order = make_order(
+		"AE",
+		items=[make_item(qty=-4), make_item("P2", qty=2)],
+		order_value=-100.0,
+		boxes=[{"weight_kg": -5.0, "volume_l": -9.0}, {"weight_kg": 3.0, "volume_l": 4.0}],
+		quotes=[make_quote(20.0, boxes_quoted=2)],
+	)
+	seen = {
+		"weight_kg": 3.0,
+		"volume_l": 4.0,
+		"boxes": 2.0,
+		"item_count": 2.0,
+		"order_value + 5": 5.0,
+	}
+	for formula, value in seen.items():
+		policy["rules"][2] = make_rule(method="formula", formula=formula)
+		assert amount_of(resolve(policy, order)) == value, formula
+	# the bands read the same totals: the cartons that are there reach a lower edge, ...
+	assert holds(order, min_weight_kg=2.5, max_weight_kg=3.5)
+	assert holds(order, min_volume_l=3.5, max_volume_l=4.5)
+	# ... and nothing is ever less than zero, so an upper edge below zero is never reached
+	assert not holds(order, max_order_value=-1.0)
+	assert not holds(make_order(boxes=[{"weight_kg": -5.0, "volume_l": -9.0}]), max_weight_kg=-1.0)
+	# every other way to be below nothing, or to be no number, reads as nothing too
+	for junk in (-0.0, -1e-9, -1e300, None, "-5", True, float("nan")):
+		odd = make_order(
+			"AE", boxes=[{"weight_kg": junk, "volume_l": junk}], order_value=junk, items=[make_item(qty=junk)]
+		)
+		for formula in ("weight_kg", "volume_l", "item_count", "order_value"):
+			policy["rules"][2] = make_rule(method="formula", formula=formula)
+			amount = amount_of(resolve(policy, odd))
+			assert amount == 0.0 and math.copysign(1.0, amount) == 1.0, (junk, formula)
+
+
 # ---------------------------------------------------------------- failures, money and edges
 def test_a_failing_formula_goes_to_the_fallback_never_to_zero():
 	# validate_policy would refuse this formula (it divides by zero on the sample order, whose value is

@@ -45,7 +45,9 @@ when the carrier could not (steps 7 and 9). It gives the same offer as the rate 
 `fallback_offer` or `formula_error`, and a card that cannot price the order leaves it not offered.
 
 The weight and volume a rule's bands and a formula see are the sums over the cartons, rounded to six
-decimals. `boxes` is the number of cartons and `item_count` the sum of the item quantities.
+decimals. `boxes` is the number of cartons and `item_count` the sum of the item quantities. A carton's weight
+or volume, an item's quantity and the order value count as zero when they are negative or not a number, so
+none of these figures is ever below zero.
 
 Nothing here raises on a half-finished policy: the wizard prices an unfinished draft on every
 keystroke. Where a setting cannot be read the answer is "no delivery", not a free one.
@@ -270,17 +272,24 @@ def _in_zone(rule, zone):
 
 
 # ---------------------------------------------------------------- what the order looks like to a rule
+def _measure(value):
+	"""A weight, volume, quantity or order value as a float that is never below zero, and 0 when it is no number.
+	A negative one is a mistake (a carton of -5 kg), not a credit against the cartons that are there."""
+	number = _number(value)
+	return number if number is not None and number > 0 else 0.0
+
+
 def _totals(order):
-	"""The figures a rule's bands and a formula see, as plain floats (the names formulas use)."""
+	"""The figures a rule's bands and a formula see, as plain floats (the names formulas use), none below zero."""
 	boxes = [_as_dict(box) for box in _as_list(order.get("boxes"))]
 	items = [_as_dict(item) for item in _as_list(order.get("items"))]
 	return {
-		"order_value": _number(order.get("order_value")) or 0.0,
+		"order_value": _measure(order.get("order_value")),
 		# rounded so that 0.7 + 0.1, which floats make 0.7999999999999999, still reaches an edge of 0.8
-		"weight_kg": round(sum((_number(box.get("weight_kg")) or 0.0 for box in boxes), 0.0), 6),
-		"volume_l": round(sum((_number(box.get("volume_l")) or 0.0 for box in boxes), 0.0), 6),
+		"weight_kg": round(sum((_measure(box.get("weight_kg")) for box in boxes), 0.0), 6),
+		"volume_l": round(sum((_measure(box.get("volume_l")) for box in boxes), 0.0), 6),
 		"boxes": float(len(boxes)),
-		"item_count": sum((_number(item.get("qty")) or 0.0 for item in items), 0.0),
+		"item_count": sum((_measure(item.get("qty")) for item in items), 0.0),
 	}
 
 
