@@ -504,8 +504,12 @@ def _code(text):
 def _tidy_card(card):
 	"""The rate card with the numbers of each tier rounded as they are kept: prices to cents, weights to three
 	decimals. What is not a card (None) and the parts of a card that are not in the shape of one are left as
-	they are, for `validate_card` to say so, and nothing else in the card is looked into."""
-	if not isinstance(card, dict) or not isinstance(card.get("profiles"), list):
+	they are, for `validate_card` to say so, and nothing else in the card is looked into.
+
+	The rounding copies every profile, zone and tier, so the card is weighed first: one that is not plain data
+	of a card's size (`_is_plain_data`) cannot be saved anyway (`_unsavable_card` says so) and is left as it is,
+	uncopied. A copy of a card of two million empty tiers took 145 MB."""
+	if not isinstance(card, dict) or not isinstance(card.get("profiles"), list) or not _is_plain_data(card):
 		return card
 	decimals = {"from": _MEASURE, "to": _MEASURE, "price": _MONEY}
 
@@ -532,9 +536,9 @@ def _tidy_card(card):
 
 def _tidied(policy) -> dict:
 	"""The draft as the doctypes will hold it: names and codes without outer spaces, empty entries left out,
-	country codes in capitals, and every number rounded to the decimals of its field (those of the rate card
-	too). The draft itself is left as it is, and nothing the draft holds beyond the parts read here is looked
-	into."""
+	country codes in capitals, and every number rounded to the decimals of its field (those of a rate card that
+	can be saved too). The draft itself is left as it is, and nothing the draft holds beyond the parts read
+	here is looked into."""
 
 	def fallback(entry):
 		return None if entry is None else {**entry, "amount": _rounded(entry.get("amount"), _MONEY)}

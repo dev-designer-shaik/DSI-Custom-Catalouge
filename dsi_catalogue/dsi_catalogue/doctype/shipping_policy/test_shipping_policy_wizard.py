@@ -30,6 +30,7 @@ import os
 import random
 import string
 import sys
+import tracemalloc
 import types
 import unittest
 from contextlib import contextmanager, nullcontext, suppress
@@ -3181,6 +3182,29 @@ class TestRateCardDrafts(WizardTestCase):
 		self.assertEqual(1 + 5_000 + 5_000 * 99, 500_001)
 		self.assertIs(wizard._is_plain_data(many), False)
 		self.assertIs(wizard._is_plain_data(many[:-1]), True)
+
+	def test_a_card_too_big_to_save_is_refused_before_any_copy_of_it_is_made(self):
+		# A draft's card is read as it will be kept (each tier's price to the cent and weights to the gram), which
+		# copies every tier. The card is weighed first: one of two million empty tiers (6 MB as JSON) is refused
+		# by Review and Apply with the card's sentence, and no copy of it is made (that copy took 145 MB).
+		seed_policy(card_policy(), active=True)
+		opened = wizard.wizard_state()
+		before = snapshot()
+		card = copy.deepcopy(CARD)
+		card["profiles"][0]["zones"][0]["tiers"] = [{}] * 2_000_000
+		draft = {**opened["policy"], "rate_card": card}
+		tracemalloc.start()
+		try:
+			problems = wizard.preview_changes(draft)["problems"]
+			_, peak = tracemalloc.get_traced_memory()
+		finally:
+			tracemalloc.stop()
+		self.assertIn(UNSAVABLE, problems)
+		self.assertLess(peak, 20_000_000, "the card was not copied")
+		with self.assertRaises(frappe.ValidationError) as caught:
+			apply(draft)
+		self.assertIn(UNSAVABLE, messages(caught))
+		self.assertEqual(snapshot(), before)
 
 	def test_a_rate_card_that_cannot_be_saved_is_refused_and_the_stored_one_stays(self):
 		seed_policy(card_policy(), active=True)
