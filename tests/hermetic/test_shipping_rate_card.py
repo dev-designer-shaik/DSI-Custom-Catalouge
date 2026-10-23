@@ -38,6 +38,7 @@ from dsi_catalogue.shipping_rate_card import (
 	DEFAULT_ITEM_WEIGHT_KG,
 	KNOWN_PROFILES,
 	LB_PER_KG,
+	MAX_TEXT,
 	RateCardError,
 	card_summary,
 	classify_item,
@@ -2298,6 +2299,115 @@ def test_only_the_first_entries_of_an_oversized_list_are_inspected(kind):
 		assert len(problems) == 1, (extra, problems)
 		assert f"has {limit + extra} {noun}; at most {limit} are allowed." in problems[0], problems
 		check_shape(price_card(card, order("AB", item("X-1", 1.0))))  # and pricing from it copes too
+
+
+# ---------------------------------------------------------------- a text far over its limit
+LONG = 5_000_000  # characters: far past every limit
+QUOTED = '"' + "x" * 57 + '..."'  # how a sentence quotes such a text: cut to 60 characters, dots included
+
+
+def _long_country_code(card, text):
+	zone_of(card, "Dangerous Goods", "USA")["countries"].append(text)
+
+
+def _long_profile_name(card, text):
+	profile_of(card, "Dangerous Goods")["name"] = text
+
+
+def _long_zone_name(card, text):
+	set_in(card, "Dangerous Goods", "USA", name=text)
+
+
+def _long_pattern(card, text):
+	profile_of(card, "Dangerous Goods")["match"] = ["F-*", text]
+
+
+def _long_method(card, text):
+	set_in(card, "Dangerous Goods", "USA", method=text)
+
+
+# Where the long text goes, and the one sentence the card then gets (the same words as for a short one).
+LONG_TEXTS = {
+	"country code": (
+		_long_country_code,
+		f'Zone 1 ("USA") of profile 3 ("Dangerous Goods") lists {QUOTED}, which is not a country code (two '
+		"capital letters, such as US).",
+	),
+	"profile name": (_long_profile_name, f"Profile 3 ({QUOTED}) has a name longer than 140 characters."),
+	"zone name": (
+		_long_zone_name,
+		f'Zone 1 ({QUOTED}) of profile 3 ("Dangerous Goods") has a name longer than 140 characters.',
+	),
+	"pattern": (_long_pattern, 'Profile 3 ("Dangerous Goods"): pattern 2 is longer than 80 characters.'),
+	"method": (
+		_long_method,
+		'Zone 1 ("USA") of profile 3 ("Dangerous Goods") has a delivery method longer than 140 characters.',
+	),
+}
+
+
+@pytest.mark.parametrize("place", LONG_TEXTS)
+def test_a_text_far_over_its_limit_is_checked_by_its_first_characters_only(place, monkeypatch):
+	"""Reading a text character by character is what costs (a Python loop over 10 MB took 0.4 s), so the two
+	checks that do it see at most the limit and one character more: whether a name, pattern or method is plain
+	text (`_is_plain`, given at most 141 characters, the longest limit and one), and the printable copy that
+	`_quote` makes for a sentence (`_printable`, given at most 61). A 5 MB text then costs what a short one
+	does, and the sentence keeps its words."""
+	put_text, sentence = LONG_TEXTS[place]
+	seen = {"_is_plain": [], "_printable": []}  # the length of every text each one was given
+	for name, lengths in seen.items():
+		real = getattr(shipping_rate_card, name)
+
+		def spy(text, real=real, lengths=lengths):
+			lengths.append(len(text))
+			return real(text)
+
+		monkeypatch.setattr(shipping_rate_card, name, spy, raising=False)
+	card = sample_card()
+	put_text(card, "x" * LONG)
+	assert validate_card(card) == [sentence]
+	assert max(seen["_is_plain"]) <= MAX_TEXT + 1, seen["_is_plain"]
+	if QUOTED in sentence:  # the sentence quotes the text, so its printable copy was made, from the cut text
+		assert seen["_printable"] and max(seen["_printable"]) <= 61, seen["_printable"]
+	assert sum(seen["_is_plain"]) + sum(seen["_printable"]) < 10_000, "a short read in all"
+
+
+def test_a_long_pattern_is_read_for_plain_text_up_to_its_limit_and_one_character_more():
+	"""A pattern over 80 characters is reported as too long, and its first 81 characters say whether it is plain
+	text as well: a character it cannot use further on is found once the pattern is cut to size. Whether it is
+	nothing but asterisks (a catch-all) is still read from the whole pattern."""
+	too_long = 'Profile 3 ("Dangerous Goods"): pattern 2 is longer than 80 characters.'
+	card = sample_card()
+	patterns = profile_of(card, "Dangerous Goods")["match"]
+	patterns[:] = ["F-*", "A" * 80 + "\x00" + "B" * LONG]
+	assert validate_card(card) == [too_long, 'Profile 3 ("Dangerous Goods"): pattern 2 has to be plain text.']
+	patterns[:] = ["F-*", "A" * 81 + "\x00" + "B" * LONG]
+	assert validate_card(card) == [too_long]
+	patterns[:] = ["F-*", "*" * 81 + "B"]
+	assert validate_card(card) == [too_long], "asterisks first, but not only asterisks: no catch-all"
+	patterns[:] = ["F-*", "*" * LONG]
+	assert validate_card(card) == [
+		too_long,
+		'Profile 3 ("Dangerous Goods") matches every item (a pattern of *) but is not the last profile, so the '
+		"profiles after it would never be used.",
+		'Profile 4 ("Rest of the World Allowed Items") also matches every item (a pattern of *), like profile 3 '
+		'("Dangerous Goods"); only the first would ever be used.',
+	]
+
+
+def test_a_long_name_is_read_for_plain_text_up_to_its_limit_and_one_character_more():
+	"""The same for a name over 140 characters: reported as too long, and plain text or not by its first 141."""
+	card = sample_card()
+	quoted = '"' + "N" * 57 + '..."'
+	too_long, not_plain = (
+		f"Profile 3 ({quoted}) has a name longer than 140 characters.",
+		f"Profile 3 ({quoted}) has a name that is not plain text.",
+	)
+	profile = profile_of(card, "Dangerous Goods")
+	profile["name"] = "N" * 140 + "\x00" + "M" * LONG
+	assert validate_card(card) == [too_long, not_plain]
+	profile["name"] = "N" * 141 + "\x00" + "M" * LONG
+	assert validate_card(card) == [too_long]
 
 
 # ---------------------------------------------------------------- the real export, on this machine only

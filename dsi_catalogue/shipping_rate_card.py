@@ -142,9 +142,17 @@ def _is_plain(text):
 	return text.isprintable()
 
 
+def _printable(text):
+	"""`text` with anything unprintable shown as ?. It reads the text character by character, which is slow for
+	a long one (0.4 s for 10 MB), so it is given only the part a sentence shows."""
+	return "".join(char if char.isprintable() else "?" for char in text)
+
+
 def _quote(text, limit=60):
-	"""`text` in double quotes for a sentence: cut short, with anything unprintable shown as ?."""
-	text = "".join(char if char.isprintable() else "?" for char in text)
+	"""`text` in double quotes for a sentence: cut short, with anything unprintable shown as ?. Only its first
+	`limit` + 1 characters are read (one more than fits says whether it has to be cut), so a text of megabytes
+	costs what a short one does."""
+	text = _printable(text[: limit + 1])
 	return '"' + (text if len(text) <= limit else text[: limit - 3] + "...") + '"'
 
 
@@ -541,18 +549,21 @@ def _ref(label, position, name):
 
 
 def _check_name(subject, name, problems):
-	"""Report a name that is empty, too long or not plain text. `subject` is 'profile 2' or the like."""
+	"""Report a name that is empty, too long or not plain text. `subject` is 'profile 2' or the like. Whether a
+	name is plain text is read from its first MAX_TEXT + 1 characters: a longer one is reported as too long, and
+	what else is wrong further on is found once it is cut to size."""
 	if not name:
 		problems.append(f"{_cap(subject)} has no name.")
 		return
 	if len(name) > MAX_TEXT:
 		problems.append(f"{_cap(subject)} has a name longer than {MAX_TEXT} characters.")
-	if not _is_plain(name):
+	if not _is_plain(name[: MAX_TEXT + 1]):
 		problems.append(f"{_cap(subject)} has a name that is not plain text.")
 
 
 def _check_patterns(subject, profile, problems):
-	"""Report the profile's patterns that cannot be used. Returns True if one of them is only asterisks."""
+	"""Report the profile's patterns that cannot be used. Returns True if one of them is only asterisks. As for
+	a name, whether a pattern is plain text is read from its first MAX_PATTERN_LENGTH + 1 characters."""
 	patterns = _as_list(profile.get("match"))
 	if len(patterns) > MAX_PATTERNS:
 		problems.append(
@@ -569,14 +580,14 @@ def _check_patterns(subject, profile, problems):
 			problems.append(
 				f"{_cap(subject)}: pattern {number} is longer than {MAX_PATTERN_LENGTH} characters."
 			)
-		if not _is_plain(text):
+		if not _is_plain(text[: MAX_PATTERN_LENGTH + 1]):
 			problems.append(f"{_cap(subject)}: pattern {number} has to be plain text.")
 		if "{" in text or "}" in text:  # an item's code is matched without its braces, so this never matches
 			problems.append(
 				f"{_cap(subject)}: pattern {number} contains a brace. "
 				"Write the product code without braces, such as F-CR-XYZ-*."
 			)
-		catch_all = catch_all or set(text) == {"*"}
+		catch_all = catch_all or not text.strip("*")  # nothing but asterisks (it is not empty)
 	if not usable:
 		problems.append(f"{_cap(subject)} has no product code patterns, so it will never be used.")
 	return catch_all
