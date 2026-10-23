@@ -335,6 +335,28 @@ def _number_against_a_word(text):
 	return None
 
 
+def _syntax_problem(source, text, err):
+	"""The sentence for the SyntaxError that `ast.parse` raised for `text`, which is `source` without its outer
+	blanks. Python counts from the first character of `text`, but the person typed `source`, so the blanks and
+	blank lines in front are counted again; a formula of more than one line names the line. Python's wording is
+	kept, except where it is jargon (a backslash escape is a "unicode error") or ends badly ("Perhaps you
+	forgot a comma?" would end "comma?.")."""
+	message = (err.msg or "").strip()
+	if message.startswith("(unicode error)"):  # a backslash escape, in a text a formula cannot hold anyway
+		return "The formula contains a backslash (\\), which cannot be used."
+	message = message.rstrip("?.") or "invalid syntax"
+	if not err.offset:  # Python gave no position
+		return f"The formula is not written correctly: {message}."
+	leading = source[: len(source) - len(source.lstrip())]
+	if "\n" not in text and "\r" not in text:
+		return f"The formula is not written correctly near character {err.offset + len(leading)}: {message}."
+	first_line = (err.lineno or 1) == 1
+	line = (err.lineno or 1) + leading.count("\n")
+	# on the first line the blanks in front come before the column, after the last of any blank lines
+	column = err.offset + (len(leading) - (leading.rfind("\n") + 1) if first_line else 0)
+	return f"The formula is not written correctly near line {line}, character {column}: {message}."
+
+
 # ---------------------------------------------------------------- public API
 def compile_formula(source: str) -> ast.Expression:
 	"""Parse a formula and check it against the whitelist. Returns the checked tree."""
@@ -354,8 +376,7 @@ def compile_formula(source: str) -> ast.Expression:
 	try:
 		tree = ast.parse(text, mode="eval")
 	except SyntaxError as err:
-		where = f" near character {err.offset}" if err.offset else ""
-		raise FormulaError(f"The formula is not written correctly{where}: {err.msg}.") from None
+		raise FormulaError(_syntax_problem(source, text, err)) from None
 	except ValueError:  # Python before 3.12 refuses a null byte this way
 		raise FormulaError("The formula contains a character that cannot be used.") from None
 	except (RecursionError, MemoryError):

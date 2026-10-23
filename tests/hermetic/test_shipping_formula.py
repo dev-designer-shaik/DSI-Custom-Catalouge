@@ -638,6 +638,44 @@ def test_a_syntax_error_says_what_and_where():
 	assert "never closed" in message
 
 
+NOT_WRITTEN = "The formula is not written correctly"
+
+
+@pytest.mark.parametrize(
+	("source", "message"),
+	[
+		# the position counts what the person typed: leading blanks and blank lines too
+		("carrier_price $", f"{NOT_WRITTEN} near character 15: invalid syntax."),
+		("   carrier_price $", f"{NOT_WRITTEN} near character 18: invalid syntax."),
+		("\t\tcarrier_price $", f"{NOT_WRITTEN} near character 17: invalid syntax."),
+		("\n\ncarrier_price $", f"{NOT_WRITTEN} near character 17: invalid syntax."),
+		("\r\n  carrier_price $\r\n", f"{NOT_WRITTEN} near character 19: invalid syntax."),
+		# a formula of more than one line names the line, and counts the characters from its start
+		("carrier_price\n+ 1", f"{NOT_WRITTEN} near line 2, character 1: invalid syntax."),
+		("1 +\n\n  )", f"{NOT_WRITTEN} near line 3, character 3: unmatched ')'."),
+		("1 +\r\n2 )", f"{NOT_WRITTEN} near line 2, character 3: unmatched ')'."),
+		("\n\n1 +\n2 )", f"{NOT_WRITTEN} near line 4, character 3: unmatched ')'."),
+		("  max(1,\n  2", f"{NOT_WRITTEN} near line 1, character 6: '(' was never closed."),
+		# Python's own wording, made into a sentence
+		("max(1 2)", f"{NOT_WRITTEN} near character 5: invalid syntax. Perhaps you forgot a comma."),
+		("max(carrier_price", f"{NOT_WRITTEN} near character 4: '(' was never closed."),
+		(  # U+00D7, the multiplication sign, where an asterisk was meant
+			"carrier_price " + chr(0xD7) + " 2",
+			f"{NOT_WRITTEN} near character 15: invalid character '{chr(0xD7)}' (U+00D7).",
+		),
+		# a backslash escape is a "unicode error" to Python, and a backslash to a person
+		("'\\xZ'", "The formula contains a backslash (\\), which cannot be used."),
+		("1 + '\\N{nothing}'", "The formula contains a backslash (\\), which cannot be used."),
+		# no position known
+		("carrier_price if", f"{NOT_WRITTEN}: invalid syntax."),
+	],
+	ids=lambda value: repr(value)[:40],
+)
+def test_a_syntax_error_says_where_in_what_was_typed_and_in_plain_words(source, message):
+	assert _refusal(source) == message
+	assert "?." not in message and message.endswith("."), message
+
+
 def test_every_refusal_is_a_plain_sentence():
 	problems = ["carrier_price / 0", "carrier_price * 1e308 * 10", "carrier_price > 5", "round(1, 1.5)"]
 	for source in [*UNSAFE_SOURCES, *ALSO_REFUSED, *problems]:
