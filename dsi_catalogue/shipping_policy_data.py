@@ -263,9 +263,9 @@ def _flag(value):
 
 def _check(value):
 	"""A flag of a policy as the 1 or 0 a Check field holds, read the way the engine reads it (`not
-	policy.get("active")`): anything Python counts as true is 1, so "yes", "0" and 0.5 are 1 and 0, "", None
-	and [] are 0. A draft therefore saves with the flags it previewed with. (A database row is read the other
-	way round, by `_flag`.)"""
+	policy.get("active")`): anything Python counts as true is 1, so "yes", "0" and 0.5 are 1, and "", None and
+	[] are 0. A draft therefore saves with the flags it previewed with. (A database row is read the other way
+	round, by `_flag`.)"""
 	return 1 if value else 0
 
 
@@ -464,9 +464,9 @@ def rows_from_policy(policy: dict, country_names: dict[str, str]) -> dict:
 	`country_names` maps an ISO code (in either case) to its Country name; a code it has no name for is
 	written as the code, so that saving the row fails loudly rather than the country being lost quietly.
 	Flags become the 1 and 0 a database holds, read as the engine reads them (anything Python counts as true
-	is 1), Select codes become their labels (a code that has no label
-	is written as it is), the rate card becomes JSON text, and a rule row has a `name` only when the rule
-	has one. It does not raise on odd content.
+	is 1), Select codes become their labels (a code that has no label is written as it is), the rate card
+	becomes JSON text, and a rule row has a `name` only when the rule has one. It does not raise on odd
+	content.
 	"""
 	policy, names = _dict(policy), _upper_keys(country_names)
 	fallback = _dict(policy.get("default_fallback"))
