@@ -11,6 +11,7 @@ dsi_catalogue/shipping_formula.py
 dsi_catalogue/shipping_policy.py
 dsi_catalogue/shipping_policy_data.py
 dsi_catalogue/shipping_policy_wizard.py
+dsi_catalogue/shipping_rate_card.py
 
 # Doctypes: the JSON that bench reload-doc loads, the controllers, the native tests, the form script
 dsi_catalogue/dsi_catalogue/doctype/shipping_item_set/__init__.py
