@@ -26,8 +26,9 @@ written. A draft whose parts have the wrong types (a list given as text, a flag 
 is not one) is not read at all: it is "not in the expected shape".
 
 The desk shows a refusal as HTML, so the text people typed is escaped in the messages these methods raise.
-The sentences `preview_changes`, `check_formula` and `test_integration` return are plain text, for the page to
-show as text. The ones `import_rate_card` returns (its problems and notes) quote a file and are HTML-escaped.
+Everything they return is plain text, for the page to show with textContent (never as HTML): the sentences of
+`preview_changes`, `check_formula`, `import_rate_card` (which quote the file as it is, markup and all) and
+`test_integration`, and every name and value in the answers.
 
 `test_integration` is the one method that reaches out: it POSTs to the ERP's own price API and to the website
 whose address is kept in Storefront Settings, and nowhere else. See its docstring for what it never does.
@@ -335,7 +336,8 @@ def import_rate_card(config_csv, not_delivered_csv=None) -> dict:
 	the files, `problems` what stops the card from being applied: the card's own (`validate_card`), then a
 	sentence for each country code that is not a Country of the ERP, in the first zone of the card that lists it
 	and in the not-delivered list. `not_delivered_missing` lists those of the not-delivered countries. Each list
-	shows at most 50 sentences and then "And N more.". The sentences quote the files, so they are HTML-escaped.
+	shows at most 50 sentences and then "And N more.". The sentences quote the files as they are and are plain
+	text: the page shows them with textContent, never as HTML.
 
 	The draft is not changed: the page takes the card (and the not-delivered countries, as a Not shipped zone)
 	into its draft, and Apply is the only writer.
@@ -1121,9 +1123,9 @@ def _csv_text(value, what) -> str:
 	return value
 
 
-def _escaped_and_cut(sentences) -> list[str]:
-	"""At most MAX_LISTED sentences, HTML-escaped (they quote a file), and then how many more there are."""
-	shown = [escape_html(sentence) for sentence in sentences[:MAX_LISTED]]
+def _cut(sentences) -> list[str]:
+	"""At most MAX_LISTED sentences, as they are (plain text), and then how many more there are."""
+	shown = list(sentences[:MAX_LISTED])
 	if len(sentences) > MAX_LISTED:
 		shown.append(f"And {len(sentences) - MAX_LISTED} more.")
 	return shown
@@ -1135,8 +1137,8 @@ def _imported(card, not_delivered, missing, notes, problems) -> dict:
 		"not_delivered": not_delivered,
 		"not_delivered_missing": missing,
 		"summary": card_summary(card),
-		"notes": _escaped_and_cut(notes),
-		"problems": _escaped_and_cut(problems),
+		"notes": _cut(notes),
+		"problems": _cut(problems),
 	}
 
 

@@ -79,7 +79,7 @@ from dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy_ra
 from dsi_catalogue.shipping_engine import normalize_country, validate_policy
 from dsi_catalogue.shipping_policy import load_policy
 from dsi_catalogue.shipping_policy_data import response_from, snapshot_version
-from dsi_catalogue.shipping_rate_card import RateCardError, parse_shopify_export
+from dsi_catalogue.shipping_rate_card import RateCardError, parse_shopify_export, validate_card
 
 # These tests make their own zones and item sets. Without this, Frappe would first create test records for
 # everything the doctypes link to, and leave them on the site.
@@ -2305,7 +2305,7 @@ class TestImportRateCard(WizardTestCase):
 						"not_delivered_missing": [],
 						"summary": nothing_usable,
 						"notes": [],
-						"problems": [frappe.utils.escape_html(str(raised.exception))],
+						"problems": [str(raised.exception)],
 					},
 				)
 		self.assertTrue(imported("")["problems"][0].startswith("The rates file is empty"))
@@ -2316,9 +2316,7 @@ class TestImportRateCard(WizardTestCase):
 		answer = imported(CONFIG_CSV, "A,B\r\n1,2\r\n")
 		self.assertEqual((answer["not_delivered"], answer["problems"]), ([], []))
 		self.assertIn(
-			frappe.utils.escape_html(
-				'The not-delivered file has no "ISO-2" column, so no country was marked as not delivered.'
-			),
+			'The not-delivered file has no "ISO-2" column, so no country was marked as not delivered.',
 			answer["notes"],
 		)
 		self.assertEqual(snapshot(), before)
@@ -2390,32 +2388,53 @@ class TestImportRateCard(WizardTestCase):
 		self.assertEqual(answer["notes"][:50], every_note[:50])
 		self.assertEqual(answer["notes"][50], f"And {len(every_note) - 50} more.")
 
-	def test_import_escapes_what_the_file_says_in_the_sentences_it_returns(self):
-		name = '<b>Gulf & "co"</b>'
-		quoted = '"<b>Gulf & ""co""</b>"'
+	def test_import_carries_what_the_file_says_in_its_sentences_as_it_is(self):
+		# Every wizard return value is plain text, which the page shows with textContent: a name with markup in it
+		# is in the sentence as the file wrote it, not escaped (only what the methods raise goes through Frappe's
+		# message path, which shows HTML).
+		tag, markup = "<img src=x onerror=alert(1)>", "Gulf & <b>Co</b>"
 		config = csv_text(
-			f"Dangerous Goods,{quoted},1,ZZ - Nowhere,{EXPRESS_ROW},,,10",
-			f"Dangerous Goods,Odd,1,US - United States,{EXPRESS_ROW},,,<i>",
+			f"{tag},{markup},1,ZZ - Nowhere,{EXPRESS_ROW},0.01,2,10",
+			f"Dangerous Goods,{markup},1,US - United States,{EXPRESS_ROW},,,<i>",
 			f"Rest of the World Allowed Items,Worldwide,1,US - United States,{EXPRESS_ROW},0.01,2,40",
 		)
-		answer = imported(config, None)
-		# The card is data and keeps the name as it was written; the sentences about it are escaped.
-		self.assertEqual(answer["card"]["profiles"][0]["zones"][0]["name"], name)
+		answer = imported(config, "ISO-2,Country\r\nZZ,Nowhere\r\n")
+		# The card is data and has the names as they were written, and so do the sentences about it.
+		[unknown, *_rest] = answer["card"]["profiles"]
+		self.assertEqual((unknown["name"], unknown["zones"][0]["name"]), (tag, markup))
 		self.assertEqual(
 			answer["problems"],
 			[
-				frappe.utils.escape_html(
-					f"Country code ZZ in zone {name} (Dangerous Goods) is not a country in the ERP."
-				)
+				*validate_card(answer["card"]),
+				f"Country code ZZ in zone {markup} ({tag}) is not a country in the ERP.",
+				"Country code ZZ in the not-delivered list is not a country in the ERP.",
 			],
 		)
-		self.assertIn(
-			frappe.utils.escape_html('Row 3 was skipped: the price "<i>" is not a number.'), answer["notes"]
+		self.assertIn(tag, answer["problems"][0], "the card's own sentence about the profile")
+		self.assertEqual(
+			answer["notes"],
+			[
+				'Row 3 was skipped: the price "<i>" is not a number.',
+				f'Profile "{tag}" is not one of the known profiles, so it has no product code patterns yet. '
+				"It will not be used until patterns are added.",
+			],
 		)
 		for sentence in [*answer["problems"], *answer["notes"]]:
-			self.assertNotIn("<", sentence)
-			self.assertNotIn(">", sentence)
-		self.assertIn("&lt;b&gt;Gulf &amp; &quot;co&quot;&lt;/b&gt;", answer["problems"][0])
+			for entity in ("&lt;", "&gt;", "&amp;", "&quot;", "&#"):
+				self.assertNotIn(entity, sentence)
+		# A quote inside a name too (CSV writes it twice).
+		quoted = '"<b>Gulf & ""co""</b>"'
+		answer = imported(csv_text(f"Dangerous Goods,{quoted},1,ZZ - Nowhere,{EXPRESS_ROW},,,10"), None)
+		self.assertEqual(
+			answer["problems"][-1],
+			'Country code ZZ in zone <b>Gulf & "co"</b> (Dangerous Goods) is not a country in the ERP.',
+		)
+		# The sentence of a file that cannot be used at all is plain too.
+		answer = imported('Profile,"Zone <b>\r\nx')
+		self.assertEqual(answer["card"], None)
+		[problem] = answer["problems"]
+		self.assertNotIn("&", problem)
+		self.assertTrue(problem.startswith("The rates file could not be read as CSV"), problem)
 
 
 # ---------------------------------------------------------------- Try an order, Review and Apply with a rate card
