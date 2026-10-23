@@ -9,6 +9,7 @@ the resolver that looks host names up.
 """
 
 import ast
+import inspect
 import ipaddress
 import json
 import socket
@@ -604,11 +605,23 @@ def test_localhost_is_allowed_only_as_that_literal_name_and_is_not_looked_up(add
 	assert resolver.calls == [], "localhost is not looked up"
 
 
-def test_the_default_resolver_is_the_standard_one_and_is_used_for_a_real_lookup():
-	# Only the signature is checked: a hermetic test makes no network call.
-	import inspect
+def test_the_default_resolver_is_the_standard_one_and_what_it_really_answers_is_read():
+	default = inspect.signature(check_website_url).parameters["resolver"].default
+	assert default is socket.getaddrinfo
+	asked = []
 
-	assert inspect.signature(check_website_url).parameters["resolver"].default is socket.getaddrinfo
+	def really_at_localhost(host, port, *rest, **more):
+		# A real lookup through the default resolver, of the one name every machine knows without a network (it
+		# is in /etc/hosts). What it hands back, a list of tuples with the address at [4][0], is what the guard
+		# reads; the name of the address under test is only noted.
+		asked.append((host, port))
+		return default("localhost", port)
+
+	assert check_website_url("https://shop.example.com/", resolver=really_at_localhost) == (
+		False,
+		"The website address resolves to a private or local network address.",
+	)
+	assert asked == [("shop.example.com", 443)]
 
 
 # ---------------------------------------------------------------- what may be shown of a response
