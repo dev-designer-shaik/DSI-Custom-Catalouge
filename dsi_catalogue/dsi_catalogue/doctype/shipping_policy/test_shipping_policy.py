@@ -7,6 +7,7 @@ This module also holds the helpers that every native test of the feature shares:
 	seed_policy()     creates a policy through normal documents (zones, item sets, then the policy)
 	wipe_policy()     removes everything the tests made and puts the single back to never saved
 	country_name()    the Country name behind an ISO code on this site
+	recode()          gives a Country another code until the test ends
 	zone_of(), rule_of(), policy_of()    a zone, a rule and a whole policy in the shape the engine reads
 	find_items()      real items of the site to order: inside or outside the watches, priced or not
 	as_guest()        runs a block as the Guest the website calls the guest methods as
@@ -33,7 +34,7 @@ import frappe
 import orjson
 from frappe.model.document import Document
 from frappe.tests.classes.integration_test_case import IntegrationTestCase
-from frappe.utils import add_days, add_to_date, flt, now_datetime, nowdate
+from frappe.utils import add_days, add_to_date, escape_html, flt, now_datetime, nowdate
 
 from dsi_catalogue import shipping_policy
 from dsi_catalogue.shipping_policy import load_policy
@@ -71,6 +72,13 @@ def country_name(code: str) -> str:
 def _country_names() -> dict:
 	rows = frappe.get_all("Country", fields=["name", "code"])
 	return {row["code"].upper(): row["name"] for row in rows if row["code"]}
+
+
+def recode(test, name: str, code) -> None:
+	"""Give the Country `name` another code (None for none) until the test ends."""
+	was = frappe.db.get_value("Country", name, "code")
+	test.addCleanup(frappe.db.set_value, "Country", name, "code", was, update_modified=False)
+	frappe.db.set_value("Country", name, "code", code, update_modified=False)
 
 
 def _stored_item_group(name: str) -> str:
@@ -327,14 +335,15 @@ class TestShippingPolicy(ShippingPolicyTestCase):
 		self.assertEqual(frappe.get_doc(POLICY).rules[-1].enabled, 0)
 
 	def test_policy_refuses_an_inverted_band_and_a_bad_formula_with_plain_messages(self):
-		seed_policy(load_example())
+		seed_policy(load_example(), active=True)
 		policy = frappe.get_doc(POLICY)
 		policy.append("rules", {"zone": "GCC", "min_weight_kg": 5, "max_weight_kg": 2})
 		policy.append("rules", {"zone": "GCC", "method": "Custom formula", "formula": "carrier_price ** 2"})
 		with self.assertRaises(frappe.ValidationError) as caught:
 			policy.save()
 		messages = self.messages_of(caught.exception)
-		# Both rows are new, so both are disabled: a rule is checked whether or not it is switched on.
+		# Both rows are new, so both are disabled: while the policy is on, a rule is checked whether or not it is
+		# switched on itself.
 		self.assertTrue(
 			messages[0].startswith("Rule 5 has its limits on weight the wrong way round"), messages
 		)
@@ -343,7 +352,7 @@ class TestShippingPolicy(ShippingPolicyTestCase):
 		self.assertEqual(len(frappe.get_doc(POLICY).rules), 4, "nothing was saved")
 
 	def test_policy_refuses_a_custom_formula_with_no_formula(self):
-		seed_policy(load_example())
+		seed_policy(load_example(), active=True)
 		policy = frappe.get_doc(POLICY)
 		policy.append("rules", {"zone": "GCC", "method": "Custom formula"})
 		with self.assertRaises(frappe.ValidationError) as caught:
@@ -352,8 +361,75 @@ class TestShippingPolicy(ShippingPolicyTestCase):
 			self.messages_of(caught.exception), ["Rule 5 charges by formula but has no formula."]
 		)
 
+	def test_a_policy_that_is_off_is_never_blocked_from_saving(self):
+		# While the policy is off it changes no customer's price (the carrier's quotes pass through), so its
+		# content is not checked at all: switching it off and editing it always work, even when a zone lists a
+		# country whose code went bad or a rule is half filled. Every road back on is checked: saving it on is
+		# refused until the problems are fixed.
+		seed_policy(load_example(), active=True)
+		recode(self, country_name("AE"), "are")  # the GCC zone now lists a code that is not two letters
+		policy = frappe.get_doc(POLICY)
+		policy.active = 0
+		policy.save()
+		self.assertFalse(load_policy()["active"], "switched off")
+		policy = frappe.get_doc(POLICY)
+		policy.rules[0].label = "Edited while off"
+		policy.append("rules", {"zone": "GCC", "method": "Custom formula"})  # no formula yet
+		policy.save()
+		rules = load_policy()["rules"]
+		self.assertEqual(
+			(len(rules), rules[0]["label"], rules[4]["method"]), (5, "Edited while off", "formula")
+		)
+		policy = frappe.get_doc(POLICY)
+		policy.active = 1
+		with self.assertRaises(frappe.ValidationError) as caught:
+			policy.save()
+		self.assertEqual(
+			self.messages_of(caught.exception),
+			[
+				escape_html('Zone "GCC" lists "ARE", which is not a two-letter country code.'),
+				"Rule 5 charges by formula but has no formula.",
+			],
+		)
+		self.assertFalse(load_policy()["active"], "still off")
+
+	def test_numbers_are_checked_as_they_are_stored(self):
+		# Weight and volume limits keep three decimals and amounts two, so a weight band typed as 2.0001 up to
+		# 2.0004 kg is stored as 2 up to 2, and it is checked as that: the wrong way round.
+		seed_policy(load_example(), active=True)
+		policy = frappe.get_doc(POLICY)
+		policy.append("rules", {"zone": "GCC", "min_weight_kg": 2.0001, "max_weight_kg": 2.0004})
+		with self.assertRaises(frappe.ValidationError) as caught:
+			policy.save()
+		self.assertEqual(
+			self.messages_of(caught.exception),
+			[
+				escape_html(
+					'Rule 5 has its limits on weight the wrong way round: from 2 up to 2. "Up to" has to be '
+					'higher than "from".'
+				)
+			],
+		)
+		# What is saved is what was checked, on the policy and on its rules.
+		policy = frappe.get_doc(POLICY)
+		policy.default_fallback_amount = 12.3456
+		policy.append(
+			"rules",
+			{"zone": "GCC", "method": "Free", "min_order_value": 99.996, "max_weight_kg": 2.0016},
+		)
+		policy.save()
+		self.assertEqual(
+			(policy.default_fallback_amount, policy.rules[4].min_order_value, policy.rules[4].max_weight_kg),
+			(12.35, 100.0, 2.002),
+		)
+		stored = load_policy()
+		self.assertEqual(stored["default_fallback"]["amount"], 12.35, "the single keeps its values as text")
+		self.assertEqual(
+			(stored["rules"][4]["min_order_value"], stored["rules"][4]["max_weight_kg"]), (100.0, 2.002)
+		)
+
 	def test_messages_escape_what_people_typed_and_what_the_checker_says(self):
-		seed_policy(load_example())
+		seed_policy(load_example(), active=True)
 		# The example already has an enabled Everywhere else zone. The form refuses a second one; a draft
 		# that the wizard has validated is let through, and the policy's own check then names both.
 		zone = frappe.get_doc({"doctype": "Shipping Zone", "zone_name": "Gulf & Co", "everywhere_else": 1})

@@ -3,7 +3,14 @@
 Saving it checks the whole policy, not only its own fields: the policy as it would be after this save
 (these rules, with the saved zones and item sets) goes through `validate_policy`, so a rule that names a
 missing zone, a band the wrong way round or a formula that cannot run is refused with a plain sentence.
-Every rule is checked, enabled or not, so a half-filled rule is never stored.
+While the policy is on, every rule is checked, enabled or not, so a half-filled rule is never stored. The
+numbers are checked as they are stored: rounded to the decimals their fields keep, so a weight band typed as
+2.0001 up to 2.0004 kg is the 2 up to 2 it would be kept as.
+
+A policy that is off is not checked at all. It changes no customer's price (the carrier's quotes pass through
+as they are), so switching it off, and editing it while it is off, always work, even when a zone or the
+stored card has gone bad. Every road back on is checked: saving the policy on is refused until the problems
+are fixed, and the wizard checks its whole draft before it writes and the written policy after.
 
 The rate card is stored on it as JSON text, and the text is read first: the loader reads text that is not
 JSON as no card at all, which would send the person to the wrong sentence ("there is no rate card yet").
@@ -15,7 +22,7 @@ import json
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import escape_html
+from frappe.utils import cint, escape_html
 
 from dsi_catalogue.shipping_engine import validate_policy
 from dsi_catalogue.shipping_policy import load_policy
@@ -48,6 +55,11 @@ def stored_card_problem(value) -> str | None:
 
 class ShippingPolicy(Document):
 	def validate(self):
+		self.round_floats_in(self)
+		for rule in self.rules:
+			self.round_floats_in(rule)
+		if not cint(self.active):  # read as the database will keep it
+			return
 		unreadable = stored_card_problem(self.rate_card)
 		problems = [unreadable] if unreadable else validate_policy(load_policy(overrides=self.as_dict()))
 		if problems:

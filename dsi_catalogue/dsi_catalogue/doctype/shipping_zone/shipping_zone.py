@@ -1,13 +1,16 @@
 """Shipping Zone: a named group of countries whose delivery is priced by the same rules.
 
-A country can be in only one enabled zone, and at most one enabled zone is Everywhere else. Zone names
-and country names are typed by people, so they are escaped before they go into a message.
+A zone lists only countries that have a two-letter code, because the policy finds a country by its code. A
+country can be in only one enabled zone, and at most one enabled zone is Everywhere else. Zone names and
+country names are typed by people, so they are escaped before they go into a message.
 """
 
 import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import escape_html
+
+from dsi_catalogue.shipping_engine import normalize_country
 
 
 def _bold(text):
@@ -17,7 +20,9 @@ def _bold(text):
 class ShippingZone(Document):
 	def validate(self):
 		self.zone_name = (self.zone_name or "").strip()
+		self.round_floats_in(self)  # the fallback amount as it is stored, to the cent
 		self.check_everywhere_else_lists_no_countries()
+		self.check_countries_have_two_letter_codes()
 		# `apply_policy` (the wizard) checks the two rules below across the whole draft with
 		# `validate_policy`, then saves the zones one by one inside one transaction. Checked one zone at a
 		# time, a valid draft that moves a country from one zone to another would be refused half way.
@@ -36,6 +41,38 @@ class ShippingZone(Document):
 					"Remove its countries, or turn Everywhere else off."
 				).format(_bold(self.zone_name))
 			)
+
+	def check_countries_have_two_letter_codes(self):
+		"""A Country with no code, or with a code that is not two letters (gbr), could never be matched to an
+		order. Checked in every zone, enabled or not, and in a draft the wizard has validated as well: the wizard
+		checks the codes it was sent, not the Country records behind them."""
+		names = list(dict.fromkeys(row.country for row in self.countries if row.country))
+		if not names:
+			return
+		codes = dict(
+			frappe.get_all("Country", filters={"name": ["in", names]}, fields=["name", "code"], as_list=True)
+		)
+		lines = []
+		for name in names:
+			code = codes.get(name)
+			if normalize_country(code):
+				continue
+			if isinstance(code, str) and code.strip():
+				lines.append(
+					_("{0} has the country code {1}, which is not two letters.").format(
+						_bold(name), _bold(code)
+					)
+				)
+			else:
+				lines.append(_("{0} has no country code.").format(_bold(name)))
+		if lines:
+			lines.append(
+				_(
+					"A zone can list only countries that have a two-letter code: give the country its code in "
+					"the Country list, or remove it from the zone."
+				)
+			)
+			frappe.throw("<br>".join(lines))
 
 	def check_country_is_in_one_enabled_zone(self):
 		"""An enabled zone may not list a country that another enabled zone lists. A disabled zone may."""

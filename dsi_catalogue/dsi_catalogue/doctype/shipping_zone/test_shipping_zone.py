@@ -6,20 +6,31 @@ The helpers and the clean-site guard are in the Shipping Policy's test module.
 """
 
 import frappe
+from frappe.utils import escape_html
 
 from dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy import (
 	ShippingPolicyTestCase,
 	country_name,
+	recode,
 )
 
 # These tests list Country names directly; Frappe need not make test records for Country first.
 IGNORE_TEST_RECORD_DEPENDENCIES = ["Country"]
+
+TWO_LETTER_CODES = (
+	"A zone can list only countries that have a two-letter code: give the country its code in the Country list, "
+	"or remove it from the zone."
+)
 
 
 def zone(name, countries=(), **fields):
 	"""A Shipping Zone document, not yet saved. `countries` are ISO codes."""
 	rows = [{"country": country_name(code)} for code in countries]
 	return frappe.get_doc({"doctype": "Shipping Zone", "zone_name": name, "countries": rows, **fields})
+
+
+def bold(text):
+	return frappe.bold(escape_html(text))
 
 
 class TestShippingZone(ShippingPolicyTestCase):
@@ -112,3 +123,49 @@ class TestShippingZone(ShippingPolicyTestCase):
 			zone("Islands", ["BH"]).insert()
 		self.assertIn("Gulf &amp; Co", str(caught.exception))
 		self.assertNotIn("Gulf & Co", str(caught.exception))
+
+	def test_a_zone_lists_only_countries_with_a_two_letter_code(self):
+		# The policy finds a country by its two-letter code, so a Country with no code, or with a code such as gbr,
+		# could never be matched to an order: it is refused in every zone, enabled or not, and also in a draft the
+		# wizard has validated (the wizard checks the codes it was sent, not the Country records behind them).
+		britain, oman, france = country_name("GB"), country_name("OM"), country_name("FR")
+		recode(self, britain, "gbr")
+		recode(self, france, None)
+		refusal = "<br>".join(
+			[
+				f"{bold(britain)} has the country code {bold('gbr')}, which is not two letters.",
+				f"{bold(france)} has no country code.",
+				TWO_LETTER_CODES,
+			]
+		)
+		for fields, validated in (({}, False), ({"enabled": 0}, False), ({}, True)):
+			with self.subTest(fields=fields, validated=validated):
+				europe = frappe.get_doc(
+					{
+						"doctype": "Shipping Zone",
+						"zone_name": "Europe",
+						"countries": [{"country": name} for name in (britain, oman, france)],
+						**fields,
+					}
+				)
+				europe.flags.policy_draft_validated = validated
+				with self.assertRaises(frappe.ValidationError) as caught:
+					europe.insert()
+				self.assertEqual(str(caught.exception), refusal)
+		self.assertFalse(frappe.db.exists("Shipping Zone", "Europe"))
+		# A zone saved before its country lost its code is refused on its next save, until the country is fixed.
+		gulf = zone("Gulf", ["OM"]).insert()
+		recode(self, oman, "")
+		gulf.customer_line = "Gulf delivery."
+		with self.assertRaises(frappe.ValidationError) as caught:
+			gulf.save()
+		self.assertEqual(str(caught.exception), f"{bold(oman)} has no country code.<br>{TWO_LETTER_CODES}")
+		recode(self, oman, " om ")  # read as OM, as the policy reads it
+		frappe.get_doc("Shipping Zone", "Gulf").update({"customer_line": "Gulf delivery."}).save()
+		self.assertEqual(frappe.db.get_value("Shipping Zone", "Gulf", "customer_line"), "Gulf delivery.")
+
+	def test_the_fallback_amount_is_kept_to_the_cent(self):
+		# The field keeps two decimals, so the saved zone holds the amount the database stores.
+		gulf = zone("Gulf", ["BH"], fallback_method="Charge a fixed amount", fallback_amount=12.3456).insert()
+		self.assertEqual(gulf.fallback_amount, 12.35)
+		self.assertEqual(frappe.db.get_value("Shipping Zone", "Gulf", "fallback_amount"), 12.35)

@@ -351,7 +351,7 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 	# -------------------------------------------------------------- the policy refuses a bad card
 	def test_policy_refuses_invalid_rate_card_json_and_card_problems_in_plain_words(self):
 		seed_policy(
-			policy_of([zone_of("Gulf", ["AE"])], [rule_of("Gulf")], price_source="carrier"), active=False
+			policy_of([zone_of("Gulf", ["AE"])], [rule_of("Gulf")], price_source="carrier"), active=True
 		)
 		before = shipping_policy.load_policy()
 		not_json = "The stored rate card is not valid JSON. Import the rates again in the wizard."
@@ -416,7 +416,7 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 	def test_a_zone_that_uses_the_rate_card_needs_one_when_the_policy_is_saved(self):
 		zone = zone_of("Gulf", ["AE"], fallback={"method": "rate_card", "amount": 0.0})
 		with self.assertRaises(frappe.ValidationError) as caught:
-			seed_policy(policy_of([zone], [rule_of("Gulf")]), active=False)
+			seed_policy(policy_of([zone], [rule_of("Gulf")]), active=True)
 		self.assertEqual(
 			caught.exception.args[0],
 			sentences(
@@ -425,6 +425,26 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 				]
 			),
 		)
+
+	def test_a_policy_that_is_off_keeps_a_card_it_cannot_read_and_is_not_switched_on_with_it(self):
+		# While the policy is off nothing of its content is checked, the stored card included: a card that is not
+		# JSON is kept as it was typed (the loader reads it as no card, and an off policy prices nothing). Saving
+		# the policy on is refused until the card is fixed.
+		seed_policy(
+			policy_of([zone_of("Gulf", ["AE"])], [rule_of("Gulf")], price_source="carrier"), active=True
+		)
+		frappe.get_doc(POLICY).update({"active": 0, "rate_card": "{not json"}).save()
+		self.assertEqual(frappe.db.get_single_value(POLICY, "rate_card"), "{not json")
+		self.assertIsNone(shipping_policy.load_policy()["rate_card"])
+		policy = frappe.get_doc(POLICY)
+		policy.active = 1
+		with self.assertRaises(frappe.ValidationError) as caught:
+			policy.save()
+		self.assertEqual(
+			caught.exception.args[0],
+			["The stored rate card is not valid JSON. Import the rates again in the wizard."],
+		)
+		self.assertFalse(shipping_policy.load_policy()["active"])
 
 	# -------------------------------------------------------------- item facts
 	def test_item_facts_read_the_index_key_and_the_unit_weight(self):
