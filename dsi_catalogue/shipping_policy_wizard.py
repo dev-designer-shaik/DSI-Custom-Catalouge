@@ -390,11 +390,22 @@ def test_integration(order=None) -> dict:
 
 	A call has 15 seconds in all, is sent with no cookie, no credential and no header but its content type,
 	and has at most 64 KB of the answer read. Only the fields the summaries name, and `detail` (the answer
-	cut to 4 KB with every key that looks like a secret dropped), come back. Nothing is written. A call that
-	fails or gives nonsense is an answer, not an error; only an unexpected error stops a check, and is then
-	written to the Error Log once (the callee `price_delivery` may also write its own throttled formula-error
-	entry, as for any customer). The `verdict` says in one sentence what customers are charged and whether
-	the website follows the policy. It takes POST requests only: it sends this server out to the network.
+	cut to 4 KB with every key that looks like a secret dropped), come back. A call that fails or gives
+	nonsense is an answer, not an error. The `verdict` says in one sentence what customers are charged and
+	whether the website follows the policy. It takes POST requests only: it sends this server out to the
+	network.
+
+	It writes no document. It can leave rows in the Error Log, a table that nothing rolls back, and these are
+	all there is:
+	- the callee `price_delivery` (check 1, over HTTP and in this process) writes its throttled "Shipping
+	  policy formula error" row when a rule's formula fails for the sample order, as for any customer;
+	- the callee `dsi_shipping.api.get_shipping_rates` (check 2) writes "get_shipping_rates: <service> failed,
+	  skipping" for each service whose carrier call fails, and the Aramex adapter writes "Aramex
+	  CalculateRate Failed": about two rows for each Aramex service that serves the destination while the
+	  account is blocked. The check then says the carrier returned no rates and points at those rows; their
+	  text, which can hold what the provider sent back, is never passed on;
+	- an unexpected exception in a check is written once, titled "shipping policy integration test failed",
+	  with Frappe's usual copy of the request's form data, which here is only the optional `order` override.
 	"""
 	frappe.only_for("System Manager")
 	sample = _integration_sample(order)
