@@ -1547,6 +1547,69 @@ def test_the_verdict_when_the_price_source_is_the_carrier():
 	)
 
 
+def website_troubles():
+	"""Website checks that did not work out, and none of them a 429: nothing came back, nonsense came back, an
+	error status, a redirect, no method at all, and a check that stopped on an error."""
+	return {
+		"no answer": summarize_website_response(None, 15000, None, None, problem="timeout"),
+		"unreachable": summarize_website_response(None, 5, None, None, problem="unreachable"),
+		"unreadable": summarize_website_response(200, 5, None, None, problem="unreadable"),
+		"too large": summarize_website_response(200, 5, None, None, problem="too_large"),
+		"an error status": summarize_website_response(
+			500, 5, {"error": "Failed to fetch shipping rates"}, None
+		),
+		"a refusal": summarize_website_response(400, 5, {"success": False, "error": "Cart is empty"}, None),
+		"a redirect": summarize_website_response(302, 5, None, None),
+		"no methods": summarize_website_response(200, 5, {"success": True, "methods": []}, None),
+		"an unexpected failure": unexpected_failure("website", 5),
+	}
+
+
+def carrier_mode_checks():
+	"""The ERP's check for a policy that is off, and for one that is on with the carrier as its price source."""
+	off = erp_check(policy_active=False, price_source="carrier", offered=False, offers=[], reason=None)
+	carrier_source = erp_check(price_source="carrier", reason="fallback_offer")
+	return {
+		"off": (off, "The shipping policy is switched off, so customers pay the carrier's own prices."),
+		"carrier": (
+			carrier_source,
+			"The price source is the carrier, so customers pay the carrier's price through the policy's rules.",
+		),
+	}
+
+
+@pytest.mark.parametrize("mode", ["off", "carrier"])
+def test_the_verdict_names_a_website_that_did_not_work_out_when_the_carrier_prices_the_order(mode):
+	erp, said = carrier_mode_checks()[mode]
+	for what, site in website_troubles().items():
+		assert verdict_for([erp, carrier_check(), site]) == (
+			f"{said[:-1]}, but the website did not give a usable answer (see the third check)."
+		), what
+	not_asked = website_not_asked("The website address has to start with https://.")
+	assert verdict_for([erp, carrier_check(), not_asked]) == (
+		f"{said[:-1]}; the website was not asked because its address is not usable (see the third check)."
+	)
+
+
+@pytest.mark.parametrize("mode", ["off", "carrier"])
+def test_the_verdict_for_a_carrier_priced_order_is_what_it_was_when_the_website_is_no_trouble(mode):
+	erp, said = carrier_mode_checks()[mode]
+	assert verdict_for([erp, carrier_check(), website_check(None, erp_amount=None)]) == said
+	# A 429 is the site limiting how often the check may be made: it says nothing about the website.
+	limited = summarize_website_response(429, 120, {"error": "Too many requests"}, None)
+	assert verdict_for([erp, carrier_check(), limited]) == said
+	# Without rates from the carrier it is the carrier that is the trouble, whatever the website did.
+	none = summarize_carrier_response({"success": True, "rates": []})
+	expected = (
+		"The shipping policy is switched off and the carrier returns no rates, so customers see no delivery "
+		"method."
+		if mode == "off"
+		else NO_RATES_ON_THE_CARRIER
+	)
+	for site in (*website_troubles().values(), limited, website_check(None, erp_amount=None)):
+		assert verdict_for([erp, none, site]) == expected
+
+
 def test_the_verdict_does_not_depend_on_the_order_of_the_checks_and_survives_missing_ones():
 	checks = [erp_check(), carrier_check(), website_check()]
 	assert verdict_for(list(reversed(checks))) == AGREE

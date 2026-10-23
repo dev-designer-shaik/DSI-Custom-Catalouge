@@ -720,7 +720,8 @@ def verdict_for(checks) -> str:
 	agree), the carrier's methods or none at all from the carrier (the website has not been switched over: the
 	packing plan it names is the carrier path's), another price (they disagree), a 429 (try again in a minute)
 	or nothing usable. With the carrier as the source, or the policy off, it is the carrier's rates that
-	matter: no rates means no delivery method for customers.
+	matter: no rates means no delivery method for customers; with rates, it says so and, if the website check
+	did not work out (it was not asked, or gave no usable answer), that too.
 	"""
 	by_name = {}
 	for check in checks if isinstance(checks, list | tuple) else []:
@@ -738,10 +739,21 @@ def verdict_for(checks) -> str:
 		return _VERDICT_ERP_DOWN
 	carrier_has_rates = carrier.get("ok") is True
 	if not answer.get("policy_active"):
-		return _VERDICT_OFF if carrier_has_rates else _VERDICT_OFF_NO_RATES
+		return _with_the_website(_VERDICT_OFF, site) if carrier_has_rates else _VERDICT_OFF_NO_RATES
 	if answer.get("price_source") != "rate_card":
-		return _VERDICT_CARRIER if carrier_has_rates else _VERDICT_NO_RATES
+		return _with_the_website(_VERDICT_CARRIER, site) if carrier_has_rates else _VERDICT_NO_RATES
 	return _rate_card_verdict(answer, site)
+
+
+def _with_the_website(sentence, site) -> str:
+	"""`sentence` (about what customers are charged, ending in a full stop) and, when the website check did not
+	work out, what is wrong with it: it was not asked, or it gave no usable answer. A 429 is the site limiting how
+	often this check may be made, which says nothing about the website, so it adds nothing."""
+	if site.get("ok") is True or site.get("status") == 429:
+		return sentence
+	if _detail(site).get("problem") == "not_asked":
+		return f"{sentence[:-1]}; the website was not asked because its address is not usable (see the third check)."
+	return f"{sentence[:-1]}, but the website did not give a usable answer (see the third check)."
 
 
 def _answered_by_the_carrier_path(site) -> bool:
@@ -778,12 +790,4 @@ def _rate_card_verdict(answer, site) -> str:
 			f"The website charges {_money(methods[0][2])} but the ERP price API charges {price} from the rate card: "
 			"they disagree."
 		)
-	if _detail(site).get("problem") == "not_asked":
-		return (
-			f"The ERP price API charges {price} from the rate card; the website was not asked because its "
-			"address is not usable (see the third check)."
-		)
-	return (
-		f"The ERP price API charges {price} from the rate card, but the website did not give a usable answer "
-		"(see the third check)."
-	)
+	return _with_the_website(f"The ERP price API charges {price} from the rate card.", site)
