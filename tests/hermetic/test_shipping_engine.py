@@ -3041,6 +3041,112 @@ def test_hostile_item_facts_never_raise_and_never_make_a_free_delivery():
 		assert (result["reason"], amount_of(result)) == ("fallback_offer", 60.0), weight
 
 
+# ---------------------------------------------------------------- hostile orders
+def order_junk():
+	"""What an order might hold where something else belongs: the policy's junk, the card's hostile values, and
+	numbers too big for a float or for str(), below zero, or not numbers at all."""
+	return [*JUNK, *HOSTILE, -5, -1e308, "x" * 100, Decimal("1e400"), Decimal("NaN"), Decimal("-0")]
+
+
+def order_policies():
+	"""The same example policy in the four ways an order can be priced: by the carrier's quotes, handed back
+	because the policy is off, from the rate card, and from a carrier whose fallback is the rate card."""
+	return {
+		"carrier": example(),
+		"off": {**example(), "active": False},
+		"rate card": card_policy(),
+		"carrier with the rate card as its fallback": card_policies(sample_card())[
+			"carrier with the card as its fallback"
+		],
+	}
+
+
+def check_order_answer(name, result):
+	"""The frame of an answer is always the same. A policy that is off hands the quotes back as posted, so its
+	amounts and names are whatever was posted; every other price is a finite number of at least zero."""
+	if name == "off":
+		assert set(result) == RESULT_KEYS and result["policy_active"] is False, result
+		assert result["offered"] == bool(result["offers"]) and result["reason"] is None
+		for offer in result["offers"]:
+			assert set(offer) == OFFER_KEYS and offer["source"] == "carrier", offer
+			assert all(set(step) == STEP_KEYS and isinstance(step["text"], str) for step in offer["trace"])
+		return
+	check_shape(result)
+	for offer in result["offers"]:
+		amount = offer["amount"]
+		assert type(amount) is float and math.isfinite(amount) and amount >= 0, (name, amount)
+		assert math.copysign(1.0, amount) == 1.0, "never -0.0"
+
+
+def check_order_everywhere(policies, order):
+	"""Price, preview and total one order under every policy: nothing raises, and no total a rule or a formula
+	is given is below zero."""
+	for name, policy in policies.items():
+		check_order_answer(name, resolve(policy, order))
+		for preview in rule_previews(policy, order):
+			assert set(preview) == {"index", "in_zone", "matches", "amount"}
+			assert preview["amount"] is None or (math.isfinite(preview["amount"]) and preview["amount"] >= 0)
+	totals = shipping_engine._totals(order if isinstance(order, dict) else {})
+	assert all(total >= 0 for total in totals.values()), totals  # (an infinity is no less than zero)
+
+
+def test_no_mix_of_junk_in_the_order_makes_the_engine_raise():
+	"""A seeded fuzz over the ORDER (the policy fuzz above breaks the policy): overwrite or delete a few values
+	of an order, then resolve it with the policy on, off and in rate-card mode, preview the rules and total
+	it. Cartons, items and quotes that are not lists, entries that are not dicts, huge and negative numbers."""
+	rng = random.Random(20261023)
+	policies, junk = order_policies(), order_junk()
+	bases = [
+		make_order("AE"),
+		make_order("BH", quotes=[make_quote(12.5), make_quote(0.0, "b")]),
+		make_order("US", quotes=[make_quote(60.0)], items=[make_item("W", ["Watches"], qty=2)]),
+		make_order(
+			"AE",
+			items=[make_item("W", ["Watches"]), make_item("P2", ["Fragrances"], qty=3)],
+			boxes=[{"weight_kg": 1.0, "volume_l": 2.0}] * 3,
+			quotes=[make_quote(boxes_quoted=3), make_quote(9.5, "b", boxes_quoted=2)],
+		),
+		card_order("US", card_item(DANGEROUS, 0.9), card_item(ALLOWED, 0.454)),
+		card_order("AE", card_item(REFILL, 0.5), card_item(PETITE, 0.2, qty=3)),
+		make_order(" ae ", items=[], boxes=[], quotes=[make_quote(boxes_quoted=0)]),
+	]
+	for _ in range(500):
+		order = copy.deepcopy(rng.choice(bases))
+		for _ in range(rng.randint(1, 4)):
+			container, key = rng.choice(places_to_break(order))
+			if isinstance(container, dict) and rng.random() < 0.2:
+				del container[key]
+			else:
+				container[key] = copy.deepcopy(rng.choice(junk))
+		check_order_everywhere(policies, order)
+	for value in junk:  # and the order itself, and each of its lists, being the junk
+		check_order_everywhere(policies, value)
+		for key in ("items", "boxes", "quotes"):
+			check_order_everywhere(policies, {**make_order("AE"), key: value})
+			check_order_everywhere(policies, {**make_order("AE"), key: [value, value]})
+
+
+def test_a_junk_value_at_every_place_of_an_order_breaks_nothing():
+	"""The deterministic version: each place of three orders, one at a time, holds each kind of junk."""
+	policies, junk = order_policies(), order_junk()
+	bases = [
+		make_order(
+			"AE", items=[make_item("W", ["Watches"], qty=2)], boxes=[{"weight_kg": 1.0, "volume_l": 2.0}] * 2
+		),
+		make_order("US", quotes=[make_quote(60.0), make_quote(0.0, "b")]),
+		card_order("US", card_item(DANGEROUS, 0.9), card_item(PETITE, 0.2, qty=3)),
+	]
+	tried = 0
+	for base in bases:
+		for path in list(paths_in(base)):
+			for value in junk:
+				order = copy.deepcopy(base)
+				follow(order, path[:-1])[path[-1]] = copy.deepcopy(value)
+				check_order_everywhere(policies, order)
+				tried += 1
+	assert tried > 2500
+
+
 def test_oversized_rate_cards_are_priced_without_trouble():
 	letters = string.ascii_uppercase
 	codes = [a + b for a in letters for b in letters if a + b != "US"]
