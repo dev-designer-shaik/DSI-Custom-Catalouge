@@ -23,6 +23,7 @@ import json
 import math
 import os
 import random
+import runpy
 from decimal import Decimal
 from pathlib import Path
 
@@ -46,8 +47,7 @@ from dsi_catalogue.shipping_rate_card import (
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMPLE_CONFIG = FIXTURES / "shopify_shipping_config_sample.csv"
 SAMPLE_NOT_DELIVERED = FIXTURES / "shopify_countries_not_delivered_sample.csv"
-# The real export stays outside this public repository.
-REAL_DIR = Path(os.environ.get("RATES_DIR") or Path.home() / "shipping-interim-rates")
+# The real export stays outside this public repository, and `real_text` looks for it only when a test asks.
 
 HEADER = [
 	"Profile",
@@ -2298,13 +2298,47 @@ def test_only_the_first_entries_of_an_oversized_list_are_inspected(kind):
 
 # ---------------------------------------------------------------- the real export, on this machine only
 def real_text(name):
-	path = REAL_DIR / name
+	"""The text of one file of the real export, or a skip when it cannot be found. The folder is looked up here,
+	not when the module is imported: a machine with no home folder (a container run as a user that has no
+	entry) must still collect the tests in this file and skip this one."""
+	folder = os.environ.get("RATES_DIR")
+	try:
+		path = (Path(folder) if folder else Path.home() / "shipping-interim-rates") / name
+	except (RuntimeError, KeyError, OSError):  # there is no home folder to look in
+		pytest.skip(
+			"the real export is not here (no home folder to look in); it is kept outside this repository"
+		)
 	if not path.is_file():
 		pytest.skip(f"the real export is not here ({path}); it stays outside this public repository")
 	return path.read_bytes().decode("utf-8")
 
 
+def _no_home_folder(cls):
+	raise RuntimeError("Could not determine home directory.")
+
+
+def test_the_real_export_is_looked_up_late_so_a_machine_with_no_home_folder_still_collects_and_skips(
+	monkeypatch,
+):
+	monkeypatch.delenv("RATES_DIR", raising=False)
+	monkeypatch.setattr(Path, "home", classmethod(_no_home_folder))
+	# importing this module does not look for a home folder (it would fail every test in the file) ...
+	runpy.run_path(__file__, run_name="a_copy_of_the_tests")
+	# ... and the one test that needs the real export skips
+	with pytest.raises(pytest.skip.Exception, match="no home folder"):
+		real_text("shopify_shipping_config.csv")
+	# a folder named in RATES_DIR does not need a home folder at all
+	monkeypatch.setenv("RATES_DIR", str(FIXTURES))
+	assert real_text("shopify_shipping_config_sample.csv").startswith("﻿Profile")
+	monkeypatch.setenv("RATES_DIR", str(FIXTURES / "nowhere"))
+	with pytest.raises(pytest.skip.Exception, match="nowhere"):
+		real_text("shopify_shipping_config.csv")
+
+
 def test_real_export_prices_the_known_examples():
+	"""Pins today's real figures (4 profiles, 14 zones, 49 tiers, 232 countries, 12 countries that are not
+	delivered to, from AC to TA, and 3 notes), so it has to be updated whenever the owner refreshes the
+	export. It only runs on a machine that holds the export, and skips everywhere else."""
 	parsed = parse_shopify_export(
 		real_text("shopify_shipping_config.csv"), real_text("shopify_countries_not_delivered.csv")
 	)
