@@ -956,6 +956,28 @@ def test_a_repository_that_is_opened_through_a_link_still_pushes(tmp_path):
 
 
 @needs_bash
+@pytest.mark.parametrize("args", [("--dry-run",), ()], ids=["a dry run", "a real run"])
+def test_a_realpath_that_is_not_gnu_is_refused_up_front_in_plain_words(tmp_path, args):
+	"""The link check compares each file with `realpath -e`, a GNU option (BSD and macOS refuse it). Without it
+	every listed file would be reported as reached through a link, so the script says what is missing, before
+	it looks at any file and before it sends anything."""
+	push = Push(tmp_path, ["dsi_catalogue/shipping_engine.py"])
+	realpath = tmp_path / "bin" / "realpath"
+	realpath.write_text(
+		"#!/usr/bin/env bash\necho \"realpath: invalid option -- 'e'\" >&2\nexit 1\n", encoding="utf-8"
+	)
+	realpath.chmod(0o755)
+	result = push.run(*args)
+	assert result.returncode == 1, (result.stdout, result.stderr)
+	assert "erp2_push: GNU realpath is needed" in result.stderr
+	assert "link" not in result.stderr and "refused" not in result.stderr, "not the sentence about each file"
+	assert result.stdout == "" and push.calls() == [], "no file was looked at and nothing was sent"
+	# asking for help needs no realpath, and a usage error is still a usage error
+	assert push.run("--help").returncode == 0
+	assert push.run("--everything").returncode == 2
+
+
+@needs_bash
 def test_comments_blank_lines_and_windows_line_endings_in_the_list_are_fine(tmp_path):
 	push = Push(tmp_path, ["dsi_catalogue/shipping_engine.py"])
 	(push.root / "tools" / "shipping_policy_files.txt").write_bytes(

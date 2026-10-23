@@ -126,6 +126,10 @@ for arg in "$@"; do
 	esac
 done
 
+# The check of each listed file below compares it with `realpath -e`, which is GNU (BSD and macOS refuse the
+# option): without it every file would be reported as reached through a link. A dry run needs it too.
+realpath -e / >/dev/null 2>&1 || { echo "erp2_push: GNU realpath is needed" >&2; exit 1; }
+
 # ---------------------------------------------------------------- 1. the list
 allowed() {
 	local pattern
