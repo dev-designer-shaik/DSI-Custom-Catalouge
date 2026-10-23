@@ -12,7 +12,9 @@ arithmetic and nothing else.
 A formula can contain:
 - numbers (plain int or float literals; no text, True/False or None)
 - the names in VARIABLES
-- the functions in FUNCTIONS, with positional arguments only
+- the functions in FUNCTIONS, with positional arguments only. round() rounds a half away from zero, from the
+  number as it is written (round(2.5) is 3, round(-2.5) is -3, round(2.675, 2) is 2.68), as money is rounded
+  to cents; Python's own round() gives 2, -2 and 2.67
 - + - * / % // and brackets (there is no power operator)
 - comparisons < <= > >= == != (they can be chained)
 - and, or, not
@@ -30,6 +32,7 @@ import ast
 import math
 import operator
 import sys
+from decimal import ROUND_HALF_UP, Context, Decimal
 
 VARIABLES = ("carrier_price", "order_value", "weight_kg", "volume_l", "boxes", "item_count")
 
@@ -51,12 +54,32 @@ class FormulaError(ValueError):
 	"""A formula that cannot be used. The message is plain language for an ERP user."""
 
 
+# A float has at most 309 digits before the point, and `_round` goes to 400 places, so this leaves room for
+# the biggest float rounded to the most places. Decimal's own 28 digits would make `quantize` raise for
+# round(1e30, 2). (The engine keeps a context of its own for cents: it imports this module, so the two
+# cannot share one without a cycle.)
+_ROOM = Context(prec=800)
+# A float has at most 324 decimals, so any number of places past that changes nothing, and the biggest float
+# is under half of 1e309, so any number of places below -309 gives 0. Clamping the places to this range keeps
+# a huge number of places (round(x, 1e30)) from costing anything.
+_MOST_PLACES = 400
+
+
 def _round(value, places=None):
+	"""`value` rounded to `places` decimals (to a whole number when none are given; negative places round to
+	tens, hundreds...), with halves going away from zero, as the engine rounds money to cents.
+
+	The number is read as it is written, not as the binary number nearest to it, so round(2.675, 2) is 2.68
+	and round(2.5) is 3, where Python's own round() gives 2.67 and 2 (it reads the binary value, and a tie goes
+	to the even digit). A number that already has no more decimals than asked comes back as it is.
+	"""
 	if places is None:
-		return round(value)
-	if not places.is_integer():
+		places = 0.0
+	elif not places.is_integer():
 		raise FormulaError("The second value of round() must be a whole number.")
-	return round(value, int(places))
+	places = int(max(-_MOST_PLACES, min(_MOST_PLACES, places)))
+	quantum = Decimal((0, (1,), -places))  # 1E-2 for 2 places, 1E+1 for -1
+	return float(Decimal(repr(value)).quantize(quantum, rounding=ROUND_HALF_UP, context=_ROOM))
 
 
 # name: (what it calls, fewest values, most values, how an error words the count)

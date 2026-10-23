@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from dsi_catalogue import shipping_formula
+from dsi_catalogue.shipping_engine import to_cents
 from dsi_catalogue.shipping_formula import (
 	FUNCTIONS,
 	SAMPLE,
@@ -146,6 +147,25 @@ def test_functions_and_boolean_logic():
 		("round(carrier_price)", 38),
 		("round(1234, -2)", 1200),
 		("round(38.26, boxes)", 38.3),
+		# halves go away from zero, from the number as it is written: 2.5 is 3, 2.675 is 2.68
+		("round(0.5)", 1),
+		("round(1.5)", 2),
+		("round(2.5)", 3),
+		("round(3.5)", 4),
+		("round(-0.5)", -1),
+		("round(-2.5)", -3),
+		("round(1.005, 2)", 1.01),
+		("round(2.675, 2)", 2.68),
+		("round(0.285, 2)", 0.29),
+		("round(1.45, 1)", 1.5),
+		("round(-2.675, 2)", -2.68),
+		("round(1225, -1)", 1230),
+		("round(-1225, -1)", -1230),
+		# a number of places beyond what a float can hold changes nothing, or leaves nothing
+		("round(1.5, 400)", 1.5),
+		("round(1.5, -400)", 0),
+		("round(1.5, 1000000000000000000000000000000)", 1.5),
+		("round(1.5, -1000000000000000000000000000000)", 0),
 	],
 )
 def test_arithmetic_and_function_results(source, expected):
@@ -165,6 +185,74 @@ def test_results_are_floats_and_never_negative_zero():
 	# max(-0.0, 0) is -0.0 in Python, which would print as "-0.00" once clamped
 	for source in ("0 * -1", "round(-0.4, 0)"):
 		assert math.copysign(1.0, evaluate(source, SAMPLE)) == 1.0, source
+
+
+def test_round_to_two_places_is_the_cents_rounding_of_the_engine():
+	"""Money is rounded half up from the number as it is written, in a formula and in the engine alike (every
+	value here from 0.001 to 3 in thousandths, so every third value ends in a half cent)."""
+	for thousandths in range(1, 3001):
+		amount = thousandths / 1000
+		assert evaluate(f"round({amount!r}, 2)", SAMPLE) == to_cents(amount), amount
+	for amount in (1.005, 2.675, 10.005, 107.615, 0.125, 1000000.005, 123456.785, 4.35, 8.345):
+		assert evaluate(f"round({amount!r}, 2)", SAMPLE) == to_cents(amount), amount
+
+
+ROUNDED_VALUES = [
+	0.0,
+	-0.0,
+	0.5,
+	-1.5,
+	2.675,
+	123456.789,
+	1e22,
+	1e-7,
+	5e-324,
+	-5e-324,
+	1e300,
+	1.7976931348623157e308,
+	-1.7976931348623157e308,
+]
+ROUNDED_PLACES = [
+	-1e30,
+	-1000,
+	-401,
+	-400,
+	-309,
+	-308,
+	-2,
+	-1,
+	0,
+	1,
+	2,
+	16,
+	323,
+	324,
+	325,
+	400,
+	401,
+	1000,
+	1e30,
+]
+
+
+def test_round_answers_for_any_finite_number_and_any_whole_number_of_places():
+	"""However far the places go, round() answers at once with a finite number: the number itself when it has
+	no more decimals than asked, nothing when the places are beyond the biggest float, and "too large" only
+	when rounding up carries past the biggest float."""
+	for value in ROUNDED_VALUES:
+		for places in ROUNDED_PLACES:
+			source = f"round({value!r}, {float(places)!r})"
+			try:
+				result = evaluate(source, SAMPLE)
+			except FormulaError as error:
+				assert "too large" in str(error), (source, str(error))
+				continue
+			assert type(result) is float and math.isfinite(result), (source, result)
+			assert result != 0 or math.copysign(1.0, result) == 1.0, (source, "never -0.0")
+			if places >= 325:  # a float never has so many decimals
+				assert result == value + 0.0, (source, result)
+			if places <= -309:  # the biggest float is under half of 1e309
+				assert result == 0.0, (source, result)
 
 
 @pytest.mark.parametrize(
