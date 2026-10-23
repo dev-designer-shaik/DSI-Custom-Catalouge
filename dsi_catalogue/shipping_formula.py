@@ -231,19 +231,42 @@ def _need_numbers(*nodes):
 
 
 # ---------------------------------------------------------------- evaluating
+def _function(node):
+	"""The function a call names. A call the checker would not pass (a callee that is not one of FUNCTIONS, a
+	name=value argument, the wrong number of arguments) is refused."""
+	name = node.func.id if isinstance(node.func, ast.Name) else None
+	entry = _FUNCTIONS.get(name)
+	if entry is None or node.keywords:
+		raise FormulaError(_NOT_ALLOWED)
+	function, fewest, most, _ = entry
+	if not fewest <= len(node.args) <= most:
+		raise FormulaError(_NOT_ALLOWED)
+	return function
+
+
 def _eval(node, values):
-	"""Calculate a checked tree. A yes/no answer is a bool; every number is a finite float."""
+	"""Calculate a checked tree. A yes/no answer is a bool; every number is a finite float.
+
+	A part the checker would not pass (an operator, a comparison or a function the language does not have, a
+	literal that is not a number) is refused with a FormulaError when it is reached, never calculated and never
+	a KeyError. Only the branch an if/else picks is reached, so refusing the other is the checker's job.
+	"""
 	kind = type(node)
 	if kind is ast.Constant:
+		_check_literal(node.value)
 		return float(node.value)
 	if kind is ast.Name:
 		return _variable(node.id, values)
 	if kind is ast.BinOp:
-		calculate = _BINARY[type(node.op)]
+		calculate = _BINARY.get(type(node.op))
+		if calculate is None:
+			raise FormulaError(_NOT_ALLOWED)
 		return _finite(calculate(_eval_number(node.left, values), _eval_number(node.right, values)))
 	if kind is ast.UnaryOp:
 		if isinstance(node.op, ast.Not):
 			return not _eval(node.operand, values)
+		if not isinstance(node.op, (ast.UAdd, ast.USub)):  # ~x is not +x
+			raise FormulaError(_NOT_ALLOWED)
 		operand = _eval_number(node.operand, values)
 		return -operand if isinstance(node.op, ast.USub) else operand
 	if kind is ast.BoolOp:
@@ -255,17 +278,20 @@ def _eval(node, values):
 				return stops_on
 		return not stops_on
 	if kind is ast.Compare:
+		compares = [_COMPARE.get(type(op)) for op in node.ops]  # all of them, before the chain can stop early
+		if None in compares:
+			raise FormulaError(_NOT_ALLOWED)
 		left = _eval_number(node.left, values)
-		for op, comparator in zip(node.ops, node.comparators, strict=True):
+		for compare, comparator in zip(compares, node.comparators, strict=True):
 			right = _eval_number(comparator, values)
-			if not _COMPARE[type(op)](left, right):
+			if not compare(left, right):
 				return False
 			left = right
 		return True
 	if kind is ast.IfExp:
 		return _eval(node.body if _eval(node.test, values) else node.orelse, values)
 	if kind is ast.Call:
-		function = _FUNCTIONS[node.func.id][0]
+		function = _function(node)
 		return _finite(float(function(*[_eval_number(arg, values) for arg in node.args])))
 	raise FormulaError(_NOT_ALLOWED)  # not reachable for a tree that `_check` passed
 

@@ -678,10 +678,67 @@ def test_a_value_too_big_for_a_float_is_a_formula_error():
 		evaluate("carrier_price", None)
 
 
-def test_the_interpreter_refuses_a_tree_the_checker_never_passed():
-	unchecked = ast.parse("carrier_price.real", mode="eval").body
-	with pytest.raises(FormulaError):
+# Parts the checker never lets through: an operator, a unary, a comparison or a function the language does not
+# have, and nodes of another kind.
+UNCHECKED_TREES = [
+	"carrier_price.real",  # an attribute
+	"boxes ** 2",
+	"boxes & 1",
+	"boxes | 1",
+	"boxes @ 1",
+	"~boxes",
+	"boxes in item_count",
+	"boxes not in item_count",
+	"boxes is item_count",
+	"boxes is not item_count",
+	"1 < 2 in boxes",
+	"2 < 1 in boxes",  # the chain stops at the first false comparison, but the tree is refused whole
+	"max(1, 2)(3)",
+	"carrier_price(1)",
+	"open(1)",
+	"max(1, 2, key=abs)",
+	"max(1)",  # the wrong number of arguments
+	"min()",
+	"round()",
+	"ceil(1, 2)",
+	"[1]",
+	"{1: 2}",
+	"lambda: 1",
+	"'text'",  # a literal that is not a number: '2' must not be read as 2
+	"'2'",
+	"True",
+	"None",
+	"b'1'",
+	"1 if ~boxes else 2",  # in a condition: reached
+	"max(1, ~boxes)",  # in an argument: reached
+]
+
+
+@pytest.mark.parametrize("source", UNCHECKED_TREES, ids=_short)
+def test_the_interpreter_refuses_a_tree_the_checker_never_passed(source):
+	"""`_eval` is only run on a checked tree, but it must fail closed in plain words, not with a KeyError, an
+	AttributeError or a TypeError, and not by reading `~x` as `+x`. (It refuses what it is asked to calculate: the
+	branch of an if/else an order does not take is never reached, so the checker is what refuses that.)"""
+	unchecked = ast.parse(source, mode="eval").body
+	with pytest.raises(FormulaError) as caught:
 		shipping_formula._eval(unchecked, SAMPLE)
+	message = str(caught.value)
+	assert message[0].isupper() and message.endswith("."), message
+	with pytest.raises(FormulaError):  # and the checker refuses the same text
+		compile_formula(source)
+
+
+def test_the_interpreter_still_calculates_every_part_the_checker_passes():
+	"""The guards above must not refuse anything a checked tree holds: every operator, comparison and function."""
+	source = (
+		"max(min(abs(-boxes), ceil(carrier_price), floor(order_value)), round(weight_kg, 1)) "
+		"+ (boxes + item_count - 1) * 2 / 4 % 5 // 1 "
+		"+ (1 if boxes < 2 and boxes <= 1 and boxes > 0 and boxes >= 1 and boxes == 1 and boxes != 2 "
+		"and not boxes > 5 or boxes else 0)"
+	)
+	assert evaluate(source, SAMPLE) == pytest.approx(
+		max(min(1, 39, 310), 2.4) + (1 + 2 - 1) * 2 / 4 % 5 // 1 + 1
+	)
 
 
 def test_module_never_calls_eval_exec_or_compile():
