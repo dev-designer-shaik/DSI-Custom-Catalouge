@@ -781,7 +781,68 @@ def test_band_totals_add_up_the_cartons_and_ignore_float_noise():
 	assert not holds(make_order(boxes=[{"weight_kg": 3.0, "volume_l": 1.0}] * 2), max_weight_kg=6.0)
 
 
-@pytest.mark.parametrize("empty", [0.0, 0, None, "absent"])
+BAND_KEYS = (
+	"min_order_value",
+	"max_order_value",
+	"min_weight_kg",
+	"max_weight_kg",
+	"min_volume_l",
+	"max_volume_l",
+)
+# What a draft or a stored policy might hold where a limit goes, that is no number the engine can read.
+UNREADABLE_LIMITS = ["abc", "5", " ", True, False, [], {}, float("nan"), float("inf"), float("-inf"), 10**400]
+
+
+@pytest.mark.parametrize("key", BAND_KEYS)
+@pytest.mark.parametrize("value", UNREADABLE_LIMITS, ids=repr)
+def test_a_limit_that_cannot_be_read_means_the_rule_never_holds(key, value):
+	"""An unreadable limit is not "no limit": that would let the rule price orders it was never meant for (free,
+	perhaps). Where a setting cannot be read the answer is "no delivery", not a free one."""
+	rule = make_rule(method="free", **{key: value})
+	huge = make_order("AE", order_value=1e9, boxes=[{"weight_kg": 500.0, "volume_l": 800.0}])
+	tiny = make_order("AE", order_value=0.0, boxes=[], quotes=[make_quote(boxes_quoted=0)])
+	for order in (huge, tiny, make_order("AE")):
+		assert not rule_matches(rule, order, [])
+	# the order falls to Anything not covered, as it does when no rule holds ...
+	policy = with_rules(rule)
+	result = resolve(policy, make_order("AE"))
+	assert (result["rule"], amount_of(result), only_offer(result)["source"]) == (None, 38.2, "carrier")
+	policy["not_covered"] = "no_delivery"
+	result = resolve(policy, make_order("AE"))
+	assert (result["offered"], result["reason"], result["rule"]) == (False, "not_covered", None)
+	# ... or to the next rule, which is free to hold
+	later = with_rules(rule, make_rule(method="formula", formula="7"))
+	result = resolve(later, make_order("AE"))
+	assert (result["rule"], amount_of(result)) == (1, 7.0)
+	# and the preview says the same
+	assert [p["matches"] for p in rule_previews(later, make_order("AE"))] == [False, True]
+
+
+@pytest.mark.parametrize("key", BAND_KEYS)
+@pytest.mark.parametrize("empty", [None, "", 0, 0.0])
+def test_an_empty_or_zero_limit_is_still_no_limit(key, empty):
+	rule = make_rule(method="free", **{key: empty})
+	assert rule_matches(rule, make_order("AE"), [])
+	assert rule_matches(rule, make_order("AE", order_value=0.0, boxes=[], quotes=[]), [])
+
+
+@pytest.mark.parametrize("value", UNREADABLE_LIMITS, ids=repr)
+def test_an_unreadable_limit_is_reported_once_and_is_left_out_of_the_wrong_way_round_check(value):
+	"""validate_policy still says "not a number" for it, and it cannot also make a band look inverted."""
+	for low_key, high_key in (
+		("min_order_value", "max_order_value"),
+		("min_weight_kg", "max_weight_kg"),
+		("min_volume_l", "max_volume_l"),
+	):
+		for unreadable, other in ((low_key, high_key), (high_key, low_key)):
+			policy = example()
+			policy["rules"][2].update({unreadable: value, other: 5.0})
+			problems = validate_policy(policy)
+			assert len(problems) == 1, (unreadable, problems)
+			assert "Rule 3" in problems[0] and "not a number" in problems[0], problems
+
+
+@pytest.mark.parametrize("empty", [0.0, 0, None, "", "absent"])
 def test_zero_means_no_limit(empty):
 	rule = make_rule(method="free")
 	for key in (

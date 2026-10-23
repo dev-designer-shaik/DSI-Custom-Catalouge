@@ -302,8 +302,19 @@ def _items_allowed(rule, order, item_sets):
 
 
 def _limit(rule, key):
-	"""A band edge, or None for no limit: an empty, missing, zero or unreadable edge."""
-	return _number(rule.get(key)) or None
+	"""A band edge, or None for no limit: an empty, missing or zero edge.
+
+	An edge that is there but cannot be read (text, a bool, a NaN, an infinity, a list) is NaN, which no total
+	is within (every comparison with NaN is False), so the rule never holds. It is not "no limit": that would
+	let the rule price orders it was never meant for, where an unreadable setting has to mean no delivery.
+	"""
+	value = rule.get(key)
+	if value is None or (isinstance(value, str) and value == ""):
+		return None
+	number = _number(value)
+	if number is None:
+		return math.nan
+	return number or None
 
 
 def _within(total, low, high):
