@@ -547,7 +547,11 @@ def _rule_text(index, rule, zone):
 	named = f' ("{label}")' if label else ""
 	items = f"selected items ({_shown(rule['item_set'])})" if rule.get("item_set") else "every item"
 	rounding = ", rounded up" if rule.get("round_up") else ""
-	charge = _CHARGES[rule.get("method") or "carrier_price"]
+	method = rule.get("method") or "carrier_price"
+	# `_price` has refused any other method by the time this is called, but the sentence must not depend on that
+	charge = (
+		_CHARGES.get(method, "by an unknown method") if isinstance(method, str) else "by an unknown method"
+	)
 	return (
 		f"Rule {index + 1}{named} applies: {_shown(zone.get('name'))}, {items}, charges {charge}{rounding}."
 	)

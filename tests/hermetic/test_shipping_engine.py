@@ -1092,6 +1092,22 @@ def test_a_rule_that_does_not_say_how_to_charge_cannot_price_and_goes_to_the_fal
 	assert (result["reason"], amount_of(result)) == ("formula_error", 35.0)
 
 
+@pytest.mark.parametrize("method", ["bogus", "Formula", 5, 2.5, True, ["formula"], {"a": 1}, (1, 2)])
+def test_the_sentence_about_a_rule_does_not_rely_on_the_rule_having_been_priced_first(method):
+	"""`_price` runs before `_rule_text` in `_rule_offer` and refuses a method that is not one of the three, but
+	the sentence must not raise (a KeyError, or a TypeError for an unhashable method) when called on its own."""
+	text = shipping_engine._rule_text(0, {"method": method}, {"name": "Z"})
+	assert text == "Rule 1 applies: Z, every item, charges by an unknown method."
+	for known, words in (
+		(None, "the carrier's price"),
+		("", "the carrier's price"),
+		("carrier_price", "the carrier's price"),
+		("free", "nothing (free)"),
+		("formula", "by a custom formula"),
+	):
+		assert shipping_engine._rule_text(1, {"method": known}, {"name": "Z"}).endswith(f"charges {words}.")
+
+
 def test_a_fallback_that_cannot_be_read_offers_no_delivery_rather_than_a_free_one():
 	policy = example()
 	for fallback in (
