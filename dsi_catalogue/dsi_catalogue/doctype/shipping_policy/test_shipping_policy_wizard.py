@@ -26,6 +26,7 @@ import copy
 import importlib.util
 import inspect
 import json
+import math
 import os
 import random
 import string
@@ -3205,6 +3206,33 @@ class TestRateCardDrafts(WizardTestCase):
 			apply(draft)
 		self.assertIn(UNSAVABLE, messages(caught))
 		self.assertEqual(snapshot(), before)
+
+	def test_a_card_holding_a_number_json_has_no_words_for_is_refused(self):
+		# JSON has no NaN and no Infinity, and a browser cannot read text that holds them (the form, the wizard
+		# page). A draft whose card holds one, even under a key the card's own check never reads, is refused by
+		# Review and Apply, and nothing is written.
+		seed_policy(card_policy(), active=True)
+		opened = wizard.wizard_state()
+		before = snapshot()
+		for number in (math.nan, math.inf, -math.inf):
+			for where, card in (
+				("a key of its own", {**CARD, "note": number}),
+				("deeper down", {**CARD, "notes": [{"value": number}]}),
+			):
+				draft = {**opened["policy"], "rate_card": card}
+				with self.subTest(number=number, where=where):
+					self.assertEqual(
+						wizard.preview_changes(draft), {"changes": NO_CHANGES, "problems": [UNSAVABLE]}
+					)
+					with self.assertRaises(frappe.ValidationError) as caught:
+						apply(draft)
+					self.assertEqual(messages(caught), [UNSAVABLE])
+					self.assertEqual(snapshot(), before)
+		# The JSON text a page sends can hold them too: Python reads NaN and Infinity in it.
+		text = json.dumps({**opened["policy"], "rate_card": {**CARD, "note": math.inf}})
+		self.assertIn("Infinity", text)
+		self.assertEqual(wizard.preview_changes(text)["problems"], [UNSAVABLE])
+		self.assertEqual(load_policy()["rate_card"], CARD, "the stored card stays")
 
 	def test_a_rate_card_that_cannot_be_saved_is_refused_and_the_stored_one_stays(self):
 		seed_policy(card_policy(), active=True)

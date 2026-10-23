@@ -661,10 +661,11 @@ def _unknown_card_countries(card, countries) -> list[str]:
 
 
 def _is_plain_data(value) -> bool:
-	"""Is `value` plain data of a size a rate card has: dicts with text keys, lists, texts, numbers, True, False
-	and None, nested at most MAX_CARD_DEPTH deep and made of at most MAX_CARD_VALUES values in all? It looks
-	with a loop of its own, not by recursion, so a value nested a hundred thousand deep or one that holds
-	itself is answered, not tripped over; the first value it finds out of bounds ends it.
+	"""Is `value` plain data of a size a rate card has: dicts with text keys, lists, texts, numbers (finite
+	ones: JSON has no NaN or Infinity, and a browser refuses text that holds them), True, False and None,
+	nested at most MAX_CARD_DEPTH deep and made of at most MAX_CARD_VALUES values in all? It looks with a loop
+	of its own, not by recursion, so a value nested a hundred thousand deep or one that holds itself is
+	answered, not tripped over; the first value it finds out of bounds ends it.
 
 	The values still to be looked at are counted before they are queued, so a list or dict of millions of
 	values is refused by its size, without being copied onto the stack or looked through."""
@@ -678,7 +679,11 @@ def _is_plain_data(value) -> bool:
 			children = current.values()
 		elif isinstance(current, list):
 			children = current
-		elif current is None or isinstance(current, str | int | float | bool):
+		elif isinstance(current, float):
+			if math.isfinite(current):
+				continue
+			return False
+		elif current is None or isinstance(current, str | int | bool):
 			continue
 		else:
 			return False

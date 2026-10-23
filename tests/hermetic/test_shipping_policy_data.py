@@ -2356,6 +2356,55 @@ def test_rate_card_round_trips_through_rows_and_the_fixture_still_matches():
 		assert rows_from_policy({"rate_card": card}, {})["policy"]["rate_card"] == ""
 
 
+def _put_in_a_tier(card, number):
+	card["profiles"][0]["zones"][0]["tiers"][0]["price"] = number
+
+
+def _put_in_a_key_of_its_own(card, number):
+	card["note"] = number
+
+
+def _put_in_a_list(card, number):
+	card["notes"] = [1, number, "x"]
+
+
+def _put_deep_inside(card, number):
+	card["profiles"][1]["zones"][0]["extra"] = {"deeper": [{"value": number}]}
+
+
+@pytest.mark.parametrize("number", [math.nan, math.inf, -math.inf], ids=["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize(
+	"put",
+	[_put_in_a_tier, _put_in_a_key_of_its_own, _put_in_a_list, _put_deep_inside],
+	ids=lambda put: put.__name__,
+)
+def test_a_card_holding_a_number_json_has_no_words_for_is_written_as_no_text(number, put):
+	"""JSON has no NaN and no Infinity. Python writes them all the same, as text a browser cannot read
+	(JSON.parse refuses `"note": NaN`), so a card that holds one anywhere is written as "", the text of no
+	card, which the wizard refuses to save before it writes anything."""
+	card = sample_card()
+	put(card, number)
+	text = rows_from_policy({"rate_card": card}, {})["policy"]["rate_card"]
+	assert text == ""
+
+
+def test_a_card_of_numbers_json_can_hold_is_written_as_it_always_was():
+	"""Only NaN and the infinities changed: any other card is written byte for byte as before, odd values kept
+	as text (a set, a Decimal), the smallest and the biggest floats as they are."""
+	odd = {
+		**sample_card(),
+		"note": {1, 2},
+		"rate": Decimal("1.5"),
+		"big": 10**20,
+		"tiny": 5e-324,
+		"huge": 1e308,
+	}
+	for card in (sample_card(), odd):
+		text = rows_from_policy({"rate_card": card}, {})["policy"]["rate_card"]
+		assert text == json.dumps(card, ensure_ascii=False, sort_keys=True, indent=1, default=str)
+		assert "NaN" not in text and "Infinity" not in text
+
+
 def test_broken_card_text_reads_as_no_card():
 	for text in (
 		"",

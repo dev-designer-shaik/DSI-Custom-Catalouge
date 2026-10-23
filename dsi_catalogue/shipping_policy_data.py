@@ -448,11 +448,12 @@ def _rule_row(rule):
 def _card_text(card):
 	"""The rate card as the JSON text its field holds, written to be read in the form: indented, keys in
 	order, letters as they are. No card, and a value that is not a card, are "". A card JSON cannot hold (a
-	loop, keys of two kinds) is "" too, so that writing never raises."""
+	loop, keys of two kinds, a NaN or an infinity, which Python would write as words that are not JSON and a
+	browser refuses) is "" too, so that writing never raises."""
 	if not isinstance(card, dict):
 		return ""
 	try:
-		return json.dumps(card, ensure_ascii=False, sort_keys=True, indent=1, default=str)
+		return json.dumps(card, ensure_ascii=False, sort_keys=True, indent=1, default=str, allow_nan=False)
 	except (TypeError, ValueError, RecursionError):
 		return ""
 
