@@ -1046,6 +1046,10 @@ def _no_patterns(card):
 	profile_of(card, "Refill Service")["match"] = []
 
 
+def _pattern_with_braces(card):
+	profile_of(card, "Dangerous Goods")["match"] = ["{F-*}"]
+
+
 def _version(card):
 	card["version"] = 2
 
@@ -1123,6 +1127,7 @@ def _method_too_long(card):
 		pytest.param(_two_catch_alls, "also matches every item", 2, id="two catch-all profiles"),
 		pytest.param(_no_catch_all, "No profile matches every item", 1, id="no catch-all at all"),
 		pytest.param(_no_patterns, "will never be used", 1, id="profile with no patterns"),
+		pytest.param(_pattern_with_braces, "brace", 1, id="a pattern with braces"),
 		pytest.param(_version, "version has to be 1", 1, id="version"),
 		pytest.param(_currency, 'currency has to be "USD"', 1, id="currency"),
 		pytest.param(_unit, 'unit has to be "lb"', 1, id="unit"),
@@ -1154,6 +1159,29 @@ def test_validate_card_pattern_length_limit_is_80_characters():
 	assert validate_card(card) == []
 	profile_of(card, "Dangerous Goods")["match"] = ["F-" + "A" * 79]  # 81 characters
 	assert len(problems_with(validate_card(card), "longer than 80 characters")) == 1
+
+
+@pytest.mark.parametrize("pattern", ["{F-*}", "F-{CR}-*", "F-*}", "{", "}", "{}"])
+def test_validate_card_reports_a_brace_in_a_pattern_and_does_not_change_it(pattern):
+	"""A pattern is matched against the product code without its braces, so one typed with braces could never
+	match. It is reported in plain words, once, and left as typed."""
+	card = sample_card()
+	profile_of(card, "Dangerous Goods")["match"] = ["F-*", pattern]
+	assert validate_card(card) == [
+		'Profile 3 ("Dangerous Goods"): pattern 2 contains a brace. '
+		"Write the product code without braces, such as F-CR-XYZ-*."
+	]
+	assert profile_of(card, "Dangerous Goods")["match"] == ["F-*", pattern]
+
+
+def test_validate_card_allows_the_other_shell_wildcards_and_they_work():
+	"""The patterns are read like a shell's: * is any run of characters, ? any one character and [CD] one of the
+	characters listed, so the card accepts them (the module docstring says so)."""
+	card = sample_card()
+	profile_of(card, "Dangerous Goods")["match"] = ["F-?R-*", "F-[CD]X-*"]
+	assert validate_card(card) == []
+	assert [classify_item(card, key) for key in ("{F-CR-1}", "{F-ZR-1}", "{F-CRR-1}")] == [2, 2, 3]
+	assert [classify_item(card, key) for key in ("{F-CX-1}", "{F-DX-1}", "{F-EX-1}")] == [2, 2, 3]
 
 
 def test_validate_card_limits_are_inclusive():

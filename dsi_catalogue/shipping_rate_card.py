@@ -16,8 +16,10 @@ A card is plain data (it is kept as JSON text):
 - A profile is a kind of product that Shopify rates on its own: Dangerous Goods (the full-size fragrances),
   Dangerous Goods Petite, Refill Service, and Rest of the World Allowed Items (everything else). Its `match`
   list holds product code patterns, where * stands for any run of characters, so F-*-PT is every code that
-  starts with F- and ends with -PT. The product code is the Website Item's index key without its braces, in
-  capitals.
+  starts with F- and ends with -PT. A pattern is read the way a shell reads a file name, so ? stands for any
+  one character and [CD] for one of the characters listed ([!CD] for any other); `validate_card` accepts them
+  and nothing else is special. The product code is the Website Item's index key without its braces, in
+  capitals, so a pattern is written without braces (`validate_card` reports one that has them).
 - A zone is a group of countries (two-letter codes) that a profile delivers to in the same way. It holds the
   delivery method as Shopify words it ("International Express (4-7 days)"), the days promised (the last number
   inside the method's brackets) and the prices. A country is in one zone of a profile, at most.
@@ -568,6 +570,11 @@ def _check_patterns(subject, profile, problems):
 			)
 		if not _is_plain(text):
 			problems.append(f"{_cap(subject)}: pattern {number} has to be plain text.")
+		if "{" in text or "}" in text:  # an item's code is matched without its braces, so this never matches
+			problems.append(
+				f"{_cap(subject)}: pattern {number} contains a brace. "
+				"Write the product code without braces, such as F-CR-XYZ-*."
+			)
 		catch_all = catch_all or set(text) == {"*"}
 	if not usable:
 		problems.append(f"{_cap(subject)} has no product code patterns, so it will never be used.")
@@ -717,7 +724,8 @@ def validate_card(card) -> list[str]:
 	1). An empty list means the card can be used. Never raises.
 
 	Besides the shape (version 1, currency "USD", unit "lb"), it reports: a missing or repeated name; a profile
-	with no patterns, which would never be used; a card where no profile matches everything (a pattern of *),
+	with no patterns, which would never be used; a pattern with a brace in it, which could never match (an
+	item's code is matched without its braces); a card where no profile matches everything (a pattern of *),
 	where more than one does, or where the one that does is not last; a country that is not two capital
 	letters or is in two zones of a profile; a zone with no countries, no tiers or no delivery method; days
 	outside 0 to 60; a flat price beside other tiers; a tier with one weight, weights the wrong way round, or
@@ -787,8 +795,9 @@ def normalize_index_key(value) -> str:
 
 def classify_item(card, index_key) -> int | None:
 	"""The position, in the card's list of profiles, of the first profile with a pattern that matches the
-	item's product code; None when no profile does. Patterns use * for any run of characters and are read in
-	capitals; a blank pattern matches nothing. An empty key matches only a pattern made of asterisks."""
+	item's product code; None when no profile does. Patterns use * for any run of characters (and, as a shell
+	does, ? for any one character and [CD] for one of the characters listed) and are read in capitals; a blank
+	pattern matches nothing. An empty key matches only a pattern made of asterisks."""
 	key = normalize_index_key(index_key)
 	for position, profile in enumerate(_as_list(_as_dict(card).get("profiles"))):
 		for pattern in _as_list(_as_dict(profile).get("match")):
