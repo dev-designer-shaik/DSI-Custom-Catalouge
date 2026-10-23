@@ -124,17 +124,30 @@ def _check(name, ok, status, ms, summary, detail) -> dict:
 
 
 # ---------------------------------------------------------------- what may be shown of a response
+# A key is dropped when its name holds one of these (in any capitals): the word itself, or a longer name that has
+# it, such as `oauth`, `x-api-key`, `accessToken`, `hmacSignature` or `PHPSESSID`.
 _SECRET_WORDS = (
 	"password",
 	"passwd",
+	"passphrase",
+	"passcode",
 	"secret",
 	"token",
 	"key",
-	"authorization",
+	"auth",  # also authorization
 	"cookie",
 	"credential",
 	"traceback",
+	"session",
+	"sessid",
+	"signature",
+	"private",
 )
+# Short words that are a piece of honest ones too (`sid` in `side`, `pass` in `passenger`): they drop a key only as
+# a word of its own, where a name is split at anything that is not a letter or a digit and at capitals (`userSid`,
+# `x_pass`, `db.pwd`).
+_SECRET_SHORT_WORDS = ("sid", "pwd", "pass")
+_NAME_WORDS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 # `exc` is where Frappe puts a traceback in the answer of a site in developer mode.
 _SECRET_NAMES = ("exc",)
 _MAX_DEPTH = 8
@@ -144,8 +157,11 @@ _BUDGETS = ((50, 300), (20, 200), (10, 100), (5, 60), (3, 40), (1, 20))
 
 
 def _is_secret(key) -> bool:
-	name = str(key).casefold()
-	return name in _SECRET_NAMES or any(word in name for word in _SECRET_WORDS)
+	text = str(key)
+	name = text.casefold()
+	if name in _SECRET_NAMES or any(word in name for word in _SECRET_WORDS):
+		return True
+	return any(word.casefold() in _SECRET_SHORT_WORDS for word in _NAME_WORDS.findall(text))
 
 
 def _clean(value, depth, entries, characters):
@@ -186,9 +202,12 @@ def sanitize_detail(obj, limit=DETAIL_LIMIT) -> dict:
 	"""`obj` (the parsed JSON of an answer) as a dict that is safe to show: plain JSON data, never more than
 	`limit` bytes as compact JSON, with every key that looks like a secret dropped at any depth.
 
-	A key is dropped when its name holds `password`, `passwd`, `secret`, `token`, `key`, `authorization`,
-	`cookie`, `credential` or `traceback` in any capitals, or is `exc` (a traceback, in the answer of a Frappe
-	site in developer mode). What is not a dict is shown under "value". A long answer keeps
+	A key is dropped when its name holds `password`, `passwd`, `passphrase`, `passcode`, `secret`, `token`,
+	`key`, `auth`, `cookie`, `credential`, `traceback`, `session`, `sessid`, `signature` or `private` in any
+	capitals, when `sid`, `pwd` or `pass` is a word of it (split at anything that is not a letter or a digit,
+	and at capitals: `userSid`, `x_pass`), or when it is `exc` (a traceback, in the answer of a Frappe site in
+	developer mode). The keys of the answers read here (`offers`, `service_id`, `methods`, `packingPlan`,
+	`exc_type` and the rest) all stay. What is not a dict is shown under "value". A long answer keeps
 	its start: lists and dicts are cut to their first entries and long texts to their first characters, in
 	steps, until it fits; the verdict reads the first method or offer of an answer, which survives. Anything
 	nested more than eight levels deep, a number that is not finite and an object that is not JSON become "...",

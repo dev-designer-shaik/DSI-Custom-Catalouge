@@ -631,6 +631,117 @@ def test_sanitize_drops_secrets_at_any_depth_whatever_the_case():
 	assert "password" in body, "the input is not changed"
 
 
+@pytest.mark.parametrize(
+	"key",
+	[
+		"auth",
+		"Auth",
+		"x-auth",
+		"oauth",
+		"authToken",
+		"pwd",
+		"userPwd",
+		"user_pwd",
+		"PWD",
+		"passwd",
+		"pass",
+		"Pass",
+		"x_pass",
+		"db.pass",
+		"pass-word",
+		"passphrase",
+		"passcode",
+		"sid",
+		"SID",
+		"userSid",
+		"user_sid",
+		"connect.sid",
+		"session",
+		"sessionId",
+		"mySession",
+		"PHPSESSID",
+		"sessid",
+		"signature",
+		"hmacSignature",
+		"private",
+		"isPrivate",
+		"cookie",
+		"Set-Cookie",
+	],
+)
+def test_sanitize_drops_the_names_that_nearly_name_a_secret(key):
+	body = {
+		key: SECRET,
+		"kept": 1,
+		"nested": {key: [{key: SECRET}], "fine": 2},
+		"list": [{key: SECRET, "ok": 3}],
+	}
+	clean = sanitize_detail(body)
+	assert clean == {"kept": 1, "nested": {"fine": 2}, "list": [{"ok": 3}]}, key
+	assert SECRET not in json.dumps(clean)
+
+
+@pytest.mark.parametrize(
+	"key",
+	[
+		# every key of the price API's answer and of the website's
+		"message",
+		"policy_active",
+		"price_source",
+		"zone",
+		"offered",
+		"reason",
+		"offers",
+		"service_id",
+		"name",
+		"amount",
+		"source",
+		"estimated_days",
+		"success",
+		"package",
+		"packingPlan",
+		"methods",
+		"defaultMethodId",
+		"id",
+		"provider",
+		"providerCode",
+		"serviceName",
+		"scope",
+		"estimatedDays",
+		"shippingAmount",
+		"currency",
+		"codSupported",
+		"collectionDate",
+		"deliveryDate",
+		"total_units",
+		"total_boxes",
+		"total_weight_kg",
+		"dimensions",
+		"boxes",
+		"box_code",
+		"error",
+		"exception",
+		"exc_type",
+		"_server_messages",
+		# short words that are only a piece of an honest word
+		"side",
+		"sidebar",
+		"residual",
+		"decide",
+		"passenger",
+		"bypass",
+		"compass",
+		"passage",
+		"pwdx",
+		"serviceId",
+		"ServiceID",
+		"outside_id",
+	],
+)
+def test_sanitize_keeps_the_names_that_only_look_like_a_secret(key):
+	assert sanitize_detail({key: 1, "nested": {key: [{key: 2}]}}) == {key: 1, "nested": {key: [{key: 2}]}}
+
+
 def test_sanitize_drops_the_tracebacks_a_failing_frappe_site_sends_in_developer_mode():
 	body = {
 		"exc_type": "ValidationError",
