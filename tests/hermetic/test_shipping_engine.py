@@ -2667,9 +2667,9 @@ def test_a_rate_card_broken_at_any_one_place_is_answered_and_never_priced_at_not
 	]
 	variants = 0
 	for junk, variant in junk_variants(card):
-		# every price of the good card is above zero. A card may price at 0.00 only for a number that says so: a 0,
-		# or a negative price, which a price list never goes below.
-		says_nothing = isinstance(junk, (int, float)) and not isinstance(junk, bool) and junk <= 0
+		# every price of the good card is above zero. A card may price at 0.00 only for a number that says so: a 0.
+		# A price below zero is no price (the zone prices nothing), never a free delivery.
+		says_nothing = isinstance(junk, (int, float)) and not isinstance(junk, bool) and junk == 0
 		for policy in card_policies(variant).values():
 			check_card_answers(policy, orders, free_is_a_fault=not says_nothing)
 		variants += 1

@@ -39,8 +39,9 @@ An order is priced in these steps:
    first tier whose upper weight is at least the profile's weight is charged. So a weight that falls in a gap
    between two tiers (Shopify's 0.6 to 0.7 lb, say) pays the next tier up, and a weight under the first tier
    pays the first. A weight over the top tier cannot be priced (`too_heavy`).
-5. The order pays the profiles' prices added together, in dollars and cents, and never less than zero. One
-   profile that cannot be priced means the whole order cannot: it is never charged as free.
+5. The order pays the profiles' prices added together, in dollars and cents. One profile that cannot be priced
+   (no zone for the country, a weight over the top tier, or a zone whose tiers hold something unreadable, such as
+   a price below zero) means the whole order cannot: it is never charged as free.
 6. The delivery method is named after the profiles' method text, or, if they differ, after the one that takes
    the most days, and it promises the largest number of days.
 
@@ -853,14 +854,15 @@ def _zone_for(profile, country):
 
 def _usable_tiers(zone):
 	"""[(position, from, to, price)] for the zone's tiers, lightest first (a flat price has from and to None).
-	None when the zone cannot price an order: no tiers, a tier that cannot be read, or a flat price beside
-	other tiers. A position counts from 1 in the zone's own list."""
+	None when the zone cannot price an order: no tiers, a tier that cannot be read (a price that is not a
+	number from 0 to MAX_PRICE, weights that are not usable), or a flat price beside other tiers. A price below
+	zero is never read as a free delivery. A position counts from 1 in the zone's own list."""
 	tiers = []
 	for position, tier in enumerate(_as_list(zone.get("tiers")), start=1):
 		if not isinstance(tier, dict):
 			return None
 		price = _number(tier.get("price"))
-		if price is None or price > MAX_PRICE:
+		if price is None or price < 0 or price > MAX_PRICE:
 			return None
 		low, high = tier.get("from"), tier.get("to")
 		if low is None and high is None:

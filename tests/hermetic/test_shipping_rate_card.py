@@ -1648,11 +1648,16 @@ def test_price_card_sums_prices_exactly_in_cents():
 	assert [line["price"] for line in result["lines"]] == [10.01, 0.0], (
 		"each line to cents, half up, then added"
 	)
-	# a price below zero is charged as nothing, and the order never goes below zero
+	# a price below zero is no price at all: the zone prices nothing and the order is not priced, never free
 	card["profiles"][0]["zones"][0]["tiers"] = [flat(-5.0)]
 	card["profiles"][1]["zones"][0]["tiers"] = [flat(3.0)]
-	assert priced(price(card, "US", item("A-1", 1.0), item("B-1", 1.0)), 3.0)["lines"][0]["price"] == 0.0
+	result = refused(price(card, "US", item("A-1", 1.0), item("B-1", 1.0)), "not_covered")
+	assert "no usable prices" in result["detail"] and result["lines"][0]["price"] is None
 	card["profiles"][1]["zones"][0]["tiers"] = [flat(-3.0)]
+	refused(price(card, "US", item("A-1", 1.0), item("B-1", 1.0)), "not_covered")
+	# a price of exactly nothing is a free delivery, as Bahrain's is
+	card["profiles"][0]["zones"][0]["tiers"] = [flat(0.0)]
+	card["profiles"][1]["zones"][0]["tiers"] = [flat(0.0)]
 	assert priced(price(card, "US", item("A-1", 1.0), item("B-1", 1.0)), 0.0)["total"] == 0.0
 
 
@@ -1956,6 +1961,8 @@ def test_price_card_the_first_zone_that_lists_the_country_is_the_one_used():
 		pytest.param(lambda t: t.update(price="60"), id="text price"),
 		pytest.param(lambda t: t.update(price=True), id="bool price"),
 		pytest.param(lambda t: t.update(price=2e6), id="price above the limit"),
+		pytest.param(lambda t: t.update(price=-0.01), id="price below zero"),
+		pytest.param(lambda t: t.update(price=-1e308), id="price far below zero"),
 		pytest.param(lambda t: t.update(price=None), id="no price"),
 		pytest.param(lambda t: t.update({"from": "0.7"}), id="text weight"),
 		pytest.param(lambda t: t.update(to=None), id="one weight only"),
