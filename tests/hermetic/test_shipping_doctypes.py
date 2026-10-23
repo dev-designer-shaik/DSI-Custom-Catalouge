@@ -560,10 +560,35 @@ def test_the_push_script_is_executable_and_never_deletes_or_migrates():
 	assert script.count("docker restart") == 1, "the one restart is of the backend container"
 
 
+# What the stand-in rsync does after it has logged its call. The listed files come after "--" and the last
+# argument is the destination. Like the real rsync, which sees what erp2 already has, it reports a path as new
+# ("<f+++++++++ path", as --itemize-changes does) the first time it is given it, and never again: it keeps one
+# marker file for each path it has "sent". Nothing else it is given (an option, the ssh command, the host) is
+# ever reported as a file.
+RSYNC_STAND_IN = """\
+after=0
+paths=()
+for a in "$@"; do
+	if [ "$after" = 1 ]; then paths+=("$a"); fi
+	if [ "$a" = -- ]; then after=1; fi
+done
+unset 'paths[${#paths[@]}-1]'
+for p in "${paths[@]}"; do
+	if [ ! -e "@SENT@/$p" ]; then
+		mkdir -p "$(dirname "@SENT@/$p")"
+		: > "@SENT@/$p"
+		echo "<f+++++++++ $p"
+	fi
+done
+"""
+
+
 class Push:
 	"""A copy of the push script in a scratch repo, run with stand-ins for ssh, rsync and docker.
 
-	The stand-ins record what they were called with and do nothing else, so a run cannot reach erp2.
+	The stand-ins record what they were called with and do nothing else, so a run cannot reach erp2. The
+	rsync one also remembers which listed files it has been given (see RSYNC_STAND_IN), so that a second run
+	finds them already there.
 	"""
 
 	def __init__(self, tmp_path, listed, make=None):
@@ -580,6 +605,7 @@ class Push:
 			target.parent.mkdir(parents=True, exist_ok=True)
 			target.write_text("x", encoding="utf-8")
 		self.log = tmp_path / "calls.log"
+		self.sent = tmp_path / "sent"  # one marker file for each path the stand-in rsync has been given
 		stubs = tmp_path / "bin"
 		stubs.mkdir()
 		for name in ("ssh", "rsync", "docker", "bench"):
@@ -587,8 +613,7 @@ class Push:
 			stub.write_text(
 				"#!/usr/bin/env bash\n"
 				f'echo "{name} $*" >> "{self.log}"\n'
-				# rsync reports a new file for every path it was given, the way --itemize-changes does
-				'if [ "$(basename "$0")" = rsync ]; then for a in "$@"; do case "$a" in *.*) echo "<f+++++++++ $a";; esac; done; fi\n',
+				+ (RSYNC_STAND_IN.replace("@SENT@", str(self.sent)) if name == "rsync" else ""),
 				encoding="utf-8",
 			)
 			stub.chmod(0o755)
@@ -672,10 +697,16 @@ def test_restart_restarts_only_the_backend_container_and_comes_last(real_list):
 
 
 @needs_bash
-def test_running_it_again_asks_for_nothing_new(real_list):
-	first = real_list.run().returncode
-	second = real_list.run().returncode
-	assert (first, second) == (0, 0)
+def test_running_it_again_copies_nothing_because_every_file_is_already_there(real_list):
+	"""Idempotence, not just determinism: the stand-in rsync remembers what it has sent (as the real one sees
+	what erp2 has), so the first run sends every listed file and the second sends none."""
+	count = len(listed_files())
+	first, second = real_list.run(), real_list.run()
+	assert (first.returncode, second.returncode) == (0, 0), (first.stderr, second.stderr)
+	assert f"{count} of {count} file(s) copied" in first.stdout
+	assert first.stdout.count("  new      ") == count and "  updated  " not in first.stdout
+	assert f"0 of {count} file(s) copied" in second.stdout
+	assert "  new      " not in second.stdout and "  updated  " not in second.stdout
 	# Both runs send the same commands: what is already current is skipped by rsync and by reload-doc.
 	calls = real_list.calls()
 	assert calls[: len(calls) // 2] == calls[len(calls) // 2 :]
