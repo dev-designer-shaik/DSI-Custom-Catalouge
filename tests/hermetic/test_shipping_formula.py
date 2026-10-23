@@ -809,41 +809,171 @@ def test_a_syntax_error_says_what_and_where():
 
 
 NOT_WRITTEN = "The formula is not written correctly"
+BACKSLASH = "The formula contains a backslash (\\), which cannot be used."
+
+
+def parse_that_fails(message, lineno, offset):
+	"""A stand-in for ast.parse that fails the way the parser would, with this message, line and column. With it
+	the sentences THIS module writes around Python's wording are pinned exactly, whatever a newer Python says
+	and counts for itself."""
+
+	def parse(*args, **kwargs):
+		error = SyntaxError(message)
+		error.lineno, error.offset = lineno, offset
+		raise error
+
+	return parse
 
 
 @pytest.mark.parametrize(
-	("source", "message"),
+	("source", "python_says", "lineno", "offset", "sentence"),
 	[
-		# the position counts what the person typed: leading blanks and blank lines too
-		("carrier_price $", f"{NOT_WRITTEN} near character 15: invalid syntax."),
-		("   carrier_price $", f"{NOT_WRITTEN} near character 18: invalid syntax."),
-		("\t\tcarrier_price $", f"{NOT_WRITTEN} near character 17: invalid syntax."),
-		("\n\ncarrier_price $", f"{NOT_WRITTEN} near character 17: invalid syntax."),
-		("\r\n  carrier_price $\r\n", f"{NOT_WRITTEN} near character 19: invalid syntax."),
-		# a formula of more than one line names the line, and counts the characters from its start
-		("carrier_price\n+ 1", f"{NOT_WRITTEN} near line 2, character 1: invalid syntax."),
-		("1 +\n\n  )", f"{NOT_WRITTEN} near line 3, character 3: unmatched ')'."),
-		("1 +\r\n2 )", f"{NOT_WRITTEN} near line 2, character 3: unmatched ')'."),
-		("\n\n1 +\n2 )", f"{NOT_WRITTEN} near line 4, character 3: unmatched ')'."),
-		("  max(1,\n  2", f"{NOT_WRITTEN} near line 1, character 6: '(' was never closed."),
-		# Python's own wording, made into a sentence
-		("max(1 2)", f"{NOT_WRITTEN} near character 5: invalid syntax. Perhaps you forgot a comma."),
-		("max(carrier_price", f"{NOT_WRITTEN} near character 4: '(' was never closed."),
-		(  # U+00D7, the multiplication sign, where an asterisk was meant
-			"carrier_price " + chr(0xD7) + " 2",
-			f"{NOT_WRITTEN} near character 15: invalid character '{chr(0xD7)}' (U+00D7).",
+		# one line: the position counts what the person typed, leading blanks and blank lines too
+		pytest.param(
+			"carrier_price $", "boom", 1, 15, f"{NOT_WRITTEN} near character 15: boom.", id="one line"
 		),
+		pytest.param(
+			"   carrier_price $", "boom", 1, 15, f"{NOT_WRITTEN} near character 18: boom.", id="blanks"
+		),
+		pytest.param(
+			"\t\tcarrier_price $", "boom", 1, 15, f"{NOT_WRITTEN} near character 17: boom.", id="tabs"
+		),
+		pytest.param(
+			"\n\ncarrier_price $", "boom", 1, 15, f"{NOT_WRITTEN} near character 17: boom.", id="blank lines"
+		),
+		pytest.param(
+			"\r\n  carrier_price $\r\n",
+			"boom",
+			1,
+			15,
+			f"{NOT_WRITTEN} near character 19: boom.",
+			id="CRLF and blanks",
+		),
+		# more than one line: the line is named, and the character counts from the start of that line
+		pytest.param(
+			"carrier_price\n+ 1", "boom", 2, 1, f"{NOT_WRITTEN} near line 2, character 1: boom.", id="line 2"
+		),
+		pytest.param(
+			"1 +\n\n  )", "boom", 3, 3, f"{NOT_WRITTEN} near line 3, character 3: boom.", id="line 3"
+		),
+		pytest.param(
+			"1 +\r\n2 )", "boom", 2, 3, f"{NOT_WRITTEN} near line 2, character 3: boom.", id="CRLF line 2"
+		),
+		pytest.param(
+			"\n\n1 +\n2 )",
+			"boom",
+			2,
+			3,
+			f"{NOT_WRITTEN} near line 4, character 3: boom.",
+			id="blank lines shift the line",
+		),
+		pytest.param(
+			"  max(1,\n  2",
+			"boom",
+			1,
+			4,
+			f"{NOT_WRITTEN} near line 1, character 6: boom.",
+			id="blanks on line 1 of several",
+		),
+		pytest.param(
+			"\n  max(1,\n  2",
+			"boom",
+			1,
+			4,
+			f"{NOT_WRITTEN} near line 2, character 6: boom.",
+			id="blank line then blanks",
+		),
+		pytest.param(
+			"1 +\n2", "boom", None, 3, f"{NOT_WRITTEN} near line 1, character 3: boom.", id="no line number"
+		),
+		# Python's phrase is kept, minus a closing ? or . (the sentence adds its own full stop)
+		pytest.param(
+			"max(1 2)",
+			"invalid syntax. Perhaps you forgot a comma?",
+			1,
+			5,
+			f"{NOT_WRITTEN} near character 5: invalid syntax. Perhaps you forgot a comma.",
+			id="question mark",
+		),
+		pytest.param(
+			"x", "it ends here.", 1, 2, f"{NOT_WRITTEN} near character 2: it ends here.", id="full stop"
+		),
+		pytest.param("x", "  spaced  ", 1, 2, f"{NOT_WRITTEN} near character 2: spaced.", id="outer spaces"),
+		pytest.param("x", "", 1, 2, f"{NOT_WRITTEN} near character 2: invalid syntax.", id="empty phrase"),
+		pytest.param("x", None, 1, 2, f"{NOT_WRITTEN} near character 2: invalid syntax.", id="no phrase"),
+		# where Python gives no position there is none in the sentence
+		pytest.param("carrier_price if", "boom", 1, 0, f"{NOT_WRITTEN}: boom.", id="column 0"),
+		pytest.param("carrier_price if", "boom", None, None, f"{NOT_WRITTEN}: boom.", id="no position"),
 		# a backslash escape is a "unicode error" to Python, and a backslash to a person
-		("'\\xZ'", "The formula contains a backslash (\\), which cannot be used."),
-		("1 + '\\N{nothing}'", "The formula contains a backslash (\\), which cannot be used."),
-		# no position known
-		("carrier_price if", f"{NOT_WRITTEN}: invalid syntax."),
+		pytest.param(
+			"'\\xZ'",
+			"(unicode error) 'unicodeescape' codec can't decode bytes",
+			1,
+			1,
+			BACKSLASH,
+			id="backslash",
+		),
+		pytest.param(
+			"'\\xZ'", "(unicode error) whatever", None, None, BACKSLASH, id="backslash, no position"
+		),
 	],
-	ids=lambda value: repr(value)[:40],
 )
-def test_a_syntax_error_says_where_in_what_was_typed_and_in_plain_words(source, message):
-	assert _refusal(source) == message
+def test_the_sentence_around_a_syntax_error_says_where_in_what_was_typed(
+	monkeypatch, source, python_says, lineno, offset, sentence
+):
+	with monkeypatch.context() as patch:
+		patch.setattr(shipping_formula.ast, "parse", parse_that_fails(python_says, lineno, offset))
+		assert _refusal(source) == sentence
+
+
+@pytest.mark.parametrize(
+	"source",
+	[
+		"carrier_price $",
+		"max(1 2)",
+		"1 +* 2",
+		"carrier_price " + chr(0xD7) + " 2",
+	],  # U+00D7, the multiplication sign
+	ids=_short,
+)
+def test_a_real_syntax_error_is_one_plain_sentence_with_pythons_phrase_and_a_position(source):
+	"""Whatever Python says and counts (it words and numbers its errors differently from one version to the
+	next), the sentence has the same parts: where, then Python's phrase, ending in one full stop."""
+	message = _refusal(source)
+	assert re.fullmatch(rf"{NOT_WRITTEN} near character [1-9][0-9]*: [^\n]*[^\n?.]\.", message), message
+
+
+def test_a_real_syntax_errors_question_mark_does_not_end_the_sentence():
+	message = _refusal("max(1 2)")  # Python asks "Perhaps you forgot a comma?"
 	assert "?." not in message and message.endswith("."), message
+
+
+def _where(source):
+	"""(line or None, character) a real syntax error is reported at."""
+	found = re.search(r"near (?:line (\d+), )?character (\d+)", _refusal(source))
+	return (int(found[1]) if found[1] else None), int(found[2])
+
+
+@pytest.mark.parametrize("leading", ["   ", "\t\t", "\n\n", "\r\n  ", " \n "])
+def test_a_real_syntax_errors_position_counts_the_blanks_in_front(leading):
+	"""Whatever number Python counts, what the person typed in front of the formula is counted on top of it."""
+	assert _where(leading + "carrier_price $") == (None, _where("carrier_price $")[1] + len(leading))
+
+
+def test_a_real_syntax_errors_line_counts_the_blank_lines_in_front():
+	line, character = _where("1 +\n2 )")
+	assert line is not None
+	assert _where("1 +\r\n2 )") == (line, character), "CRLF counts as one line break"
+	assert _where("\n\n1 +\n2 )") == (line + 2, character), "blank lines in front are lines"
+	# on the first line the blanks in front are part of the column
+	first_line, first_character = _where("1 $\n2")
+	assert first_line is not None
+	assert _where("   1 $\n2") == (first_line, first_character + 3)
+
+
+@pytest.mark.parametrize("source", ["'\\xZ'", "1 + '\\N{nothing}'", "2 * '\\u12'"])
+def test_a_backslash_escape_is_a_backslash_to_a_person(source):
+	assert _refusal(source) == BACKSLASH
 
 
 def test_every_refusal_is_a_plain_sentence():
