@@ -24,7 +24,10 @@ A comparison, and, or and not give a yes/no answer, never a number. They choose
 between two numbers inside ``a if condition else b``, but a formula as a whole
 must give a number. Using a yes/no answer as a number (adding it, comparing it,
 giving it to a function) is refused when the formula is saved, on every branch of
-an ``a if condition else b``, not only on the one a sample order takes.
+an ``a if condition else b``, not only on the one a sample order takes. So is a
+formula whose result can be a yes/no on any branch: the result is a price, so
+`check_formula` wants a number there on every branch too (`compile_formula` still
+accepts such a formula, as a part of a bigger one).
 
 Every failure is a FormulaError whose message is a plain sentence for an ERP
 user. Nothing else escapes `compile_formula`, `evaluate` or `check_formula`.
@@ -410,5 +413,14 @@ def evaluate(source: str, variables: dict[str, float]) -> float:
 
 
 def check_formula(source: str) -> None:
-	"""Refuse a formula that cannot be used, or that gives no number for the SAMPLE order."""
+	"""Refuse a formula that cannot be used, that gives no number for the SAMPLE order, or that gives a yes/no
+	answer on some other branch.
+
+	A saved formula is always used as a price, so its result has to be a number on every branch of it, not only
+	on the one the SAMPLE order takes: `1 if carrier_price > 5 else (boxes > 0)` would otherwise be saved and
+	fail, later, for an order that takes the other branch. (`compile_formula` accepts such a formula, because a
+	yes/no is fine as a part of a bigger one.) The sentence is the one for any yes/no answer.
+	"""
 	evaluate(source, SAMPLE)
+	if _kind(compile_formula(source).body) != _NUMBER:
+		raise FormulaError(_YES_NO)

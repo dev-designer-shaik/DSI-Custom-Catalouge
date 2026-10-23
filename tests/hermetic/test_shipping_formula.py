@@ -389,6 +389,67 @@ def test_a_yes_no_answer_that_is_not_used_as_a_number_is_accepted(source):
 	assert isinstance(compile_formula(source), ast.Expression)
 
 
+# A saved formula is always used as a price, so `check_formula` wants a number on EVERY branch of it, not only on
+# the one the SAMPLE order happens to take. `compile_formula` still accepts these: a yes/no is fine as a part of a
+# bigger formula.
+YES_NO_ROOTS = [
+	# a yes/no as the whole formula
+	"carrier_price > 5",
+	"not boxes",
+	"boxes or 0",
+	"1 < boxes < 3",
+	# a whole that is a number on one branch and a yes/no on another, where the SAMPLE order takes the number
+	# (these used to be saved, and failed at run time for an order that took the other branch) ...
+	"1 if carrier_price > 5 else (boxes > 0)",
+	"2 if carrier_price > 5 else (boxes and item_count)",
+	"max(1, 2) if carrier_price > 5 else (not boxes)",
+	# ... and where it takes the yes/no (refused already, when the sample is calculated)
+	"(boxes > 0) if carrier_price > 5 else 1",
+	"1 if carrier_price < 5 else (boxes > 0)",
+	# nested, with and without brackets
+	"1 if carrier_price > 5 else (2 if boxes > 3 else (boxes > 0))",
+	"1 if carrier_price > 5 else 2 if boxes > 3 else (boxes > 0)",
+	"(1 if boxes else 2) if carrier_price > 5 else (boxes > 0)",
+	"(1 if boxes else (boxes > 0)) if carrier_price > 5 else 3",
+	"1 if carrier_price > 5 else (1 if boxes else (boxes > 0))",
+]
+
+
+@pytest.mark.parametrize("source", YES_NO_ROOTS, ids=_short)
+def test_a_formula_that_can_give_a_yes_no_on_any_branch_is_refused_when_it_is_saved(source):
+	assert isinstance(compile_formula(source), ast.Expression), "as a part of another formula it is fine"
+	with pytest.raises(FormulaError) as caught:
+		check_formula(source)
+	assert str(caught.value) == _refusal("carrier_price > 5"), "the sentence for any yes/no answer"
+
+
+# Formulas people write that are a number on every branch: they keep being saved.
+NUMBER_ON_EVERY_BRANCH = [
+	"max(boxes, 2) if carrier_price > 5 else 1",
+	"carrier_price * 1.1 if order_value < 100 else (carrier_price if order_value < 500 else 0)",
+	"carrier_price + 5 if boxes > 1 else carrier_price + 2 if boxes > 3 else carrier_price",
+	"1 if carrier_price > 10 and not order_value < 5 else 0",
+	"0 if not boxes else carrier_price",
+	"carrier_price if (boxes > 0) and (item_count > 1) else 0",
+	"carrier_price / boxes if boxes else 7",
+	"1 if boxes > 0 and carrier_price / boxes > 5 else 2",
+	"(carrier_price if weight_kg > 5 else carrier_price + 10) * 1.1",
+	"max(1, 2 if boxes > 1 else 3)",
+	"-(carrier_price if boxes else 1)",
+	"abs(-carrier_price) if boxes else 0",
+	"min(ceil(carrier_price), floor(order_value / 10))",
+	"round(carrier_price, 1)",
+	"boxes * 5 + item_count",
+	"(1 if boxes else 2) if carrier_price > 5 else (3 if item_count else 4)",
+]
+
+
+@pytest.mark.parametrize("source", NUMBER_ON_EVERY_BRANCH, ids=_short)
+def test_a_formula_that_is_a_number_on_every_branch_is_still_saved(source):
+	assert check_formula(source) is None
+	assert isinstance(evaluate(source, SAMPLE), float)
+
+
 def _random_formula(rng, depth):
 	"""A random well-formed formula in which numbers and yes/no answers are mixed freely."""
 	if depth == 0 or rng.random() < 0.12:
@@ -411,12 +472,51 @@ def _random_formula(rng, depth):
 	return rng.choice(shapes)()
 
 
+def _value_sets():
+	"""Values of the names an order could bring, enough to take every branch of a random formula."""
+	grid = itertools.product((0, 1, 5), (0.0, 3.0, 40.0), (0, 2))
+	return [{**SAMPLE, "boxes": b, "carrier_price": c, "item_count": i} for b, c, i in grid]
+
+
+def _fails(source, values):
+	try:
+		evaluate(source, values)
+	except FormulaError:
+		return True
+	return False
+
+
+def test_whatever_check_formula_saves_never_gives_a_yes_no_for_any_values():
+	"""The save check against what an order can meet, on random formulas: when `check_formula` saves a formula,
+	no values of the names make `evaluate` fail. It used to calculate the sample order only, so a formula that
+	was a yes/no on another branch was saved and failed later; the counts show the fuzz reaches those."""
+	rng = random.Random(20261024)
+	values = _value_sets()
+	saved = refused_now = failing_later = 0
+	for _ in range(1500):
+		source = _random_formula(rng, rng.randint(1, 5))
+		try:
+			check_formula(source)
+		except FormulaError:
+			if _fails(source, SAMPLE):
+				continue  # the sample order meets it, so it was refused before too
+			refused_now += 1  # saved before: only the branches the sample does not take were wrong
+			failing_later += any(_fails(source, given) for given in values)
+			continue
+		saved += 1
+		for given in values:
+			assert isinstance(evaluate(source, given), float), source  # raises the yes/no error if it is hit
+	assert saved > 100, "the fuzz must reach formulas that are saved"
+	# and the formulas the old check saved too early (the sample took a number, another branch gave a yes/no):
+	# this seed finds 23 of them, 8 of which really do fail for one of the value sets
+	assert refused_now >= 10 and failing_later >= 4, (refused_now, failing_later)
+
+
 def test_a_formula_saved_as_a_number_never_meets_a_yes_no_answer_as_a_number():
 	"""The save check against the run-time rule, on random formulas: when `(formula) * 1` is accepted (so the
 	formula gives a number on every branch), no values of the names make `evaluate` raise the yes/no error."""
 	rng = random.Random(20261023)
-	grid = itertools.product((0, 1, 5), (0.0, 3.0, 40.0), (0, 2))
-	values = [{**SAMPLE, "boxes": b, "carrier_price": c, "item_count": i} for b, c, i in grid]
+	values = _value_sets()
 	accepted = 0
 	for _ in range(1500):
 		source = _random_formula(rng, rng.randint(1, 5))
