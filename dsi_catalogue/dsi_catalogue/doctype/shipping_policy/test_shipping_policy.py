@@ -49,6 +49,8 @@ FIXTURE = ("..", "tests", "hermetic", "fixtures", "shipping_policy_example.json"
 # The policy of a site that has never had one: off, nothing set, no zones, no item sets, no rules.
 EMPTY_POLICY = {
 	"active": False,
+	"price_source": "carrier",
+	"rate_card": None,
 	"not_covered": "pass_through",
 	"default_fallback": {"method": "no_delivery", "amount": 0.0},
 	"zones": [],
@@ -394,8 +396,8 @@ class TestShippingPolicy(ShippingPolicyTestCase):
 QUOTE = {"service_id": "Aramex BH GCC PPX", "name": "Aramex BH GCC PPX", "amount": 38.20, "boxes_quoted": 1}
 ONE_BOX = {"weight_kg": 1.5, "volume_l": 4.0}
 # What the guest methods may hand back, and nothing more.
-RESPONSE_KEYS = {"policy_active", "zone", "offered", "reason", "message", "offers"}
-OFFER_KEYS = {"service_id", "name", "amount", "source", "reason"}
+RESPONSE_KEYS = {"policy_active", "price_source", "zone", "offered", "reason", "message", "offers"}
+OFFER_KEYS = {"service_id", "name", "amount", "source", "reason", "estimated_days"}
 # The title of the Error Log entries for a formula that could not be calculated.
 FORMULA_ERROR = "Shipping policy formula error"
 # A formula that passes the save-time check (at the sample weight of 2.4 kg it gives a number) and divides by
@@ -634,6 +636,7 @@ class TestGuestMethods(ShippingPolicyTestCase):
 			empty,
 			{
 				"policy_active": False,
+				"price_source": "carrier",
 				"zone": None,
 				"offered": False,
 				"reason": None,
@@ -651,14 +654,21 @@ class TestGuestMethods(ShippingPolicyTestCase):
 		cartons = [{"weight_kg": 1, "volume_l": 2}, {"weight_kg": 0.5, "volume_l": None}]  # a null measure
 		expected = {
 			"policy_active": False,
+			"price_source": "carrier",
 			"zone": None,
 			"offered": True,
 			"reason": None,
 			"message": "",
 			"offers": [
-				{"service_id": "A", "name": "Whole", "amount": 12.5, "source": "carrier", "reason": None},
-				{"service_id": "B", "name": "Short", "amount": 7.0, "source": "carrier", "reason": None},
-				{"service_id": "C", "name": "C", "amount": 9.99, "source": "carrier", "reason": None},
+				{
+					"service_id": service_id,
+					"name": name,
+					"amount": amount,
+					"source": "carrier",
+					"reason": None,
+					"estimated_days": None,
+				}
+				for service_id, name, amount in (("A", "Whole", 12.5), ("B", "Short", 7.0), ("C", "C", 9.99))
 			],
 		}
 
@@ -684,6 +694,7 @@ class TestGuestMethods(ShippingPolicyTestCase):
 			result,
 			{
 				"policy_active": True,
+				"price_source": "carrier",
 				"zone": "GCC",
 				"offered": True,
 				"reason": None,
@@ -695,6 +706,7 @@ class TestGuestMethods(ShippingPolicyTestCase):
 						"amount": 39.0,
 						"source": "rule",
 						"reason": None,
+						"estimated_days": None,
 					}
 				],
 			},

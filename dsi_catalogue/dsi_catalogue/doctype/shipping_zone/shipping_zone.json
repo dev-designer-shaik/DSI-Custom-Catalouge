@@ -94,7 +94,7 @@
    "fieldname": "fallback_method",
    "fieldtype": "Select",
    "label": "When the carrier gives no price",
-   "options": "Use the policy default\nDon't offer delivery\nCharge a fixed amount\nFree"
+   "options": "Use the policy default\nDon't offer delivery\nCharge a fixed amount\nFree\nUse the rate card"
   },
   {
    "depends_on": "eval:doc.fallback_method == 'Charge a fixed amount'",
@@ -106,7 +106,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-22 00:00:00.000000",
+ "modified": "2026-10-23 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "dsi_catalogue",
  "name": "Shipping Zone",

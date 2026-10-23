@@ -19,8 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from dsi_catalogue.shipping_engine import LABELS
+from dsi_catalogue.shipping_engine import LABELS, resolve, validate_policy
 from dsi_catalogue.shipping_policy_data import policy_from_rows, rows_from_policy
+from dsi_catalogue.shipping_rate_card import validate_card
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCTYPE_DIR = ROOT / "dsi_catalogue" / "dsi_catalogue" / "doctype"
@@ -53,18 +54,34 @@ BANDS = {
 	"max_volume_l": "3",
 }
 
-# What the engine and the data module have gained for the rate card, and the doctypes do not hold yet: the
-# choice "Use the rate card" in the two fallback Selects, and the Shipping Policy's price_source and rate_card
-# fields. Task 13 adds them to the doctype files and deletes these allowances; until it does, the tests that
-# compare the doctypes with the engine leave them out, and fail the moment the doctypes have them.
-PENDING_OPTION = "Use the rate card"
-PENDING_POLICY_FIELDS = {"price_source", "rate_card"}
+# The smallest rate card `validate_card` accepts: one profile that takes every item, with one flat-price zone.
+TINY_CARD = {
+	"version": 1,
+	"currency": "USD",
+	"unit": "lb",
+	"profiles": [
+		{
+			"name": "Everything",
+			"match": ["*"],
+			"zones": [
+				{
+					"name": "Gulf",
+					"countries": ["AE"],
+					"method": "Express (1-3 days)",
+					"days": 3,
+					"tiers": [{"from": None, "to": None, "price": 20.0}],
+				}
+			],
+		}
+	],
+}
 
 # The Select fields, and the engine's label table whose keys are their options, in order.
 SELECTS = {
 	(ZONE, "fallback_method"): "zone_fallback",
 	(POLICY, "default_fallback_method"): "default_fallback",
 	(POLICY, "not_covered"): "not_covered",
+	(POLICY, "price_source"): "price_source",
 	(RULE, "method"): "method",
 }
 
@@ -181,9 +198,33 @@ def test_select_options_match_the_engine_labels():
 	assert found == set(SELECTS), "every Select field has a label table in the engine"
 	for (name, fieldname), kind in SELECTS.items():
 		field = fields_of(name)[fieldname]
-		expected = [label for label in LABELS[kind] if label != PENDING_OPTION]  # Task 13: list(LABELS[kind])
-		assert field["options"].split("\n") == expected, (name, fieldname)
+		assert field["options"].split("\n") == list(LABELS[kind]), (name, fieldname)
 		assert field["default"] == next(iter(LABELS[kind])), "the first label is the default"
+
+
+def test_every_select_still_matches_the_engine_labels():
+	"""The rate card added a Select and a choice to two others: all of it still matches the engine.
+
+	Each Select lists exactly the labels of its table, in the engine's order, with no stray blanks. Each of
+	the engine's tables is the options of one Select, so a table the doctypes do not offer (or a Select the
+	engine has no table for) fails here. "Use the rate card" is the last choice of both fallbacks.
+	"""
+	selects = {
+		(name, fieldname): field
+		for name in DOCTYPES
+		for fieldname, field in fields_of(name).items()
+		if field["fieldtype"] == "Select"
+	}
+	assert set(selects) == set(SELECTS)
+	assert sorted(SELECTS.values()) == sorted(LABELS), "each label table is the options of exactly one Select"
+	for key, field in selects.items():
+		options = field["options"].split("\n")
+		assert options == list(LABELS[SELECTS[key]]), key
+		assert all(option == option.strip() and option for option in options), key
+		assert field["default"] == options[0], key
+	for key in ((ZONE, "fallback_method"), (POLICY, "default_fallback_method")):
+		assert selects[key]["options"].split("\n")[-2:] == ["Free", "Use the rate card"], key
+		assert LABELS[SELECTS[key]]["Use the rate card"] == "rate_card"
 
 
 def test_new_rule_rows_start_disabled():
@@ -206,6 +247,48 @@ def test_policy_defaults_ship_the_policy_off():
 	assert fields["active"]["default"] == "0"
 	assert fields["not_covered"]["default"] == "Pass the carrier price through"
 	assert fields["default_fallback_method"]["default"] == "Don't offer delivery"
+
+
+def test_policy_has_price_source_and_rate_card_fields_with_safe_defaults():
+	data, fields = doctype(POLICY), fields_of(POLICY)
+	source, card = fields["price_source"], fields["rate_card"]
+	# The price source: the engine's two labels, and the carrier unless somebody chooses the card.
+	assert (source["fieldtype"], source["label"]) == ("Select", "Price source")
+	assert source["options"] == "Carrier\nRate card" == "\n".join(LABELS["price_source"])
+	assert source["default"] == "Carrier"
+	assert source["description"] == (
+		"Carrier: customers pay the carrier's price with the rules below. "
+		"Rate card: customers pay from the interim rate card and the carrier is not asked."
+	)
+	# The rate card: JSON text that the form shows and nobody types, there is none until the wizard saves one.
+	assert (card["fieldtype"], card["label"], card["options"]) == ("Code", "Rate card", "JSON")
+	assert card["read_only"] == 1
+	assert card["description"] == "Edited in the wizard (Rates step); this is the stored copy."
+	for field in (source, card):
+		assert not field.get("reqd") and not field.get("hidden"), field["fieldname"]
+	assert "default" not in card
+	# Both sit right after Active, before the sections for the rules.
+	order = data["field_order"]
+	assert order[order.index("active") + 1 : order.index("active") + 3] == ["price_source", "rate_card"]
+	assert order.index("rate_card") < order.index("sec_defaults")
+	# What a policy that has never been saved reads as (the doctype's own defaults): off, the carrier, no
+	# card, nothing to complain about. A policy saved before these fields existed has neither stored, and
+	# reads the same.
+	defaults = {name: field["default"] for name, field in fields.items() if "default" in field}
+	fresh = policy_from_rows(defaults, [], [], {})
+	assert (fresh["active"], fresh["price_source"], fresh["rate_card"]) == (False, "carrier", None)
+	assert validate_policy(fresh) == []
+	older = {key: value for key, value in defaults.items() if key not in ("price_source", "rate_card")}
+	quotes = [{"service_id": "A", "name": "A", "amount": 12.5}]
+	answer = resolve(
+		{**policy_from_rows(older, [], [], {}), "active": True},
+		{"country_code": "AE", "served": True, "boxes": [], "quotes": quotes},
+	)
+	assert (answer["price_source"], answer["offered"], answer["offers"][0]["amount"]) == (
+		"carrier",
+		True,
+		12.5,
+	)
 
 
 def test_the_fixed_amount_shows_only_when_the_choice_is_a_fixed_amount():
@@ -324,9 +407,6 @@ def test_every_field_the_data_module_reads_exists():
 	]
 	policy_from_rows(policy_row, zone_rows, set_rows, {name: code for code, name in names.items()})
 
-	assert PENDING_POLICY_FIELDS.isdisjoint(fields_of(POLICY)), (
-		"the Shipping Policy has the rate card fields now: delete PENDING_POLICY_FIELDS and its allowances"
-	)
 	doctypes = {
 		"policy": POLICY,
 		"rule": RULE,
@@ -340,7 +420,6 @@ def test_every_field_the_data_module_reads_exists():
 		assert seen[kind], f"the data module read nothing from a {name} row"
 		# The `name` of a rule row is the row's own name in the database, not a field.
 		missing = seen[kind] - set(fields_of(name)) - ({"name"} if kind == "rule" else set())
-		missing -= PENDING_POLICY_FIELDS if kind == "policy" else set()
 		assert not missing, f"{name} has no field {sorted(missing)}, which policy_from_rows reads"
 	written = {
 		POLICY: {key for key in rows["policy"] if key != "rules"},
@@ -353,8 +432,53 @@ def test_every_field_the_data_module_reads_exists():
 	}
 	for name, keys in written.items():
 		missing = keys - set(fields_of(name))
-		missing -= PENDING_POLICY_FIELDS if name == POLICY else set()
 		assert not missing, f"{name} has no field {sorted(missing)}, which rows_from_policy writes"
+
+
+def test_the_data_module_reads_the_new_fields():
+	"""`price_source` and `rate_card` are asked of the policy row, written back, and are fields of the
+	doctype, and the new choice of the two fallbacks is a label the doctypes list."""
+	assert validate_card(TINY_CARD) == []
+	policy = {
+		"active": True,
+		"price_source": "rate_card",
+		"rate_card": TINY_CARD,
+		"not_covered": "pass_through",
+		"default_fallback": {"method": "rate_card", "amount": 0.0},
+		"zones": [
+			{
+				"name": "Gulf",
+				"enabled": True,
+				"countries": ["AE"],
+				"not_shipped": False,
+				"everywhere_else": False,
+				"customer_line": "",
+				"not_offered_message": "",
+				"fallback": {"method": "rate_card", "amount": 0.0},
+			}
+		],
+		"item_sets": [],
+		"rules": [],
+	}
+	rows = rows_from_policy(policy, {"AE": "United Arab Emirates"})
+	row, fields = rows["policy"], fields_of(POLICY)
+	assert row["price_source"] == "Rate card"
+	assert json.loads(row["rate_card"]) == TINY_CARD, "the stored text is the card, as JSON"
+	assert {"price_source", "rate_card"} <= set(fields)
+	assert row["price_source"] in fields["price_source"]["options"].split("\n")
+	assert row["default_fallback_method"] == "Use the rate card"
+	assert row["default_fallback_method"] in fields["default_fallback_method"]["options"].split("\n")
+	assert rows["zones"][0]["fallback_method"] == "Use the rate card"
+	assert rows["zones"][0]["fallback_method"] in fields_of(ZONE)["fallback_method"]["options"].split("\n")
+
+	seen = set()
+	read = policy_from_rows(
+		Reads(row, seen), rows["zones"], rows["item_sets"], {"United Arab Emirates": "AE"}
+	)
+	assert {"price_source", "rate_card"} <= seen, "policy_from_rows asks the row for both"
+	assert (read["price_source"], read["rate_card"]) == ("rate_card", TINY_CARD)
+	assert read["default_fallback"]["method"] == read["zones"][0]["fallback"]["method"] == "rate_card"
+	assert read == policy, "and the whole policy comes back as it went"
 
 
 # ---------------------------------------------------------------- how the files reach erp2
@@ -409,7 +533,13 @@ def test_the_push_list_names_every_file_the_push_may_carry():
 
 def test_the_push_list_carries_the_modules_the_native_tests_import_and_the_fixture():
 	listed = set(listed_files())
-	for module in ("shipping_formula", "shipping_engine", "shipping_policy_data", "shipping_policy"):
+	for module in (
+		"shipping_formula",
+		"shipping_rate_card",
+		"shipping_engine",
+		"shipping_policy_data",
+		"shipping_policy",
+	):
 		assert f"dsi_catalogue/{module}.py" in listed
 	assert FIXTURE_PATH in listed
 	for name in DOCTYPES:

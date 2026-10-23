@@ -29,6 +29,7 @@ dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.js
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.json
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy.py
+dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy_ratecard.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy_wizard.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy_rule/__init__.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy_rule/shipping_policy_rule.json

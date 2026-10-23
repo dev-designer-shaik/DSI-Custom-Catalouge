@@ -7,18 +7,25 @@ edits the policy through it, so what the quote path sees and what the form saves
 
 Two read-only methods are open to guests, because the website calls them without logging anyone in:
 
-	price_delivery   what a customer pays for delivery: the carrier's quotes, run through the policy
+	price_delivery   what a customer pays for delivery: the carrier's quotes run through the policy, or, when
+	                 the policy's price source is the rate card, the card's price for the items ordered
 	public_summary   the zones, countries and customer lines the FAQ and the Shipping page may show
 
 What a guest gets back is public. Each method hands over only the fields `response_from` and
-`public_summary_from` pick by name: never a trace, a rule number, a formula or a traceback. What a guest
-sends is cleaned first (`InputError` becomes a plain `frappe.ValidationError`), and every lookup is one
-query over what the guest listed, so the cost of a call is bounded by the limits of the cleaners.
+`public_summary_from` pick by name: never a trace, a rule number, a formula, a traceback or a line of the
+rate card. What a guest sends is cleaned first (`InputError` becomes a plain `frappe.ValidationError`), and
+every lookup is one query over what the guest listed, so the cost of a call is bounded by the limits of the
+cleaners.
 
-`build_order` is the one place an order is assembled (cleaned inputs, item groups, order value, served
+`build_order` is the one place a carrier order is assembled (cleaned inputs, item groups, order value, served
 flag). `price_delivery` and the wizard's Try an order both call it, so the live price and the preview
 cannot drift apart. Its lookups (`item_groups_for`, `order_value_for`, `country_is_served`,
 `served_country_codes`, `translate`) are plain functions, not open to guests.
+
+The rate card prices from what the ERP knows about each item, not from what the website posts: the product
+code (the index key of its Website Item) and the unit weight (`item_facts_for`, which `build_order` adds to
+the items when asked). In rate-card mode the carrier plays no part, so `price_delivery` reads nothing but the
+items: no cartons, quotes, item groups or order value, and not the carrier's tables.
 
 Nothing is cached, here or in the quote path: every call reads the database again, so a policy change takes
 effect on the next call.
@@ -318,21 +325,63 @@ def order_value_for(items) -> float:
 	return flt(sum(prices.get(code, 0.0) * qty for code, qty in lines), 2)
 
 
+def item_facts_for(item_codes) -> dict[str, dict]:
+	"""What the rate card prices from, as {item code: {"index_key", "weight_kg"}}.
+
+	`index_key` is the `custom_index_key` of the item's Website Item, as stored ("{F-CR-OSA-M-PT}": the card
+	takes off the braces), whether or not the Website Item is published; if there are several, the first by
+	name. `weight_kg` is the Item's `weight_per_unit` as a number. An item with no Website Item, or none with
+	a key, has the key "" and one the ERP has no weight for has 0.0: the card puts an empty key in the
+	profile that takes everything and counts a weight of 0 as unknown (it uses its default weight).
+
+	Every text in `item_codes` is a key of the result. The lookup matches an item code the way
+	`item_groups_for` does: the database ignores case, so it may return a row whose name differs in case from
+	what was asked, and only an exact match is used. Two queries read the whole list (one on Website Item, one
+	on Item), and none is run when there is nothing the database could be asked.
+	"""
+	texts = [code for code in item_codes if isinstance(code, str)]
+	keys, weights = {}, {}
+	if codes := _database_codes(texts):
+		web_items = frappe.get_all(
+			"Website Item",
+			filters={"item_code": ["in", codes]},
+			fields=["item_code", "custom_index_key"],
+			order_by="name asc",
+		)
+		for row in web_items:
+			keys.setdefault(row["item_code"], (row["custom_index_key"] or "").strip())
+		items = frappe.get_all("Item", filters={"name": ["in", codes]}, fields=["name", "weight_per_unit"])
+		weights = {row["name"]: flt(row["weight_per_unit"]) for row in items}
+	return {code: {"index_key": keys.get(code, ""), "weight_kg": weights.get(code, 0.0)} for code in texts}
+
+
 # ---------------------------------------------------------------- the order the engine prices
-def build_order(country_code, items, boxes, quotes, order_value=None) -> dict:
-	"""The order dict `shipping_engine.resolve` reads, the one place it is assembled.
+def build_order(country_code, items, boxes, quotes, order_value=None, item_facts=False) -> dict:
+	"""The order dict `shipping_engine.resolve` reads for a carrier's price, the one place it is assembled
+	(the rate card needs far less than this and has its own, `_card_order`).
 
 	`items` (as `clean_items` returns them), `boxes` (`clean_boxes`) and `quotes` (`clean_quotes`) are already
 	cleaned. Each item gets its groups, the order's value is the one `order_value_for` finds, and `served` says
 	whether a carrier can deliver to the country with the heaviest carton. `country_code` is passed on as it
 	was given: the engine reads it loosely. `order_value` replaces the computed value (the wizard's Try an
 	order passes one a person typed; a typed 0 counts); `price_delivery` never passes it.
+
+	With `item_facts` each item also gets the `index_key` and `weight_kg` of `item_facts_for`, which the rate
+	card prices from, at the cost of two more queries for the whole order. Without it the order is exactly
+	what it was before the rate card existed.
 	"""
-	groups = item_groups_for(item["item_code"] for item in items)
+	codes = [item["item_code"] for item in items]
+	groups = item_groups_for(codes)
+	facts = item_facts_for(codes) if item_facts else {}
 	return {
 		"country_code": country_code,
 		"items": [
-			{"item_code": item["item_code"], "qty": item["qty"], "groups": groups.get(item["item_code"], [])}
+			{
+				"item_code": item["item_code"],
+				"qty": item["qty"],
+				"groups": groups.get(item["item_code"], []),
+				**facts.get(item["item_code"], {}),
+			}
 			for item in items
 		],
 		"order_value": order_value_for(items) if order_value is None else order_value,
@@ -340,6 +389,49 @@ def build_order(country_code, items, boxes, quotes, order_value=None) -> dict:
 		"quotes": quotes,
 		"served": country_is_served(country_code, max((box["weight_kg"] for box in boxes), default=0.0)),
 	}
+
+
+def _card_order(country_code, items) -> dict:
+	"""The order the rate card prices, and nothing more: the destination and each item with its product code
+	and unit weight. The card reads no item group, order value, carton or quote, and it does not ask whether
+	a carrier serves the country, so none of that is looked up (`served` is only there for the engine)."""
+	facts = item_facts_for(item["item_code"] for item in items)
+	return {
+		"country_code": country_code,
+		"items": [
+			{"item_code": item["item_code"], "qty": item["qty"], **facts[item["item_code"]]} for item in items
+		],
+		"served": True,
+	}
+
+
+def _fallback_may_use_the_card(policy) -> bool:
+	"""Does this policy price an order from the rate card when the carrier cannot quote it? That is so when
+	the policy default is "Use the rate card", or the fallback of an enabled zone is."""
+	if policy["default_fallback"]["method"] == "rate_card":
+		return True
+	return any(zone["enabled"] and zone["fallback"]["method"] == "rate_card" for zone in policy["zones"])
+
+
+def _order_for(policy, country_code, items, boxes, quotes) -> dict:
+	"""The order `resolve` prices, from what a guest posted. Only what the policy reads is cleaned and looked
+	up.
+
+	A policy that is off reads the quotes alone. With the rate card as the price source it reads the items
+	alone, so a bad `boxes` or `quotes` cannot fail the call. Otherwise it reads everything, and the items'
+	facts as well when a fallback may price the order from the card. Raises `InputError` for bad input.
+	"""
+	if not policy["active"]:
+		return {"country_code": country_code, "quotes": clean_quotes(quotes)}
+	if policy["price_source"] == "rate_card":
+		return _card_order(country_code, clean_items(items))
+	return build_order(
+		country_code,
+		clean_items(items),
+		clean_boxes(boxes),
+		clean_quotes(quotes),
+		item_facts=_fallback_may_use_the_card(policy),
+	)
 
 
 # ---------------------------------------------------------------- languages
@@ -422,37 +514,45 @@ def _log_formula_error(policy, result, country_code):
 
 @frappe.whitelist(allow_guest=True)
 def price_delivery(country_code=None, items=None, boxes=None, quotes=None, language=None) -> dict:
-	"""What a customer pays for delivery: the carrier's quotes for the order, run through the shipping policy.
+	"""What a customer pays for delivery: the carrier's quotes for the order run through the shipping policy,
+	or, when the policy's price source is the rate card, the card's price for the items ordered.
 
 	Arguments (each list may be a list or JSON text of one, as a form post sends it; every argument is
 	optional, and a missing one is answered like an empty one):
 
 		country_code  where it goes, as the customer wrote it: " ae " is AE; anything that is not two letters,
 		              or nothing, is a destination nobody delivers to, not an error
-		items         [{"item_code", "qty"}]: at most 200; the ERP supplies each item's groups and price
+		items         [{"item_code", "qty"}]: at most 200; the ERP supplies each item's groups, price, product
+		              code and weight
 		boxes         [{"weight_kg", "volume_l"}]: the packed cartons, at most 50, both measures required
 		quotes        [{"service_id", "name", "amount", "boxes_quoted"}]: the carrier's price per service and
 		              how many cartons that service quoted, at most 20
 		language      a Language the ERP has Translation records for. Anything else is English.
 
-	Returns {"policy_active", "zone", "offered", "reason", "message", "offers": [{"service_id", "name",
-	"amount", "source", "reason"}]}: whether the policy is on, the zone the country falls in, whether delivery
-	is offered at all, the reason code when it is not (or when a fallback priced it), the customer-facing
-	message and one offer per delivery method. Nothing else is returned: no rule number, trace or formula.
+	Returns {"policy_active", "price_source", "zone", "offered", "reason", "message", "offers":
+	[{"service_id", "name", "amount", "source", "reason", "estimated_days"}]}: whether the policy is on, its
+	price source ("carrier" or "rate_card"), the zone the country falls in, whether delivery is offered at
+	all, the reason code when it is not (or when a fallback priced it), the customer-facing message and one
+	offer per delivery method, each with the days the rate card promises (null when it makes no promise).
+	Nothing else is returned: no rule number, trace, formula or line of the rate card.
+
+	With the policy on and the rate card as its price source, only `country_code` and `items` are read: the
+	order is priced from the card, `boxes` and `quotes` are ignored (they are not even parsed, so bad ones
+	cannot fail the call), the carrier's tables are not looked at and there is one offer, the service
+	"rate-card". With the carrier as the source nothing changes, except that a policy whose fallback is "Use
+	the rate card" also looks up the items' product codes and weights.
 
 	Numbers that are negative, not finite or above a billion, lists over their limit, text where a number
 	belongs and ids or names that are not plain text (a control character or a lone surrogate, which JSON can
 	carry but nothing can write) are refused with a plain `frappe.ValidationError`. While the policy is off the
 	quotes come back as they were posted, and only the quotes are checked. The policy is read afresh on every
 	call. A rule whose formula cannot be calculated sends the order to the fallback and is noted in the Error
-	Log, at most once in FORMULA_ERROR_LOG_MINUTES for each rule.
+	Log, at most once in FORMULA_ERROR_LOG_MINUTES for each rule; a rate card that cannot price an order is an
+	ordinary refusal and is not noted.
 	"""
 	policy = load_policy()
 	try:
-		if policy["active"]:
-			order = build_order(country_code, clean_items(items), clean_boxes(boxes), clean_quotes(quotes))
-		else:
-			order = {"country_code": country_code, "quotes": clean_quotes(quotes)}
+		order = _order_for(policy, country_code, items, boxes, quotes)
 	except InputError as error:
 		frappe.throw(str(error), frappe.ValidationError)
 	result = resolve(policy, order)

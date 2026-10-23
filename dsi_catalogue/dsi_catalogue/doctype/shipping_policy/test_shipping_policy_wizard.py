@@ -75,6 +75,7 @@ NO_CHANGES = {
 	"zones": {"added": [], "removed": [], "changed": []},
 	"item_sets": {"added": [], "removed": [], "changed": []},
 	"rules": {"added": [], "removed": [], "changed": [], "order_changed": False},
+	"rate_card": {"added": [], "removed": [], "changed": []},
 	"settings": [],
 }
 TABLES = (
@@ -1097,6 +1098,7 @@ class TestPreviewChanges(WizardTestCase):
 					],
 					"order_changed": False,
 				},
+				"rate_card": {"added": [], "removed": [], "changed": []},
 				"settings": ["active"],
 			},
 		)
@@ -1428,6 +1430,7 @@ class TestApplyPolicy(WizardTestCase):
 					"changed": [],
 					"order_changed": False,
 				},
+				"rate_card": {"added": [], "removed": [], "changed": []},
 				"settings": ["active"],
 			},
 		)

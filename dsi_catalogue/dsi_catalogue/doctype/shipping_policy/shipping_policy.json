@@ -6,6 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "active",
+  "price_source",
+  "rate_card",
   "sec_defaults",
   "not_covered",
   "col_default_fallback",
@@ -22,6 +24,22 @@
    "fieldname": "active",
    "fieldtype": "Check",
    "label": "Active"
+  },
+  {
+   "default": "Carrier",
+   "description": "Carrier: customers pay the carrier's price with the rules below. Rate card: customers pay from the interim rate card and the carrier is not asked.",
+   "fieldname": "price_source",
+   "fieldtype": "Select",
+   "label": "Price source",
+   "options": "Carrier\nRate card"
+  },
+  {
+   "description": "Edited in the wizard (Rates step); this is the stored copy.",
+   "fieldname": "rate_card",
+   "fieldtype": "Code",
+   "label": "Rate card",
+   "options": "JSON",
+   "read_only": 1
   },
   {
    "fieldname": "sec_defaults",
@@ -46,7 +64,7 @@
    "fieldname": "default_fallback_method",
    "fieldtype": "Select",
    "label": "If the carrier can't quote (default)",
-   "options": "Don't offer delivery\nCharge a fixed amount\nFree"
+   "options": "Don't offer delivery\nCharge a fixed amount\nFree\nUse the rate card"
   },
   {
    "depends_on": "eval:doc.default_fallback_method == 'Charge a fixed amount'",
@@ -77,7 +95,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-22 00:00:00.000000",
+ "modified": "2026-10-23 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "dsi_catalogue",
  "name": "Shipping Policy",
