@@ -757,6 +757,29 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 			self.assertEqual((fine["reason"], first_amount(fine)), (None, 2.0), "10 / (10 - 5)")
 			self.assertEqual(new_entries(), [])
 
+	def test_a_formula_error_is_logged_when_the_card_fallback_cannot_price_the_order_either(self):
+		# The rule's formula fails (the carton weighs 5 kg) and the zone's fallback, the rate card, cannot price
+		# the order either: ten fragrances with no weight on file are 3.5 kg, 7.716 lb, and the card's zone for
+		# AE here stops at 2 lb. The customer gets the card's refusal, and the failed formula is noted once, as
+		# when the fallback prices the order.
+		[(fragrance, _)] = website_items(FRAGRANCE)
+		card = copy.deepcopy(CARD)
+		zone_named(card["profiles"][2], "GCC")["tiers"] = [{"from": 0.01, "to": 2.0, "price": 35.0}]
+		zone = zone_of("Zone 1", ["AE"], fallback={"method": "rate_card", "amount": 0.0})
+		rule = rule_of("Zone 1", label="Weight formula", method="formula", formula=FRAGILE)
+		seed_policy(policy_of([zone], [rule], price_source="carrier", rate_card=card), active=True)
+		rule_row = shipping_policy.load_policy()["rules"][0]["name"]
+		with error_log_entries(FORMULA_ERROR) as new_entries:
+			refused = guest_price("AE", items=one_of(fragrance, 10), boxes=CRASH_BOXES)
+			self.assertEqual(
+				(refused["offered"], refused["reason"], refused["offers"]), (False, "too_heavy", [])
+			)
+			[entry] = new_entries()
+			self.assertIn('Rule 1 ("Weight formula") could not be priced', entry["error"])
+			self.assertEqual(
+				(entry["reference_doctype"], entry["reference_name"]), ("Shipping Policy Rule", rule_row)
+			)
+
 	def test_item_facts_are_read_only_when_a_fallback_may_use_the_card(self):
 		[(fragrance, _)] = website_items(FRAGRANCE)
 		policy = card_policy(price_source="carrier")  # the card is there but no fallback is the card

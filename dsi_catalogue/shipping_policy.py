@@ -555,8 +555,9 @@ def price_delivery(country_code=None, items=None, boxes=None, quotes=None, langu
 	carry but nothing can write) are refused with a plain `frappe.ValidationError`. While the policy is off the
 	quotes come back as they were posted, and only the quotes are checked. The policy is read afresh on every
 	call. A rule whose formula cannot be calculated sends the order to the fallback and is noted in the Error
-	Log, at most once in FORMULA_ERROR_LOG_MINUTES for each rule; a rate card that cannot price an order is an
-	ordinary refusal and is not noted.
+	Log, at most once in FORMULA_ERROR_LOG_MINUTES for each rule, whether the fallback then prices the order or
+	not; a rate card that cannot price an order is an ordinary refusal and is not noted, unless a rule's formula
+	failed first (the card was its fallback).
 	"""
 	policy = load_policy()
 	try:
@@ -564,7 +565,11 @@ def price_delivery(country_code=None, items=None, boxes=None, quotes=None, langu
 	except InputError as error:
 		frappe.throw(str(error), frappe.ValidationError)
 	result = resolve(policy, order)
-	if result.get("reason") == "formula_error":
+	# A rule is named with no offer only when its formula failed and the fallback, the rate card, could not
+	# price the order: the answer then carries the card's reason, not "formula_error".
+	if result.get("reason") == "formula_error" or (
+		result.get("rule") is not None and not result.get("offered")
+	):
 		_log_formula_error(policy, result, order["country_code"])
 	return response_from(result, partial(_translated, language=_known_language(language)))
 
