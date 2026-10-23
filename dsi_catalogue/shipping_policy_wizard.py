@@ -368,7 +368,9 @@ def test_integration(order=None) -> dict:
 
 	1. `erp_price_api`: POST of the sample order to this site's own `price_delivery` over HTTP, as the website
 	   calls it (items only when the price source is the rate card; with one sample carton and no quotes when it
-	   is the carrier), compared with the amount `price_delivery` gives in this process for the saved policy.
+	   is the carrier), compared with the amount `price_delivery` gives in this process for the saved policy. The
+	   address is the site's `host_name` (site_config.json): the check relies on it. A site without one is called
+	   at its own name, never at the Host or X-Forwarded-Proto of the request, which the caller controls.
 	2. `carrier`: `dsi_shipping.api.get_shipping_rates` asked in this process for one sample parcel. Whatever the
 	   carrier says is reported in plain words: its own error text, which can hold what its server sent back,
 	   is never passed on.
@@ -1334,7 +1336,7 @@ def _check_erp(sample) -> dict:
 	arguments = {"country_code": sample["country_code"], "items": json.dumps(sample["items"])}
 	if load_policy()["price_source"] != "rate_card":
 		arguments.update(boxes=json.dumps([SAMPLE_CARTON]), quotes="[]")
-	status, ms, body, problem = _post_json(get_url() + PRICE_API, arguments)
+	status, ms, body, problem = _post_json(get_url(allow_header_override=False) + PRICE_API, arguments)
 	own = _first_amount(price_delivery(**arguments))  # the same input, answered in this process
 	return shipping_integration_check.summarize_policy_response(status, ms, body, own, problem=problem)
 

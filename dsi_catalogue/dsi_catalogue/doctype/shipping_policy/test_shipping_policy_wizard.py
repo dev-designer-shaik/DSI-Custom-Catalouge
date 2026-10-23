@@ -3580,6 +3580,39 @@ class TestTestIntegration(WizardTestCase):
 			(False, 200, "The website did not answer within 15 seconds.", {"problem": "timeout"}),
 		)
 
+	def test_the_erps_own_address_is_not_taken_from_the_headers_of_the_request(self):
+		seed_policy(card_policy(), active=True)
+		answer = shipping_policy.price_delivery("US", json.dumps(sample_items()))
+		request = types.SimpleNamespace(
+			method="POST",
+			path=f"/api/method/{wizard.__name__}.test_integration",
+			referrer=None,
+			host="evil.example.com",
+			headers={"X-Forwarded-Proto": "https"},
+		)
+		# A site whose configuration has no host_name builds its address from the request: the Host header, and
+		# X-Forwarded-Proto for the scheme, which whoever calls controls.
+		with mock.patch.dict(frappe.local.conf, {"host_name": None, "hostname": None}):
+			own = frappe.utils.get_url(allow_header_override=False)
+			self.assertNotIn("evil.example.com", own)
+			with (
+				mock.patch.object(frappe.local, "request", request, create=True),
+				the_network(Reply(200, {"message": answer}), site_reply(100.0)) as post,
+				carrier(return_value=rates(THE_CARRIER)),
+			):
+				self.assertIn("evil.example.com", frappe.utils.get_url(), "the setup is a real header attack")
+				result = wizard.test_integration()
+		self.assertEqual(post.calls[0]["url"], own + PRICE_API)
+		self.assertNotIn("evil.example.com", " ".join(call["url"] for call in post.calls))
+		self.assertNotIn("evil.example.com", json.dumps(result))
+		# With host_name set, as on erp2 and the live ERP, it is that.
+		with (
+			the_network(Reply(200, {"message": answer}), site_reply(100.0)) as post,
+			carrier(return_value=rates(THE_CARRIER)),
+		):
+			wizard.test_integration()
+		self.assertEqual(post.calls[0]["url"], frappe.conf.host_name + PRICE_API)
+
 	def test_the_websites_address_is_the_one_storefront_settings_keeps(self):
 		with mock.patch.object(frappe.db, "exists", return_value=False):
 			self.assertEqual(
