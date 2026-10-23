@@ -668,6 +668,42 @@ def test_parse_notes_a_country_listed_twice_and_keeps_it_once():
 	assert note.startswith("Row 2") and "US" in note
 
 
+def test_parse_skips_a_header_row_repeated_in_the_middle_of_the_file_and_says_so():
+	"""Two exports pasted together leave a second header row. It has no price, so it is skipped like any row
+	without one, and the rows around it are all kept."""
+	europe = rate_row(zone="Europe", countries="GB - United Kingdom", price="75")
+	parsed = parse_rows(rate_row(), HEADER, europe)
+	assert parsed["notes"] == ['Row 3 was skipped: the price "Price (USD)" is not a number.']
+	assert [z["name"] for z in profile_of(parsed["card"], "Dangerous Goods")["zones"]] == ["USA", "Europe"]
+	assert zone_of(parsed["card"], "Dangerous Goods", "USA")["tiers"] == [tier(0.01, 2.0, 35.0)]
+	assert zone_of(parsed["card"], "Dangerous Goods", "Europe")["tiers"] == [tier(0.01, 2.0, 75.0)]
+
+
+def test_parse_uses_the_first_of_two_columns_with_the_same_title():
+	header = [*HEADER, "Price (USD)"]
+	parsed = parse_shopify_export(csv_of([*rate_row(price="35"), "999"], header=header))
+	assert zone_of(parsed["card"], "Dangerous Goods", "USA")["tiers"] == [tier(0.01, 2.0, 35.0)]
+	assert parsed["notes"] == []
+	# the first one, wherever it is: the copy that comes second is the one ignored
+	header = ["price (usd) ", *HEADER]
+	parsed = parse_shopify_export(csv_of(["999", *rate_row(price="35")], header=header))
+	assert zone_of(parsed["card"], "Dangerous Goods", "USA")["tiers"] == [tier(0.01, 2.0, 999.0)]
+
+
+def test_parse_keeps_a_zone_whose_countries_are_all_unreadable_and_the_card_says_it_has_none():
+	"""Not one token starts with a two-letter code: they are left out, with a note, and the zone has no
+	countries, which validate_card reports and which no order can ever be delivered to."""
+	parsed = parse_rows(rate_row(countries="Atlantis; Narnia - Fantasy; 12 - Number"))
+	zone = zone_of(parsed["card"], "Dangerous Goods", "USA")
+	assert zone["countries"] == []
+	(left_out,) = notes_for(parsed, "Row 2: left out")
+	assert '"Atlantis", "Narnia - Fantasy", "12 - Number"' in left_out
+	assert problems_with(
+		validate_card(parsed["card"]), 'Zone 1 ("USA") of profile 1 ("Dangerous Goods") has no countries.'
+	)
+	refused(price(parsed["card"], "US", item(DANGEROUS, 1.0)), "not_covered")
+
+
 def test_parse_flat_rows_and_the_ways_they_can_clash_with_tiers():
 	flat_row = rate_row(zone="Flat", low="", high="", price="35")
 	# a flat zone: both weights empty, one row
@@ -1244,6 +1280,22 @@ def test_validate_card_accepts_a_price_of_zero_and_of_a_million():
 	assert validate_card(card) == []
 
 
+def test_validate_card_accepts_weights_of_exactly_zero_and_ten_thousand_pounds():
+	"""The limit is inclusive on both sides: a tier can run from 0 to 10,000 lb, and a first float beyond it is
+	refused."""
+	card = sample_card()
+	for edges in ((0.0, 10000.0), (10000.0, 10000.0), (0.0, 0.0)):
+		set_in(card, "Dangerous Goods", "USA", tiers=[tier(*edges, 5.0)])
+		assert validate_card(card) == [], edges
+	beyond = math.nextafter(10000.0, math.inf)
+	for edges in ((0.0, beyond), (beyond, beyond + 1)):
+		set_in(card, "Dangerous Goods", "USA", tiers=[tier(*edges, 5.0)])
+		problems = validate_card(card)
+		assert len(problems) == 1 and "weights that have to be numbers from 0 to 10000 lb" in problems[0], (
+			edges
+		)
+
+
 @pytest.mark.parametrize("value", [-1.0, float("nan"), float("inf"), "2", True, [2], 10**400, 10000.5])
 def test_validate_card_refuses_weights_that_are_not_numbers_from_zero_to_ten_thousand(value):
 	for edge in ("from", "to"):
@@ -1691,12 +1743,19 @@ def test_price_card_sums_prices_exactly_in_cents():
 	assert (
 		priced(price(card, "US", item("A-1", 1.0), item("B-1", 1.0)), 0.3)["total"] == 0.3
 	)  # not 0.30000000000000004
-	card["profiles"][0]["zones"][0]["tiers"] = [flat(10.005)]
+	# half a cent goes up, read from the decimal a person wrote: the binary numbers nearest to 1.005 and 2.675 are
+	# just below the half, so a price read from the binary value (Decimal(x) rather than Decimal(str(x))) would
+	# round them down (10.005 would not tell the two readings apart: its binary value is above the half)
+	card["profiles"][0]["zones"][0]["tiers"] = [flat(1.005)]
 	card["profiles"][1]["zones"][0]["tiers"] = [flat(0.004)]
-	result = priced(price(card, "US", item("A-1", 1.0), item("B-1", 1.0)), 10.01)
-	assert [line["price"] for line in result["lines"]] == [10.01, 0.0], (
+	result = priced(price(card, "US", item("A-1", 1.0), item("B-1", 1.0)), 1.01)
+	assert [line["price"] for line in result["lines"]] == [1.01, 0.0], (
 		"each line to cents, half up, then added"
 	)
+	card["profiles"][0]["zones"][0]["tiers"] = [flat(2.675)]
+	card["profiles"][1]["zones"][0]["tiers"] = [flat(1.005)]
+	result = priced(price(card, "US", item("A-1", 1.0), item("B-1", 1.0)), 3.69)
+	assert [line["price"] for line in result["lines"]] == [2.68, 1.01]
 	# a price below zero is no price at all: the zone prices nothing and the order is not priced, never free
 	card["profiles"][0]["zones"][0]["tiers"] = [flat(-5.0)]
 	card["profiles"][1]["zones"][0]["tiers"] = [flat(3.0)]
@@ -2182,6 +2241,59 @@ def test_oversized_junk_is_handled_without_going_through_all_of_it():
 	card["profiles"][0]["zones"][0]["tiers"] = [tier(float(n), n + 0.5, 1.0) for n in range(5000)]
 	assert problems_with(validate_card(card), "5000 tiers; at most 60")
 	check_shape(price_card(card, order("AB", item("X-1", 1.0))))
+
+
+def _full_zone_list():
+	card = make_card([tidy_profile("All", match=["*"])])
+	profile = card["profiles"][0]
+	zone = profile["zones"][0]
+	profile["zones"] = [{**zone, "name": f"Z{n}", "countries": [many_countries(40)[n]]} for n in range(40)]
+	return card, profile["zones"]
+
+
+def _full_tier_list():
+	card = make_card([tidy_profile("All", match=["*"])])
+	tiers = card["profiles"][0]["zones"][0]["tiers"] = [tier(float(n), n + 0.5, 1.0) for n in range(60)]
+	return card, tiers
+
+
+def _full_country_list():
+	card = make_card([tidy_profile("All", match=["*"], countries=many_countries(260))])
+	return card, card["profiles"][0]["zones"][0]["countries"]
+
+
+def _full_pattern_list():
+	card = make_card([tidy_profile("All", match=["*", *(f"A{n}-*" for n in range(11))])])
+	return card, card["profiles"][0]["match"]
+
+
+# A list kept full to its limit: how to make it, the limit, how a sentence counts its entries, an entry that is
+# bad, and how a bad entry inside the limit is reported.
+FULL_LISTS = {
+	"zones": (_full_zone_list, 40, "zones", None, "is not a valid zone"),
+	"tiers": (_full_tier_list, 60, "tiers", None, "is not a valid tier"),
+	"countries": (_full_country_list, 260, "countries", "bad", "not a country code"),
+	"patterns": (_full_pattern_list, 12, "product code patterns", "", "has to be text that is not empty"),
+}
+
+
+@pytest.mark.parametrize("kind", FULL_LISTS)
+def test_only_the_first_entries_of_an_oversized_list_are_inspected(kind):
+	"""Past its limit a list is not looked at: bad entries there add nothing to the one sentence that says the
+	list is too long (and the limit itself is inclusive, so a full list is checked entry by entry)."""
+	build, limit, noun, bad, reported = FULL_LISTS[kind]
+	card, entries = build()
+	assert len(entries) == limit and validate_card(card) == [], "full to its limit, and still valid"
+	entries[-1] = bad  # a bad entry inside the limit is reported, by itself
+	problems = validate_card(card)
+	assert len(problems) == 1 and reported in problems[0] and "at most" not in problems[0], problems
+	for extra in (1, 5, 500):  # bad entries past the limit are not even looked at
+		card, entries = build()
+		entries.extend([bad] * extra)
+		problems = validate_card(card)
+		assert len(problems) == 1, (extra, problems)
+		assert f"has {limit + extra} {noun}; at most {limit} are allowed." in problems[0], problems
+		check_shape(price_card(card, order("AB", item("X-1", 1.0))))  # and pricing from it copes too
 
 
 # ---------------------------------------------------------------- the real export, on this machine only
