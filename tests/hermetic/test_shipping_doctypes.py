@@ -829,6 +829,14 @@ REFUSED = [
 	"dsi_catalogue/shipping_engine.py $(touch pwned)",
 	"dsi_catalogue/shipping engine.py",
 	"dsi_catalogue/Shipping_engine.py",
+	# characters a shell, a glob or rsync would read as something other than a file name
+	"dsi_catalogue/shipping_engine.py'",
+	'dsi_catalogue/shipping_engine.py"',
+	"dsi_catalogue/shipping_*.py",
+	"dsi_catalogue/shipping_?ngine.py",
+	"dsi_catalogue/shipping_[e]ngine.py",
+	"dsi_catalogue/shipping_engine.py\\",
+	"dsi_catalogue/shipping_engine.py/",
 ]
 
 
@@ -872,6 +880,48 @@ def test_a_listed_file_that_is_missing_or_not_a_plain_file_is_refused(tmp_path):
 	for name in ("shipping_missing.py", "shipping_link.py"):
 		assert name in result.stderr
 	assert push.calls() == []
+
+
+@needs_bash
+@pytest.mark.parametrize("leads_to", ["outside the repository", "elsewhere in the repository"])
+def test_a_listed_file_reached_through_a_linked_folder_is_refused(tmp_path, leads_to):
+	"""The path passes the allow-list and the file itself is no link, but a folder in front of it is: rsync would
+	send the file from wherever that link leads, under the name of one inside the repository."""
+	wanted = "dsi_catalogue/dsi_catalogue/doctype/shipping_zone/shipping_zone.py"
+	push = Push(
+		tmp_path, ["dsi_catalogue/shipping_engine.py", wanted], make=["dsi_catalogue/shipping_engine.py"]
+	)
+	elsewhere = tmp_path / "outside" if leads_to.startswith("outside") else push.root / "tools" / "elsewhere"
+	(elsewhere / "doctype" / "shipping_zone").mkdir(parents=True)
+	(elsewhere / "doctype" / "shipping_zone" / "shipping_zone.py").write_text("from the wrong place")
+	(push.root / "dsi_catalogue" / "dsi_catalogue").symlink_to(elsewhere)
+	for args in (("--dry-run",), ()):
+		result = push.run(*args)
+		assert result.returncode == 1, (args, result.stdout, result.stderr)
+		assert "refused" in result.stderr and wanted in result.stderr and "link" in result.stderr
+		assert "dsi_catalogue/shipping_engine.py" not in result.stderr, "the plain file is not blamed"
+		assert push.calls() == [], "nothing was sent"
+		assert "reload-doc" not in result.stdout
+
+
+@needs_bash
+def test_a_repository_that_is_opened_through_a_link_still_pushes(tmp_path):
+	"""Each file's real path is compared with its path under the repository, so the repository's own path has to
+	be the real one too: a checkout reached through a link must not make every file look as if it came from
+	elsewhere."""
+	push = Push(tmp_path, ["dsi_catalogue/shipping_engine.py"])
+	through_a_link = tmp_path / "through_a_link"
+	through_a_link.symlink_to(push.root)
+	result = subprocess.run(
+		["bash", str(through_a_link / "tools" / "erp2_push.sh"), "--dry-run"],
+		capture_output=True,
+		text=True,
+		env=push.env,
+		timeout=60,
+		stdin=subprocess.DEVNULL,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "1 file(s) listed, all inside the allow-list" in result.stdout
 
 
 @needs_bash

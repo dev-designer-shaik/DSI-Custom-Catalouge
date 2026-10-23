@@ -9,7 +9,8 @@
 #
 #   1. reads tools/shipping_policy_files.txt (one repo-relative path per line; blank lines and # comments
 #      are ignored) and refuses the whole run, before anything is sent, if a path is outside the allow-list
-#      below, is missing, or is not a plain file;
+#      below, is missing, is not a plain file, or is reached through a link (a link to the file, or to a
+#      folder on the way to it);
 #   2. copies those files, and only those, to erp2-sandbox:~/dsi_catalogue_dev/<path> with rsync -R (what is
 #      already identical is skipped; nothing on erp2 is ever deleted);
 #   3. reloads every listed doctype from its JSON (the child tables first, then the zone, the item set, the
@@ -87,7 +88,9 @@ finally:
 	frappe.destroy()
 PY
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The real path (pwd -P): each listed file is checked against it below, and a repository reached through a
+# link would otherwise make every file look as if it were somewhere else.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 LIST="$ROOT/tools/shipping_policy_files.txt"
 STEP="reading the file list"
 
@@ -153,6 +156,11 @@ while IFS= read -r line || [[ -n $line ]]; do
 		refused=1
 	elif [[ ! -f $ROOT/$line ]]; then
 		echo "erp2_push: refused: $line (not a file in this repository)" >&2
+		refused=1
+	elif [[ $(realpath -e -- "$ROOT/$line" 2>/dev/null) != "$ROOT/$line" ]]; then
+		# -L above only looks at the last part of the path: a link to a folder in front of it would send a file
+		# from wherever the link leads, under the name of one inside the repository.
+		echo "erp2_push: refused: $line (reached through a link, so not a plain file in this repository)" >&2
 		refused=1
 	elif [[ -z ${listed[$line]:-} ]]; then
 		listed[$line]=1
