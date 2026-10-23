@@ -41,6 +41,7 @@ from urllib.parse import urlsplit
 
 import frappe
 import requests
+import urllib3
 from frappe import _
 from frappe.utils import escape_html, flt, get_url, sbool
 from frappe.utils.file_lock import LockTimeoutError
@@ -1236,9 +1237,30 @@ def _not_a_number(constant):
 	raise ValueError(constant)  # NaN and Infinity are not JSON
 
 
+def _is_a_read_timeout(error) -> bool:
+	"""Is this error the answer having stopped coming? Reading the body of an answer that stalls for longer than
+	the timeout, `requests` re-raises urllib3's ReadTimeoutError as a ConnectionError that holds it as its first
+	argument (not a Timeout), so the error, what it holds and what it was raised from or while handling are
+	looked at, a few steps deep, for a timeout; failing that, whether it says so in words."""
+	seen, pending = [], [error]
+	while pending and len(seen) < 8:
+		current = pending.pop()
+		if any(current is known for known in seen):
+			continue
+		seen.append(current)
+		if isinstance(current, urllib3.exceptions.TimeoutError | TimeoutError):
+			return True
+		pending.extend(
+			argument for argument in getattr(current, "args", ()) if isinstance(argument, BaseException)
+		)
+		pending.extend(link for link in (current.__cause__, current.__context__) if link is not None)
+	return "read timed out" in str(error).casefold()
+
+
 def _read_capped(response, deadline) -> tuple[bytes | None, str | None]:
 	"""(the body, problem): at most MAX_BODY_BYTES of it, read before `deadline`. A body over the cap is
-	"too_large", one not finished in time "timeout", one that breaks off "unreadable".
+	"too_large", one not finished in time or that stalls for longer than the timeout "timeout", one that breaks
+	off "unreadable".
 
 	It is read a byte at a time. The timeout of a call only limits each wait for the server, so a server that
 	sends a byte every 14 seconds would keep the call for as long as it liked; this way the deadline is looked
@@ -1255,8 +1277,8 @@ def _read_capped(response, deadline) -> tuple[bytes | None, str | None]:
 				return None, "timeout"
 	except requests.exceptions.Timeout:
 		return None, "timeout"
-	except requests.exceptions.RequestException:
-		return None, "unreadable"
+	except requests.exceptions.RequestException as error:
+		return None, "timeout" if _is_a_read_timeout(error) else "unreadable"
 	return b"".join(chunks), None
 
 

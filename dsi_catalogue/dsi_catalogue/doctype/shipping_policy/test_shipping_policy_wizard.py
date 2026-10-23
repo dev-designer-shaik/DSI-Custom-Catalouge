@@ -3512,6 +3512,74 @@ class TestTestIntegration(WizardTestCase):
 		with mock.patch.object(requests, "post", return_value=quick):
 			self.assertEqual(wizard._post_json(WEBSITE + RATES_ROUTE, {})[::2], (200, {"a": 1}))
 
+	def test_a_body_that_stalls_for_longer_than_the_timeout_is_a_timeout_and_other_breaks_are_not(self):
+		from urllib3.exceptions import ProtocolError, ReadTimeoutError
+
+		def stalls():
+			yield b'{"success": '
+			# What requests 2.34 makes of the read timeout of a body that stalls half way (models.py, iter_content).
+			raise requests.exceptions.ConnectionError(ReadTimeoutError(None, None, "Read timed out."))
+
+		def stalls_with_the_timeout_as_its_cause():
+			yield b'{"success": '
+			try:
+				raise ReadTimeoutError(None, None, "Read timed out.")
+			except ReadTimeoutError as error:
+				raise requests.exceptions.ConnectionError("the answer stopped coming") from error
+
+		def stalls_with_the_timeout_in_its_context():
+			yield b'{"success": '
+			try:
+				raise TimeoutError("timed out")
+			except TimeoutError:
+				raise requests.exceptions.ConnectionError("the answer stopped coming")
+
+		def stalls_in_words_only():
+			yield b'{"success": '
+			raise requests.exceptions.ConnectionError(
+				"HTTPSConnectionPool: Read timed out. (read timeout=15)"
+			)
+
+		def is_reset():
+			yield b'{"success": '
+			raise requests.exceptions.ConnectionError(ProtocolError("Connection reset by peer"))
+
+		def is_reset_in_words():
+			yield b'{"success": '
+			raise requests.exceptions.ConnectionError("Connection reset by peer")
+
+		def cannot_be_decoded():
+			yield b'{"success": '
+			raise requests.exceptions.ContentDecodingError("Received response with content-encoding: gzip")
+
+		cases = {
+			"a stalled body": (stalls, "timeout"),
+			"a stall with the timeout as its cause": (stalls_with_the_timeout_as_its_cause, "timeout"),
+			"a stall with the timeout in its context": (stalls_with_the_timeout_in_its_context, "timeout"),
+			"a stall that says so in words only": (stalls_in_words_only, "timeout"),
+			"a reset connection": (is_reset, "unreadable"),
+			"a reset connection, in words": (is_reset_in_words, "unreadable"),
+			"a body that cannot be decoded": (cannot_be_decoded, "unreadable"),
+		}
+		for what, (chunks, problem) in cases.items():
+			reply = Reply(200, chunks=chunks())
+			with self.subTest(what), mock.patch.object(requests, "post", return_value=reply):
+				status, _ms, body, got = wizard._post_json(WEBSITE + RATES_ROUTE, {})
+				self.assertEqual((status, body, got), (200, None, problem))
+				self.assertTrue(reply.closed)
+		# All the way through: the website check says it did not answer, not that it did not answer with JSON.
+		seed_policy(card_policy(), active=True)
+		answer = shipping_policy.price_delivery("US", json.dumps(sample_items()))
+		with (
+			the_network(Reply(200, {"message": answer}), Reply(200, chunks=stalls())),
+			carrier(return_value=rates(THE_CARRIER)),
+		):
+			website = wizard.test_integration()["checks"][2]
+		self.assertEqual(
+			(website["ok"], website["status"], website["summary"], website["detail"]),
+			(False, 200, "The website did not answer within 15 seconds.", {"problem": "timeout"}),
+		)
+
 	def test_the_websites_address_is_the_one_storefront_settings_keeps(self):
 		with mock.patch.object(frappe.db, "exists", return_value=False):
 			self.assertEqual(
