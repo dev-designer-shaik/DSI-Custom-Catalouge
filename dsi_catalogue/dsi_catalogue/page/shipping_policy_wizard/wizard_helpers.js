@@ -7,14 +7,16 @@ const sp = (dsi_catalogue.sp = {
 	// An element from a tag, attributes and children. A child that is a string becomes a text node, so
 	// nothing passed here is ever read as HTML. Attribute keys: "class", "text" (the text content),
 	// "on<event>" with a function (a listener); any other key is set as an attribute (false, null and
-	// undefined leave it out, true sets it empty).
+	// undefined leave it out, true sets it empty). An "on<event>" that is not a function throws: as an
+	// attribute it would be an inline event handler, text run as code.
 	el(tag, attributes = {}, ...children) {
 		const element = document.createElement(tag);
 		for (const [key, value] of Object.entries(attributes || {})) {
 			if (value === false || value === null || value === undefined) continue;
 			if (key === "class") element.className = value;
 			else if (key === "text") element.textContent = value;
-			else if (key.startsWith("on") && typeof value === "function") {
+			else if (key.startsWith("on")) {
+				if (typeof value !== "function") throw new TypeError(`sp.el: ${key} takes a function`);
 				element.addEventListener(key.slice(2), value);
 			} else element.setAttribute(key, value === true ? "" : String(value));
 		}

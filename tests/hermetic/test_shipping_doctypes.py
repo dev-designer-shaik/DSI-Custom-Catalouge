@@ -487,8 +487,31 @@ def test_the_data_module_reads_the_new_fields():
 PAGE_DIR = ROOT / "dsi_catalogue" / "dsi_catalogue" / "page" / "shipping_policy_wizard"
 PAGE_SCRIPT = PAGE_DIR / "shipping_policy_wizard.js"
 FORM_SCRIPT = DOCTYPE_DIR / "shipping_policy" / "shipping_policy.js"
-# Ways a script could put text on the page as HTML. The wizard builds its elements from text instead.
-HTML_WRITERS = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", ".html(", ".append(`")
+# Ways a script could put text on the page as HTML (the desk's own dialogs among them: they show their message
+# as HTML). The wizard builds its elements from text instead.
+HTML_WRITERS = (
+	"innerHTML",
+	"outerHTML",
+	"insertAdjacentHTML",
+	"document.write",
+	"createContextualFragment",
+	"parseHTML",
+	"$(",
+	".html(",
+	".append(`",
+	".prepend(",
+	".before(",
+	".after(",
+	".replaceWith(",
+	"frappe.msgprint(",
+	"frappe.show_alert(",
+	"frappe.confirm(",
+)
+# The only calls of those the page may make, each with a fixed sentence of its own (never text from the server
+# or from a person), and why it is safe.
+ALLOWED_HTML_WRITERS = {
+	'frappe.confirm(__("Discard your unsaved draft and start again from the saved policy?")': "a fixed question",
+}
 # The pattern of an include directive in Frappe's render_include (frappe/model/utils/__init__.py), which the
 # desk runs on a page's script when it loads the page (Page.load_assets).
 INCLUDE_DIRECTIVE = re.compile(r"""{% include\s['"](.*)['"]\s%}""")
@@ -675,11 +698,42 @@ def test_a_typed_number_takes_commas_only_between_thousands(tmp_path):
 def test_the_wizard_page_puts_text_on_the_page_only_as_text():
 	served = served_page_script()
 	assert 'frappe.pages["shipping-policy-wizard"].on_page_load' in served
+	for allowed in ALLOWED_HTML_WRITERS:
+		assert served.count(allowed) == 1, f"the allowed call is there once: {allowed}"
 	files = [("the served script", served)]
 	files += [(path.name, path.read_text(encoding="utf-8")) for path in (PAGE_SCRIPT, *page_parts())]
 	for name, text in files:
+		for allowed in ALLOWED_HTML_WRITERS:
+			text = text.replace(allowed, "")
 		for writer in HTML_WRITERS:
 			assert writer not in text, f"{name} uses {writer}"
+
+
+@needs_node
+def test_el_builds_from_text_and_refuses_an_inline_event_handler(tmp_path):
+	got = run_page_helpers(
+		tmp_path,
+		"""
+		const out = {};
+		for (const handler of ["alert(1)", 1, {}]) {
+			try {
+				sp.el("p", { onclick: handler });
+				out[String(handler)] = "made";
+			} catch (error) {
+				out[String(handler)] = error.name;
+			}
+		}
+		const made = sp.el("p", { onclick: () => 1, title: "<b>x</b>" }, "<i>y</i>", null, false, ["z"]);
+		out.made = [typeof made.listeners.click, made.attributes.title, made.attributes.onclick, made.children];
+		return out;
+		""",
+	)
+	assert got == {
+		"alert(1)": "TypeError",
+		"1": "TypeError",
+		"[object Object]": "TypeError",
+		"made": ["function", "<b>x</b>", None, ["<i>y</i>", "z"]],
+	}
 
 
 def test_the_policy_form_opens_the_wizard_from_a_primary_button():
