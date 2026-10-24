@@ -2473,19 +2473,21 @@ try {
 	// place, so none of them writes.
 	await check("an Apply that hears no usable word reads the saved policy first, and never stays stuck", async () => {
 		const notAccepted = "Could not apply: the server did not accept the change. Nothing was changed.";
+		// [what, the answer, its traces, whether Frappe opens a dialog of its own for it]
 		const answers = [
-			["a lost connection", "abort", [/^request failed: POST .*apply_policy/, /^console error: Failed to load resource: .*apply_policy/]],
-			["a refusal without a word", { status: 417, body: { exc_type: "ValidationError" } }, REFUSED_STATUS],
+			["a lost connection", "abort", [/^request failed: POST .*apply_policy/, /^console error: Failed to load resource: .*apply_policy/], false],
+			["a refusal without a word", { status: 417, body: { exc_type: "ValidationError" } }, REFUSED_STATUS, false],
 			// Frappe calls neither callback for these two: the step settles on its own
-			["a 200 Frappe cannot read", { status: 200, raw: "not json" }, [/^console error: TypeError: Cannot read properties of undefined \(reading 'responseText'\)/]],
+			["a 200 Frappe cannot read", { status: 200, raw: "not json" }, [/^console error: TypeError: Cannot read properties of undefined \(reading 'responseText'\)/], false],
 			[
 				"Frappe's own deadlock handler",
 				{ status: 500, body: { exception: "frappe.exceptions.QueryDeadlockError: (1213, 'Deadlock')", exc_type: "QueryDeadlockError" } },
 				[/^HTTP 500: POST .*apply_policy/, /^console error: Failed to load resource: .*500.*apply_policy/],
+				true,
 			],
 		];
 		const said = [];
-		for (const [what, answer, traces] of answers) {
+		for (const [what, answer, traces, dialog] of answers) {
 			await intercept(true);
 			try {
 				fakeNext.apply_policy = answer;
@@ -2498,8 +2500,11 @@ try {
 			} finally {
 				await intercept(false);
 			}
-			// Frappe's own dialog for a deadlock is closed again
-			if (await page.$(".modal.show")) {
+			// Frappe's own dialog for a deadlock is closed again, once it has finished opening (it fades in)
+			if (dialog) {
+				await page.waitForFunction(() => Boolean(frappe.msg_dialog?.display && document.querySelector(".modal.show")), {
+					timeout: 10000,
+				});
 				await page.evaluate(() => frappe.hide_msgprint(true));
 				await page.waitForFunction(() => !document.querySelector(".modal.show, .modal-backdrop"), { timeout: 10000 });
 			}
