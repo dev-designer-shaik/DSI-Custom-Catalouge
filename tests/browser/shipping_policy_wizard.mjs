@@ -308,6 +308,21 @@ async function open(route = WIZARD) {
 	}
 }
 
+// The step tabs head the desk's main section, under its sticky page head. With the section scrolled down less than
+// the head is tall, a tab is still inside the window but under the head, so a click at it lands on the head (the
+// browser scrolls only what is outside the window). The section goes back to its top first. Returns how far down it
+// was.
+async function clickTab(step) {
+	const scrolled = await page.evaluate(() => {
+		const main = document.querySelector(".main-section");
+		const top = main ? main.scrollTop : 0;
+		main?.scrollTo(0, 0);
+		return top;
+	});
+	await page.click(by(`step-tab-${step}`));
+	return scrolled;
+}
+
 // A full-page screenshot, written anew; the check that takes it fails unless the file is there and not empty.
 async function shot(name) {
 	await mkdir(OUT_DIR, { recursive: true });
@@ -3277,9 +3292,10 @@ try {
 	});
 
 	await check("the Rules step says that rules are not used while the price source is the rate card", async () => {
-		await page.click(by("step-tab-rules"));
+		const scrolled = await clickTab("rules");
 		await expectText("rules-not-used-note", "Rules are not used while the price source is the rate card.");
 		await page.click(by("step-tab-rates"));
+		return `the main section was ${scrolled} px down`;
 	});
 
 	await check("screenshots of the Rates step with the card, light and dark", async () => {
@@ -3296,7 +3312,7 @@ try {
 	});
 
 	await check("Review: the card's own lines, then Apply writes the card, the price source and the Not delivered zone, switched on", async () => {
-		await page.click(by("step-tab-review"));
+		await clickTab("review");
 		await applyReady();
 		const summary = await textOf("review-summary");
 		const first = "Prices come from the rate card: the carrier is not asked, and the rules and fallbacks below are not used.";
