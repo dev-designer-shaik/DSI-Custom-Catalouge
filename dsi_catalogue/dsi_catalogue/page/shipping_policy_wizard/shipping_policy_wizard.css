@@ -7,6 +7,19 @@
  * a double rule, then "Customer pays" in brass. Everything around it stays quiet.
  */
 
+/* Contents: each section runs from its banner to the line before the next one.
+ *   78-91      focus
+ *   92-123     the draft banner
+ *   124-199    the steps
+ *   200-424    the tape
+ *   425-595    the receipt
+ *   596-633    the tape beside the steps
+ *   634-1293   the Zones and Rules steps
+ *   1294-1712  the Fallback and Review steps
+ *   1713-2680  the Rates step and the Test tab
+ *   2681-2691  less motion
+ */
+
 .sp-wizard {
 	--sp-brass: #9A7116;
 	--sp-sage: #2B7A57;
