@@ -1304,6 +1304,13 @@ await check("a renamed zone takes its rules along, and a zone that rules use is 
 	rules = (await draftNow()).rules;
 	assert(rules[0].zone === "Bahrain", `rule 1 stays with Bahrain: ${rules[0].zone}`);
 	assert(rules[1].zone === "Bahrain 2" && rules[2].zone === "Bahrain 2", "the GCC rules follow their zone");
+	// a name cleared and left empty, then typed later: the zone's rules are still its own
+	await typeIn("zone-card", 1, "zone-name", "");
+	await page.evaluate(() => document.activeElement?.blur());
+	await pause(300);
+	await typeIn("zone-card", 1, "zone-name", "Gulf");
+	rules = (await draftNow()).rules;
+	assert(rules[1].zone === "Gulf" && rules[2].zone === "Gulf", `a name left empty a while: ${rules[1].zone}`);
 	await typeIn("zone-card", 1, "zone-name", "GCC");
 	rules = (await draftNow()).rules;
 	assert(rules[1].zone === "GCC" && rules[2].zone === "GCC", "and back");

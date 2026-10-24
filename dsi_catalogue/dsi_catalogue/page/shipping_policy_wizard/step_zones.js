@@ -16,6 +16,9 @@ class ZonesView {
 	constructor(wizard, panel) {
 		this.wizard = wizard;
 		this.cards = new Map(); // zone object -> ZoneCard
+		// zone object -> {name, rules}: the rules a rename of the zone takes along (see ZoneCard.begin_rename);
+		// kept with the wizard, so a rename left half done is picked up again after a tab switch
+		this.renames = wizard.ui.zones.renames = wizard.ui.zones.renames || new WeakMap();
 		this.list = el("div", { class: "sp-zones" });
 		this.empty = el(
 			"p",
@@ -146,7 +149,7 @@ class ZoneCard {
 		this.refusal = ""; // why the last delete was refused, until the next change
 		this.country_refusal = ""; // why the last country was not added, until the next change
 		this.name_note = ""; // that < or > was taken out of the name, until the next change
-		this.renaming = null; // the rules a rename takes along (see rename)
+		this.renaming = null; // {name, rules}: what this field's rename takes along (see begin_rename)
 		this.shown_countries = null; // the codes the tokens show
 
 		this.name = el("input", {
@@ -363,22 +366,35 @@ class ZoneCard {
 	}
 
 	// A rename takes along the rules that named the zone when its name field got the focus. They are found by
-	// name only then: while the name is typed it may pass through another zone's name, and those rules stay
-	// with that zone. A name another zone also had then is ambiguous, so nothing is taken along.
+	// name then, and followed as they are from there on: while the name is typed it may pass through another
+	// zone's name, and that zone's rules stay with it. A name another zone also has is ambiguous, and a blank
+	// one names nothing: the rules found the last time are taken instead. A blank name is not given to the
+	// rules (they keep the last one until a name is typed), so a zone renamed in two goes keeps its rules.
 	begin_rename() {
-		const name = this.zone.name;
-		const shared = this.view.zones.some((zone) => zone !== this.zone && sp.is_record(zone) && zone.name === name);
-		this.renaming = name && !shared ? this.view.users_of(this.zone) : [];
+		const zone = this.zone;
+		const name = String(zone.name ?? "");
+		const shared = this.view.zones.some((other) => other !== zone && sp.is_record(other) && other.name === name);
+		const before = this.view.renames.get(zone);
+		let tracked = { name, rules: [] };
+		if (name && !shared) tracked = { name, rules: this.view.users_of(zone) };
+		else if (before) {
+			const rules = before.rules.filter((rule) => this.view.rules.includes(rule) && rule.zone === before.name);
+			tracked = { name: before.name, rules };
+		}
+		this.view.renames.set(zone, tracked);
+		this.renaming = tracked;
 	}
 
 	rename() {
 		const stripped = strip_angles(this.name);
 		const name = this.name.value;
 		if (!this.renaming) this.begin_rename();
-		const rules = this.renaming;
+		const tracked = this.renaming;
 		this.wizard.change((draft) => {
 			this.zone.name = name;
-			for (const rule of rules) if (draft.rules.includes(rule)) rule.zone = name;
+			if (!name) return; // the rules keep the last name until a name is typed
+			for (const rule of tracked.rules) if (draft.rules.includes(rule)) rule.zone = name;
+			tracked.name = name;
 		});
 		if (stripped) {
 			this.name_note = __("A zone's name cannot hold < or >.");
