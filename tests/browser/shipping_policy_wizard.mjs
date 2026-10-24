@@ -2619,9 +2619,12 @@ try {
 
 	// An Apply that hears no usable word (finding M2): the write may have gone through, so the page reads the
 	// saved policy before it says anything, and it never stays "Applying…". The answers are given in the server's
-	// place, so none of them writes.
+	// place, so none of them writes. The saved policy still has the version the page sent, but the write could
+	// yet come (the worker may be waiting for the lock): the step says the change is not confirmed, never that
+	// nothing was changed (final review M6, ruling P102).
 	await check("an Apply that hears no usable word reads the saved policy first, and never stays stuck", async () => {
-		const notAccepted = "Could not apply: the server did not accept the change. Nothing was changed.";
+		const notAccepted =
+			"The server did not confirm the change, and it may still be saving. Reload the page to see the policy as it is; your draft stays in this browser until then.";
 		// [what, the answer, its traces, whether Frappe opens a dialog of its own for it]
 		const answers = [
 			["a lost connection", "abort", [/^request failed: POST .*apply_policy/, /^console error: Failed to load resource: .*apply_policy/], false],
@@ -2658,6 +2661,8 @@ try {
 				await page.waitForFunction(() => !document.querySelector(".modal.show, .modal-backdrop"), { timeout: 10000 });
 			}
 			expected(...traces);
+			assert(!(await textOf("apply-error")).includes("Nothing was changed"), `${what}: never "Nothing was changed"`);
+			assert((await store()).dirty, `${what}: the draft stays`);
 			assert((await textOf("apply-button")) === "Apply", `${what}: not stuck in Applying`);
 			assert((await ariaDisabled()) === "false", `${what}: Apply is usable again`);
 			said.push(what);

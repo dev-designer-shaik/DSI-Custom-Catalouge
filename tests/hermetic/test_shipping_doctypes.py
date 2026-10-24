@@ -1759,6 +1759,26 @@ def test_with_the_carrier_as_the_price_source_the_page_never_says_the_website_ap
 	assert "The rate card is used only where a fallback says Use the rate card." not in served
 
 
+# What the Review step says when an Apply's answer is lost and the saved policy still has the version the page
+# sent (ruling P102, final review M6): the worker may still be waiting for the lock and write afterwards.
+UNCONFIRMED = (
+	"The server did not confirm the change, and it may still be saving. Reload the page to see the policy as it "
+	"is; your draft stays in this browser until then."
+)
+
+
+def test_an_apply_whose_answer_is_lost_never_says_that_nothing_was_changed():
+	"""Ruling P102: an Apply that hears no usable word reads the saved policy once; when its version is still the
+	one the page sent, the write may yet come (the worker can wait 30 s for the lock), so the step says the change is
+	not confirmed and may still be saving, and to reload, never that nothing was changed. No timer: wording only."""
+	review = (PAGE_DIR / "step_review.js").read_text(encoding="utf-8")
+	assert f'"{UNCONFIRMED}"' in review
+	assert 'found === "unchanged") return finish({ kind: "unconfirmed"' in review
+	served = served_page_script()
+	assert "did not accept the change" not in served
+	assert "not_accepted" not in served
+
+
 def test_the_formula_names_the_rules_step_lists_are_the_servers():
 	"""The line under a rule's formula names what a formula may use: a copy of shipping_formula's two lists."""
 	from dsi_catalogue.shipping_formula import FUNCTIONS, VARIABLES

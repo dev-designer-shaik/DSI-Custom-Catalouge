@@ -22,9 +22,12 @@
 //	no word      no answer, or none the step can read (a lost connection, a status Frappe answers by itself, a 200
 //	             it cannot read): the write may still have gone through, so the saved policy is read again before
 //	             anything is said (written): "Applied. The server answered late." (adopted as above, with whether
-//	             the policy is on and what the last check of the draft as sent said would change), "Could not
-//	             apply: the server did not accept the change. Nothing was changed.", stale as above, or, when the
-//	             server cannot be asked either, "Could not reach the server. Nothing was changed."
+//	             the policy is on and what the last check of the draft as sent said would change), unconfirmed
+//	             (the version is still the one sent, but the worker may still be waiting for the lock and write
+//	             afterwards, so the step never says that nothing was changed: the change is not confirmed, may
+//	             still be saving, and a reload shows the policy as it is; the draft stays, ruling P102), stale as
+//	             above, or, when the server cannot be asked either, "Could not reach the server. Nothing was
+//	             changed."
 //	unread       applied, but the saved policy could not be read again: Apply waits for a reload of the page
 // What the step shows that is not the draft lives in wizard.ui.review, since the panel is drawn again on every
 // tab switch and after Apply: the newest answer and the draft it is for, the request on its way, the outcome of
@@ -33,7 +36,7 @@
 const PREVIEW_DELAY = 250; // ms after the last change before the server checks the draft again
 
 // An outcome that says something about the draft it was for: it goes once the draft changes.
-const PASSING_OUTCOMES = ["applied", "refused", "not_accepted", "unreachable", "rebased"];
+const PASSING_OUTCOMES = ["applied", "refused", "unconfirmed", "unreachable", "rebased"];
 
 // Asks the server, now, what applying the draft would change and what stops it from being applied.
 function preview_draft(wizard) {
@@ -118,9 +121,10 @@ function apply_draft(draft, version) {
 }
 
 // Whether an Apply that gave no usable word was written, from the saved policy read again: "unchanged" (its
-// version is the one the page sent, so nothing was written), "applied" (it is the draft that was sent, the row
-// names Apply gave the new rules aside: compared by the server, preview_changes), "changed" (someone else's
-// change, or one that cannot be compared), or "unreachable" (the server cannot be asked).
+// version is the one the page sent: nothing is written yet, but the write may still come), "applied" (it is the
+// draft that was sent, the row names Apply gave the new rules aside: compared by the server, preview_changes),
+// "changed" (someone else's change, or one that cannot be compared), or "unreachable" (the server cannot be
+// asked).
 function written(wizard, sent, expected) {
 	return wizard.call("wizard_state", {}, { quiet: true }).then(
 		(state) => {
@@ -589,8 +593,17 @@ class ReviewView {
 		} else if (kind === "refused") {
 			error.push(el("p", {}, outcome.lines.length ? __("The policy was not applied:") : __("The policy was not applied.")));
 			if (outcome.lines.length) error.push(el("ul", { class: "sp-apply-lines" }, outcome.lines.map((line) => el("li", {}, line))));
-		} else if (kind === "not_accepted") {
-			error.push(el("p", {}, __("Could not apply: the server did not accept the change. Nothing was changed.")));
+		} else if (kind === "unconfirmed") {
+			// the version is still the one sent, but the write may yet come (ruling P102): never "nothing was changed"
+			error.push(
+				el(
+					"p",
+					{},
+					__(
+						"The server did not confirm the change, and it may still be saving. Reload the page to see the policy as it is; your draft stays in this browser until then."
+					)
+				)
+			);
 		} else if (kind === "unreachable") {
 			error.push(el("p", {}, __("Could not reach the server. Nothing was changed.")));
 		} else if (kind === "unread") {
@@ -666,7 +679,7 @@ class ReviewView {
 			// No word the step can use: the write may have gone through, so the saved policy says what happened.
 			return written(wizard, sent, expected).then((found) => {
 				if (found === "applied") return adopt(planned, true);
-				if (found === "unchanged") return finish({ kind: "not_accepted", draft: sent_key });
+				if (found === "unchanged") return finish({ kind: "unconfirmed", draft: sent_key });
 				if (found === "changed") return finish({ kind: "stale" });
 				return finish({ kind: "unreachable", draft: sent_key });
 			});
