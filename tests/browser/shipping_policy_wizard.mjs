@@ -1403,6 +1403,24 @@ await check("a rule switched off says Off, and a rule is deleted only after a qu
 	assert(JSON.stringify((await draftNow()).rules) === JSON.stringify(EXAMPLE.rules), "the rules are the example's");
 });
 
+await check("a charge switched away from keeps its Round up and its formula, and switching back shows them", async () => {
+	// ruling P88c: what a charge had is kept as a remembered choice; the sentence says only what applies
+	await choose(2, "chip-charge", "rule-charge-option", "free");
+	await expectIn("rule-card", 2, "rule-sentence", "charge nothing (free)");
+	assert(!(await textIn("rule-card", 2, "rule-sentence")).includes("rounded up"), "Free is never rounded up");
+	assert((await draftNow()).rules[2].round_up === true, "but Round up is kept");
+	await (await (await nth("rule-card", 2)).$(`${by("rule-charge-option")}[value="carrier_price"]`)).click();
+	await expectIn("rule-card", 2, "rule-sentence", "charge the carrier's price, rounded up");
+	await page.keyboard.press("Escape");
+	await choose(3, "chip-charge", "rule-charge-option", "carrier_price");
+	await expectIn("rule-card", 3, "rule-sentence", "charge the carrier's price, rounded up");
+	assert((await draftNow()).rules[3].formula === "max(carrier_price * 1.1, 45)", "the formula is kept");
+	await (await (await nth("rule-card", 3)).$(`${by("rule-charge-option")}[value="formula"]`)).click();
+	await expectIn("rule-card", 3, "rule-sentence", "charge max(carrier_price * 1.1, 45), rounded up");
+	await page.keyboard.press("Escape");
+	assert(JSON.stringify((await draftNow()).rules) === JSON.stringify(EXAMPLE.rules), "the rules are the example's");
+});
+
 await check("Only when: six limits with no-limit placeholders and their units, read as they are typed", async () => {
 	await clickIn("rule-card", 2, "chip-limits");
 	const fields = await (await nth("rule-card", 2)).$$eval(by("rule-limit"), (inputs) =>

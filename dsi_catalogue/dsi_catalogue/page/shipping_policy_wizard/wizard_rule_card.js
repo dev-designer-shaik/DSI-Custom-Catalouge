@@ -491,6 +491,9 @@ class RuleCard {
 			this.round_up.checked = Boolean(rule.round_up);
 			this.round_up_row.hidden = rule.method === "free";
 		};
+		// A charge switched away from keeps what it had, as a remembered choice (ruling P88c): Round up stays on
+		// when Free is chosen, and the formula stays when the carrier's price is. The server accepts both, and the
+		// sentence (sp.rule_words), like the Review step, says only what applies; switching back brings them back.
 		const choose = (method) => {
 			this.wizard.change(() => {
 				rule.method = method;
