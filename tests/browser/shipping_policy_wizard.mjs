@@ -2047,6 +2047,27 @@ try {
 		return files.join(", ");
 	});
 
+	// The ERP keeps names without the spaces around them, and the Zones step writes a name as it is typed, to the
+	// zone and to its rules: the Review still reads the zone's rules (finding I1).
+	await check("a zone named with a space at its end keeps its rules in the Review", async () => {
+		await page.click(by("step-tab-zones"));
+		await typeIn("zone-card", 1, "zone-name", "GCC ");
+		const draft = await draftNow();
+		assert(draft.zones[1].name === "GCC " && draft.rules[2].zone === "GCC ", "the zone and its rules have the space");
+		await page.click(by("step-tab-review"));
+		await applyReady();
+		const gcc = (await textsOf("review-zone"))[1];
+		assert(gcc.startsWith("GCC United Arab Emirates"), `the zone, named as the ERP will keep it: ${gcc}`);
+		for (const rule of ["Rule 2 (Free watches in the Gulf)", "Rule 3 (Gulf at the carrier price)"]) {
+			assert(gcc.includes(rule), `GCC keeps ${rule}: ${gcc}`);
+		}
+		assert(!gcc.includes("No rule is for this zone yet."), "it has rules");
+		await page.click(by("step-tab-zones"));
+		await typeIn("zone-card", 1, "zone-name", "GCC");
+		await page.click(by("step-tab-review"));
+		assert(JSON.stringify(await draftNow()) === JSON.stringify(finished()), "the draft is the example again");
+	});
+
 	await check("the Active switch says its state in words, and Apply then says it switches the policy on", async () => {
 		assert((await textOf("tape-total-label")) === "Customer would pay", "off: the customer would pay");
 		await page.click(by("policy-active"));

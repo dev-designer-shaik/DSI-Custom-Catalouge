@@ -1052,6 +1052,39 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 
 
 @needs_node
+def test_the_review_reads_names_as_the_erp_keeps_them_without_outer_spaces(tmp_path):
+	"""The ERP trims a zone's name, the zone a rule names, and an item set's name before it checks or writes them
+	(shipping_policy_wizard._tidied), and the Zones step writes a name as it is typed, spaces and all, to the zone
+	and its rules: the Review still finds a zone's rules, and says the names as they will be kept."""
+	policy = example()
+	policy["zones"][1]["name"] = "GCC "  # as typed in the Zones step, which writes it to the zone's rules too
+	policy["rules"][1]["zone"] = policy["rules"][2]["zone"] = "GCC "
+	policy["zones"][0]["name"] = " Bahrain"  # and a rule may name the zone without the spaces
+	policy["item_sets"][0]["name"] = " Watches "
+	policy["rules"][1]["item_set"] = " Watches "
+	assert not validate_policy(
+		{
+			**policy,
+			"zones": [{**zone, "name": zone["name"].strip()} for zone in policy["zones"]],
+			"item_sets": [{**item_set, "name": item_set["name"].strip()} for item_set in policy["item_sets"]],
+			"rules": [
+				{**rule, "zone": rule["zone"].strip(), "item_set": (rule["item_set"] or "").strip() or None}
+				for rule in policy["rules"]
+			],
+		}
+	), "trimmed as the ERP trims them, the policy has no problem"
+	got = run_page_helpers(tmp_path, f"return sp.policy_summary({json.dumps(policy)}, (code) => code);")
+	bahrain, gcc = got["zones"][:2]
+	assert (bahrain["name"], gcc["name"]) == ("Bahrain", "GCC")
+	assert bahrain["rules"] == ["Rule 1 (Free in Bahrain): In Bahrain for every item charge nothing (free)."]
+	assert gcc["rules"] == [
+		"Rule 2 (Free watches in the Gulf): In GCC for Watches charge nothing (free).",
+		"Rule 3 (Gulf at the carrier price): In GCC for every item charge the carrier's price, rounded up.",
+	]
+	assert (bahrain["no_rules"], gcc["no_rules"]) == ("", "")
+
+
+@needs_node
 def test_a_problem_links_to_the_step_that_owns_it(tmp_path):
 	"""The Review step's "Fix it" goes to the step that owns a problem: sp.problem_step reads the way the engine's
 	and the wizard's sentences start. Here are the engine's real sentences (validate_policy), and the wizard

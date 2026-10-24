@@ -221,7 +221,9 @@ Object.assign(sp, {
 				let where = __("No country yet.");
 				if (zone.everywhere_else) where = __("Every other country.");
 				else if (codes.length) where = __("{0}.", [sp.and_list(codes.map((code) => country_name(code)))]);
-				const own = name ? rules.filter((rule) => sp.is_record(rule) && rule.zone === name) : [];
+				// the ERP keeps a zone's name, and the zone a rule names, without the spaces around them: so are they
+				// matched here (the Zones step writes a name as it is typed, spaces and all, to the zone and its rules)
+				const own = name ? rules.filter((rule) => sp.is_record(rule) && text(rule.zone) === name) : [];
 				return {
 					name: name || __("A zone without a name"),
 					states: [
@@ -244,7 +246,8 @@ Object.assign(sp, {
 								const number = rules.indexOf(rule) + 1;
 								const label = text(rule.label);
 								const ref = label ? __("{0} ({1})", [number, label]) : String(number);
-								const words = sp.rule_text(rule);
+								const kept = { ...rule, zone: text(rule.zone), item_set: text(rule.item_set) || null };
+								const words = sp.rule_text(kept);
 								return rule.enabled
 									? __("Rule {0}: {1}.", [ref, words])
 									: __("Rule {0} is off: {1}.", [ref, words]);
