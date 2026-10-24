@@ -17,6 +17,7 @@ class RuleCard {
 		this.rule = rule;
 		this.index = 0;
 		this.chip = null; // the chip whose editor is open on this card
+		this.kept = {}; // limit key -> the number kept when it differs from the one typed, until it is typed again
 		this.sync_editor = () => {};
 		const words = (text) => el("span", { class: "sp-words" }, text);
 
@@ -247,6 +248,7 @@ class RuleCard {
 		for (const element of Object.values(this.chips)) element.setAttribute("aria-expanded", "false");
 		if (this.view.ui.set_editor?.rule === this.rule) this.view.ui.set_editor = null;
 		this.view.ui.typed.delete(this.rule); // limits typed that were not numbers were never in the draft
+		this.kept = {};
 		this.update(this.index, this.view.rules.length);
 	}
 
@@ -571,19 +573,25 @@ class RuleCard {
 		];
 	}
 
-	// A limit typed: a number (or nothing) goes into the draft at once; anything else stays in its field, is not
-	// in the draft, and says so.
+	// A limit typed: a number (or nothing) goes into the draft at once, kept to the decimals the ERP keeps and
+	// rounded as the ERP rounds it (the desk's own flt follows the site's rounding setting, as the server's flt
+	// does), so the draft holds what will be stored and the chip says it; when that changes the number, a note
+	// says what is kept. Anything else stays in its field, is not in the draft, and says so.
 	type_limit(key, text) {
 		const typed = this.view.typed_of(this.rule);
 		const reading = sp.read_number(text);
+		delete this.kept[key];
 		if (!reading.ok) {
 			typed[key] = text;
 			this.sync_editor();
 			return;
 		}
 		delete typed[key];
+		const band = LIMITS.find((entry) => entry.low === key || entry.high === key);
+		const kept = reading.value === null ? 0 : flt(reading.value, band.places);
+		if (reading.value !== null && kept !== reading.value) this.kept[key] = kept;
 		this.wizard.change(() => {
-			this.rule[key] = reading.value ?? 0;
+			this.rule[key] = kept;
 		});
 	}
 
@@ -595,6 +603,17 @@ class RuleCard {
 				[band.low, __("from")],
 				[band.high, __("up to")],
 			]) {
+				if (key in this.kept) {
+					const kept = this.kept[key];
+					said.push(
+						__("{0}, {1}: the ERP keeps {2} decimals, so this is {3}.", [
+							band.label,
+							word,
+							band.places,
+							kept ? band.show(kept) : __("no limit"),
+						])
+					);
+				}
 				if (!(key in typed)) continue;
 				said.push(
 					sp.read_number(typed[key]).comma

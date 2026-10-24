@@ -1455,6 +1455,19 @@ await check("Only when: six limits with no-limit placeholders and their units, r
 	await limit("max_order_value", "5,5");
 	await expectIn("rule-card", 2, "rule-limits-problem", "use a period for decimals");
 	assert((await draftNow()).rules[2].max_order_value === 5, "a decimal comma is never read as 55");
+	// a limit is kept to the decimals the ERP keeps (money 2, kilograms and litres 3), as the ERP would round it
+	await limit("max_order_value", "");
+	await limit("min_weight_kg", "0.0004");
+	assert((await draftNow()).rules[2].min_weight_kg === 0, `0.0004 kg is kept as 0: ${(await draftNow()).rules[2].min_weight_kg}`);
+	await expectIn("rule-card", 2, "chip-limits", "no limits");
+	await expectIn("rule-card", 2, "rule-limits-problem", "Weight (kg), from: the ERP keeps 3 decimals, so this is no limit.");
+	await limit("min_weight_kg", "1.23456");
+	assert((await draftNow()).rules[2].min_weight_kg === 1.235, "1.23456 kg is kept as 1.235");
+	await expectIn("rule-card", 2, "chip-limits", "weight from 1.235 kg");
+	await limit("min_weight_kg", "");
+	await limit("max_order_value", "99.999");
+	assert((await draftNow()).rules[2].max_order_value === 100, "$99.999 is kept as $100.00");
+	await expectIn("rule-card", 2, "rule-limits-problem", "Order value ($), up to: the ERP keeps 2 decimals, so this is $100.00.");
 	await limit("min_order_value", "600");
 	await limit("max_order_value", "500");
 	await expectIn("rule-card", 2, "rule-problems", "the wrong way round");
