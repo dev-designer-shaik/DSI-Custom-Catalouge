@@ -16,8 +16,9 @@ draft in one request, refuses it when someone changed the policy after the wizar
 has a problem (the rate card included), and writes it inside one savepoint, so that a failure at any step
 rolls back every step before it: a half-finished policy never goes live. Two Applies never write at the
 same moment (a file lock); the lock is let go before the request commits, so it does not order them up to
-the commit, and the stale-version check and the database's own checks catch the rest. `import_rate_card`
-only reads: the page puts the card it returns into the draft, and Apply is still the only writer.
+the commit: `apply_policy` says what the stale-version check and the database's own checks catch, and what
+they do not. `import_rate_card` only reads: the page puts the card it returns into the draft, and Apply is
+still the only writer.
 
 Before a draft is priced, checked, compared or written it is read as it will be stored: names and codes
 without outer spaces, country codes in capitals, amounts rounded to cents and weights and volumes to the
@@ -91,8 +92,8 @@ ITEM_SET = "Shipping Item Set"
 
 # Two applies never write at the same moment, across every worker of the site: a second one waits this long
 # for the first to finish writing, and is then refused. The lock is let go when the first has written, before
-# Frappe commits the request, so it is no guarantee that the second sees what the first wrote: the
-# stale-version check and the database's own checks (row locks, unique names) catch the rest.
+# Frappe commits the request, so it is no guarantee that the second sees what the first wrote (see
+# `apply_policy` for what the other checks catch, and what they do not).
 APPLY_LOCK = "shipping_policy_apply"
 APPLY_LOCK_SECONDS = 30
 _SAVEPOINT = "shipping_policy_apply"
