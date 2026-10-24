@@ -75,8 +75,8 @@ from dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy im
 from dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy_ratecard import (
 	CARD,
 	FRAGRANCE,
+	OTHER,
 	REFILL,
-	WATCH,
 	card_policy,
 	recorded_queries,
 	website_items,
@@ -424,7 +424,7 @@ def sample_items() -> list[dict]:
 	"""The items of the default sample order of `test_integration`: the first published full-size fragrance and
 	the first published watch of the site."""
 	[(fragrance, _)] = website_items(FRAGRANCE)
-	[(timepiece, _)] = website_items(WATCH)
+	[(timepiece, _)] = website_items(OTHER)
 	return [{"item_code": fragrance, "qty": 1.0}, {"item_code": timepiece, "qty": 1.0}]
 
 
@@ -2665,7 +2665,7 @@ class TestRateCardDrafts(WizardTestCase):
 	def test_try_order_in_rate_card_mode_prices_a_draft(self):
 		seed_policy(load_example(), active=False)
 		[(fragrance, _), (second, _)] = website_items(FRAGRANCE, 2)
-		[(timepiece, _)] = website_items(WATCH)
+		[(timepiece, _)] = website_items(OTHER)
 		draft = with_card(wizard.wizard_state()["policy"])
 		untouched = copy.deepcopy(draft)
 		self.assertFalse(draft["active"])
@@ -2768,7 +2768,7 @@ class TestRateCardDrafts(WizardTestCase):
 		seed_policy(card_policy(), active=True)
 		draft = wizard.wizard_state()["policy"]
 		[(fragrance, _), (weighed, _)] = website_items(FRAGRANCE, 2)
-		[(timepiece, _)] = website_items(WATCH)
+		[(timepiece, _)] = website_items(OTHER)
 		[(refill, _)] = website_items(REFILL)
 		weigh(self, weighed, 1.0)
 		plain = ([ONE_BOX], [QUOTE])
@@ -2811,7 +2811,7 @@ class TestRateCardDrafts(WizardTestCase):
 		seed_policy(policy, active=True)
 		draft = wizard.wizard_state()["policy"]
 		[(fragrance, _)] = website_items(FRAGRANCE)
-		[(timepiece, _)] = website_items(WATCH)
+		[(timepiece, _)] = website_items(OTHER)
 		short = quote_of(10.0, service_id="short", name="Short", boxes_quoted=1)
 		orders = {
 			"the carrier cannot quote, a fragrance in the Gulf": ("AE", one_of(fragrance), [ONE_BOX], []),
@@ -2847,7 +2847,7 @@ class TestRateCardDrafts(WizardTestCase):
 		seed_policy(policy, active=True)
 		draft = wizard.wizard_state()["policy"]
 		[(fragrance, _)] = website_items(FRAGRANCE)
-		[(timepiece, _)] = website_items(WATCH)
+		[(timepiece, _)] = website_items(OTHER)
 		orders = {
 			"the carrier cannot quote, a fragrance in the Gulf": ("AE", one_of(fragrance), [ONE_BOX], []),
 			"the carrier cannot quote, a watch in the Gulf": ("AE", one_of(timepiece), [ONE_BOX], []),

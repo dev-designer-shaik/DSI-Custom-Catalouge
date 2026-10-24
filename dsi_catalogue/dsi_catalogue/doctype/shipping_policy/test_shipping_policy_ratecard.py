@@ -12,9 +12,9 @@ The card used here is a literal: a trimmed copy of the prices in the Shopify exp
 is. The sample CSV files themselves do not reach erp2 (the push script refuses them).
 
 The items are real published Website Items of the site, chosen by their index key: a full-size fragrance, a
-refill and a watch fall in three different profiles of the card. A test that relies on an item's unit weight
-gives it that weight, or 0 for none, and puts the old value back when it ends: what the site holds is not
-relied on. Nothing here commits.
+refill and an item of the catch-all profile fall in three different profiles of the card. A test that
+relies on an item's unit weight gives it that weight, or 0 for none, and puts the old value back when it
+ends: what the site holds is not relied on. Nothing here commits.
 """
 
 import copy
@@ -167,7 +167,7 @@ CARD = {
 # 0.25 kg is 0.551 lb, 0.5 kg is 1.102 lb, 0.3 kg is 0.661 lb; no weight on file counts as 0.35 kg, 0.772 lb.
 GCC_FRAGRANCE = 35.0  # Dangerous Goods to AE: one flat price
 US_FRAGRANCES = 60.0  # two fragrances to the USA, 1.102 lb: the 0.7 to 2 lb tier
-US_WATCH = 40.0  # a watch of 0.3 kg to the USA (or anywhere in the Worldwide zone): its first tier
+US_OTHER = 40.0  # one catch-all item of 0.3 kg to the USA (or anywhere in its Worldwide zone): the first tier
 
 
 def card_policy(**fields) -> dict:
@@ -183,7 +183,7 @@ def zone_named(policy, name) -> dict:
 # (an index key LIKE pattern, and the patterns it must not match) for each kind of item
 FRAGRANCE = ("{F-%", ("{F-%-PT}", "{F-%-RF}", "{F-CR-PC-%"))  # the Dangerous Goods profile
 REFILL = ("{F-%-RF}", ())  # the Refill Service profile
-WATCH = ("{P-%", ())  # nothing else matches it: the catch-all profile
+OTHER = ("{P-%", ())  # no other profile matches it, so the catch-all (on erp2 the first is a ballpoint pen)
 
 
 def website_items(kind, count=1) -> list[tuple[str, str]]:
@@ -475,14 +475,14 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 	# -------------------------------------------------------------- item facts
 	def test_item_facts_read_the_index_key_and_the_unit_weight(self):
 		[(fragrance, key)] = website_items(FRAGRANCE)
-		[(watch, watch_key)] = website_items(WATCH)
+		[(other, other_key)] = website_items(OTHER)
 		weigh(self, fragrance, 0.25)
-		weigh(self, watch, 0)
-		facts = shipping_policy.item_facts_for([fragrance, watch, "NO-SUCH-ITEM", fragrance])
+		weigh(self, other, 0)
+		facts = shipping_policy.item_facts_for([fragrance, other, "NO-SUCH-ITEM", fragrance])
 		self.assertEqual(facts[fragrance], {"index_key": key, "weight_kg": 0.25})
-		self.assertEqual(facts[watch], {"index_key": watch_key, "weight_kg": 0.0}, "no weight on file")
+		self.assertEqual(facts[other], {"index_key": other_key, "weight_kg": 0.0}, "no weight on file")
 		self.assertEqual(facts["NO-SUCH-ITEM"], {"index_key": "", "weight_kg": 0.0})
-		self.assertEqual(set(facts), {fragrance, watch, "NO-SUCH-ITEM"}, "every text asked about is a key")
+		self.assertEqual(set(facts), {fragrance, other, "NO-SUCH-ITEM"}, "every text asked about is a key")
 		self.assertTrue(
 			key.startswith("{F-") and key.endswith("}"), "as stored: the card takes the braces off"
 		)
@@ -513,7 +513,7 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 		self.assertEqual(groups[code.swapcase()], [])
 
 	def test_item_facts_use_at_most_two_queries(self):
-		real = [code for code, _ in website_items(FRAGRANCE, 2) + website_items(WATCH)]
+		real = [code for code, _ in website_items(FRAGRANCE, 2) + website_items(OTHER)]
 		codes = [*real, "NO-SUCH-ITEM", *[f"NO-SUCH-ITEM-{n}" for n in range(196)]]
 		items = [{"item_code": code, "qty": 1.0} for code in codes]
 		shipping_policy.item_facts_for(codes)  # once to warm Frappe's own metadata
@@ -555,9 +555,9 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 	# -------------------------------------------------------------- rate-card mode
 	def test_rate_card_mode_prices_a_guest_order_end_to_end(self):
 		[(fragrance, _)] = website_items(FRAGRANCE)
-		[(watch, _)] = website_items(WATCH)
+		[(other, _)] = website_items(OTHER)
 		weigh(self, fragrance, 0.25)
-		weigh(self, watch, 0.3)
+		weigh(self, other, 0.3)
 		seed_policy(card_policy(), active=True)
 
 		def priced(country, items):
@@ -602,13 +602,13 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 		believed["country_code"] = "US"
 		self.assertEqual(shipping_engine.resolve(policy, believed)["reason"], "too_heavy")
 		# Two profiles in one cart add up, each in its zone of the card; the zone named is the policy's.
-		mixed = priced("US", one_of(fragrance, 2) + one_of(watch))
+		mixed = priced("US", one_of(fragrance, 2) + one_of(other))
 		self.assertEqual((mixed["zone"], mixed["offered"], mixed["reason"]), ("Rest of world", True, None))
-		self.assertEqual(first_amount(mixed), US_FRAGRANCES + US_WATCH)
+		self.assertEqual(first_amount(mixed), US_FRAGRANCES + US_OTHER)
 		self.assertEqual((mixed["offers"][0]["name"], mixed["offers"][0]["estimated_days"]), (EXPRESS, 7))
 		self.assertEqual(len(mixed["offers"]), 1, "one delivery method, whatever the profiles")
 		# Free is still an offer; the slower promise names the method and sets the days.
-		free = priced("BH", one_of(fragrance) + one_of(watch))
+		free = priced("BH", one_of(fragrance) + one_of(other))
 		self.assertEqual((free["zone"], free["offered"], first_amount(free)), ("Bahrain", True, 0.0))
 		self.assertEqual(
 			(free["offers"][0]["name"], free["offers"][0]["estimated_days"]), ("Free Shipping (1-3 days)", 3)
@@ -686,30 +686,30 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 		country = next((code for code in ("AX", "AL", "AU", "CN") if code not in served), None)
 		if country is None:
 			self.skipTest("the carriers of this site serve every country of the card's Worldwide zone")
-		[(watch, _)] = website_items(WATCH)
-		weigh(self, watch, 0.3)
+		[(other, _)] = website_items(OTHER)
+		weigh(self, other, 0.3)
 		seed_policy(card_policy(), active=True)
-		priced = guest_price(country, items=one_of(watch), boxes=None, quotes=None)
-		self.assertEqual((priced["offered"], first_amount(priced)), (True, US_WATCH))
+		priced = guest_price(country, items=one_of(other), boxes=None, quotes=None)
+		self.assertEqual((priced["offered"], first_amount(priced)), (True, US_OTHER))
 		# The carrier's own rule is unchanged: where nobody delivers there is no delivery.
 		frappe.db.set_single_value(POLICY, "price_source", "Carrier")
-		refused = guest_price(country, items=one_of(watch))
+		refused = guest_price(country, items=one_of(other))
 		self.assertEqual((refused["offered"], refused["reason"]), (False, "not_served"))
 
 	def test_rate_card_mode_prices_what_build_order_with_item_facts_would(self):
 		# `price_delivery` builds a leaner order than `build_order` (no item groups, order value or `served`
 		# lookup) and the wizard's Try an order builds the full one: the engine must price both the same.
-		[(fragrance, _), (other, _)] = website_items(FRAGRANCE, 2)
-		[(watch, _)] = website_items(WATCH)
+		[(fragrance, _), (second, _)] = website_items(FRAGRANCE, 2)
+		[(other, _)] = website_items(OTHER)
 		[(refill, _)] = website_items(REFILL)
 		weigh(self, fragrance, 0.25)
-		weigh(self, watch, 0.3)
+		weigh(self, other, 0.3)
 		seed_policy(card_policy(), active=True)
 		orders = {
 			"a fragrance to the Gulf": ("AE", one_of(fragrance)),
-			"two profiles to the USA": ("US", one_of(fragrance, 2) + one_of(watch)),
-			"free in Bahrain": ("BH", one_of(fragrance) + one_of(watch)),
-			"an item the ERP does not know": ("US", one_of("NO-SUCH-ITEM") + one_of(other)),
+			"two profiles to the USA": ("US", one_of(fragrance, 2) + one_of(other)),
+			"free in Bahrain": ("BH", one_of(fragrance) + one_of(other)),
+			"an item the ERP does not know": ("US", one_of("NO-SUCH-ITEM") + one_of(second)),
 			"a refill the card cannot send to the Gulf": ("AE", one_of(refill)),
 			"too heavy": ("US", one_of(fragrance, 40)),
 			"not shipped": ("RU", one_of(fragrance)),
@@ -936,9 +936,9 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 	# -------------------------------------------------------------- default weights
 	def test_unknown_items_and_missing_weights_use_the_default_weight(self):
 		[(fragrance, key)] = website_items(FRAGRANCE)
-		[(watch, _)] = website_items(WATCH)
+		[(other, _)] = website_items(OTHER)
 		weigh(self, fragrance, 0)
-		weigh(self, watch, 0)
+		weigh(self, other, 0)
 		seed_policy(card_policy(), active=True)
 
 		def price(items):
@@ -947,7 +947,7 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 		# With no weight on file, each unit counts as 0.35 kg, 0.772 lb: 60 in the USA zone of Dangerous
 		# Goods (the 0.7 to 2 lb tier) and 40 in the Worldwide zone of the catch-all profile.
 		self.assertEqual(price(one_of(fragrance)), 60.0)
-		self.assertEqual(price(one_of(watch)), 40.0)
+		self.assertEqual(price(one_of(other)), 40.0)
 		self.assertEqual(
 			price(one_of("NO-SUCH-ITEM")), 40.0, "an unknown item has no key: the catch-all profile"
 		)
@@ -970,8 +970,8 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 		self.assertEqual(price(one_of(fragrance)), 35.0)
 		# The staff can see which line was guessed: the engine's receipt says so. The guest never sees it.
 		weigh(self, fragrance, 0)
-		weigh(self, watch, 0.3)
-		lines = [{"item_code": fragrance, "qty": 1.0}, {"item_code": watch, "qty": 1.0}]
+		weigh(self, other, 0.3)
+		lines = [{"item_code": fragrance, "qty": 1.0}, {"item_code": other, "qty": 1.0}]
 		order = shipping_policy.build_order("US", lines, [], [], item_facts=True)
 		trace = shipping_engine.resolve(shipping_policy.load_policy(), order)["offers"][0]["trace"]
 		receipt = [step["text"] for step in trace if step["kind"] == "rate_card"]
