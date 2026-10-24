@@ -2073,9 +2073,11 @@
 	font-size: var(--text-sm);
 }
 
+/* what Use these rates did: under the panel's title line, which it stays beside once the panel has folded */
 .sp-wizard .sp-import-taken:not(:empty) {
 	display: grid;
 	gap: 6px;
+	margin: 0 16px 14px;
 	padding-left: 10px;
 	border-left: 2px solid var(--sp-rule-strong);
 	font-size: var(--text-sm);
@@ -2320,6 +2322,12 @@
 	border-bottom-color: var(--sp-rule-strong);
 	background: var(--control-bg);
 	color: var(--heading-color);
+}
+
+/* a choice that waits for something else first: dimmed, its reason in its title (and its description) */
+.sp-wizard .sp-czone-kind-row .sp-option:has(input:disabled) {
+	color: var(--text-muted);
+	cursor: not-allowed;
 }
 
 /* the tiers: a ledger of weight bands and their prices, the prices right-aligned as on a receipt */
@@ -2587,6 +2595,16 @@
 	margin-top: 16px;
 	padding-top: 12px;
 	border-top: 3px double var(--sp-rule-strong);
+}
+
+.sp-wizard .sp-test-total:has(.sp-test-verdict:empty) {
+	margin-top: 0;
+	padding-top: 0;
+	border-top: 0;
+}
+
+.sp-wizard .sp-test-total:has(.sp-test-verdict:empty) .sp-test-verdict-label {
+	display: none;
 }
 
 .sp-wizard .sp-test-verdict-label {

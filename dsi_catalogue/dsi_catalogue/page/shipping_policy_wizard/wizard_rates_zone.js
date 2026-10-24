@@ -32,7 +32,7 @@ class RateZoneCard {
 		this.index = 0;
 		this.built = false;
 		this.tiers = new Map(); // tier object -> RateTierRow
-		this.country_refusal = ""; // why the last country was not added, until the next change
+		this.country_refusal = ""; // why the last country was not added: until the next change, or one is typed
 		this.title = el("span", { class: "sp-czone-title" });
 		this.about = el("span", { class: "sp-disclosure-about" });
 		this.figure = el("span", { class: "sp-czone-figure", "aria-hidden": "true" });
@@ -64,14 +64,15 @@ class RateZoneCard {
 		return Array.isArray(this.zone.countries) ? this.zone.countries.map(String) : [];
 	}
 
+	// The zone's line, from the zone; a refusal it said goes with the change that redraws it (or with closing it).
 	update(index) {
 		const zone = this.zone;
 		this.index = index;
-		const name = String(zone.name ?? "").trim() || __("A zone without a name");
-		this.title.textContent = name;
+		this.country_refusal = "";
+		const name = show_name(this.title, String(zone.name ?? "").trim() || __("A zone without a name"));
 		const count = this.codes().length;
 		const where = count === 1 ? __("1 country") : __("{0} countries", [count]);
-		const method = String(zone.method ?? "").trim();
+		const method = sp.clip(String(zone.method ?? "").trim());
 		const prices = sp.zone_price_words(zone);
 		this.about.textContent = method ? __("{0}. {1}, {2}.", [where, prices, method]) : __("{0}. {1}.", [where, prices]);
 		this.show_figure();
@@ -145,6 +146,12 @@ class RateZoneCard {
 			on_change: (code) => this.add_country(code),
 		});
 		this.country_problem = el("p", { class: "sp-problem", "aria-live": "polite", "data-testid": "rates-country-problem" });
+		// a refusal goes once another country is typed
+		this.picker.input.addEventListener("input", () => {
+			if (!this.country_refusal) return;
+			this.country_refusal = "";
+			this.country_problem.textContent = "";
+		});
 
 		// the delivery method and the days it promises
 		const [method, method_field] = text_field("rates-zone-method", __("Delivery method, as customers read it"), []);
@@ -172,7 +179,8 @@ class RateZoneCard {
 			});
 			return input;
 		});
-		this.kind_hint = el("span", { class: "sp-option-note", id: `${uid}-kind-hint` });
+		// why "One price at any weight" cannot be chosen: the hint of that control alone (its description and title)
+		this.kind_hint = el("span", { class: "sp-sr-only", id: `${uid}-kind-hint` });
 		this.rows = el("tbody", {});
 		this.table = el(
 			"table",
@@ -208,6 +216,12 @@ class RateZoneCard {
 			{ type: "button", class: "sp-link sp-quiet", "data-testid": "rates-zone-delete", onclick: () => this.owner.delete_zone(this) },
 			__("Delete this zone")
 		);
+		this.flat_option = el(
+			"label",
+			{ class: "sp-option" },
+			this.kinds[0],
+			el("span", { class: "sp-option-text" }, __("One price at any weight"))
+		);
 		this.body.replaceChildren(
 			name_field,
 			el(
@@ -228,7 +242,7 @@ class RateZoneCard {
 				el(
 					"div",
 					{ class: "sp-czone-kind-row" },
-					el("label", { class: "sp-option" }, this.kinds[0], el("span", { class: "sp-option-text" }, __("One price at any weight"))),
+					this.flat_option,
 					el("label", { class: "sp-option" }, this.kinds[1], el("span", { class: "sp-option-text" }, __("By weight"))),
 					this.kind_hint
 				)
@@ -245,6 +259,7 @@ class RateZoneCard {
 		this.tiers.clear();
 		this.built = false;
 		this.name = null;
+		this.country_refusal = "";
 	}
 
 	typed() {
@@ -345,9 +360,9 @@ class RateZoneCard {
 		const name = this.sheet.view.country_name(code);
 		const owner = this.owner.owner_of(code, this.zone);
 		if (owner) {
-			const where = String(owner.name ?? "").trim();
+			const where = sp.clip(String(owner.name ?? "").trim());
 			this.country_refusal = where
-				? __("{0} is already in the zone {1} of this profile.", [name, where])
+				? __("{0} is already in the zone “{1}” of this profile.", [name, where])
 				: __("{0} is already in another zone of this profile.", [name]);
 			this.update_body();
 			return;
@@ -454,9 +469,15 @@ class RateZoneCard {
 		this.kinds[1].checked = !flat;
 		const can_flatten = flat || tiers.length <= 1;
 		this.kinds[0].disabled = !can_flatten;
-		this.kind_hint.textContent = can_flatten ? "" : __("Remove the other weight tiers first.");
-		if (can_flatten) this.kinds[0].removeAttribute("aria-describedby");
-		else this.kinds[0].setAttribute("aria-describedby", this.kind_hint.id);
+		const hint = can_flatten ? "" : __("Remove the other weight tiers first.");
+		this.kind_hint.textContent = hint;
+		if (hint) {
+			this.kinds[0].setAttribute("aria-describedby", this.kind_hint.id);
+			this.flat_option.setAttribute("title", hint);
+		} else {
+			this.kinds[0].removeAttribute("aria-describedby");
+			this.flat_option.removeAttribute("title");
+		}
 		const all = Array.isArray(zone.tiers) ? zone.tiers : [];
 		keep_cards({
 			entries: all,
@@ -469,7 +490,7 @@ class RateZoneCard {
 		this.tier_add.hidden = flat;
 		this.tier_add.setAttribute("aria-disabled", String(full));
 		this.tier_hint.textContent = full ? __("A zone holds at most {0} weight tiers.", [CARD_LIMITS.tiers]) : "";
-		this.delete.setAttribute("aria-label", __("Delete the zone {0}", [name.trim() || String(this.index + 1)]));
+		this.delete.setAttribute("aria-label", __("Delete the zone {0}", [sp.clip(name.trim()) || String(this.index + 1)]));
 	}
 }
 
