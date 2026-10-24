@@ -2426,11 +2426,46 @@ try {
 			await page.click(by("apply-button"));
 			await expectText("apply-error", "The policy was not applied: Someone else is applying a change right now. Try again in a moment.");
 			assert((await ariaDisabled()) === "false", "the same button stays usable");
+			// the desk's real html2text on what a refusal may hold: escaped text, and sentences joined with <br>
+			const escaped = JSON.stringify({
+				message: ["Zone &quot;A &amp; B&quot; has a &lt;b&gt;bold&lt;/b&gt; name.<br>It is said on a second line."],
+				as_list: 1,
+				title: "The shipping policy cannot be applied",
+				indicator: "red",
+				raise_exception: 1,
+			});
+			fakeNext.apply_policy = { status: 417, body: { exc_type: "ValidationError", _server_messages: JSON.stringify([escaped]) } };
+			await page.click(by("apply-button"));
+			await expectText("apply-error", "It is said on a second line.");
 		} finally {
 			await intercept(false);
 		}
-		expected(...REFUSED_STATUS);
+		expected(...REFUSED_STATUS, ...REFUSED_STATUS);
+		const lines = await page.$$eval(`${by("apply-error")} li`, (found) => found.map((line) => line.textContent));
+		const want = ['Zone "A & B" has a <b>bold</b> name.', "It is said on a second line."];
+		assert(JSON.stringify(lines) === JSON.stringify(want), `the real html2text, a line each: ${JSON.stringify(lines)}`);
+		assert((await page.$$(".sp-wizard b")).length === 0, "no element was made from it");
 		assert((await store()).dirty, "the draft is kept");
+	});
+
+	// Apply waits while the draft is being checked, even by a request for the very draft it would send (M8).
+	await check("Apply sends nothing while the draft is being checked", async () => {
+		await applyReady();
+		await intercept(true);
+		try {
+			holdPreview = 2500;
+			await page.click(by("step-tab-fallback"));
+			await page.click(by("step-tab-review")); // the step drawn again asks again, for the same draft
+			await pause(300);
+			applied = 0;
+			await page.click(by("apply-button"));
+			await pause(300);
+			assert(applied === 0, `${applied} Apply requests while the draft is being checked`);
+			assert((await textOf("apply-hint")) === "Checking the draft…", `beside Apply: ${await textOf("apply-hint")}`);
+			await applyReady(); // the held answer arrives
+		} finally {
+			await intercept(false);
+		}
 	});
 
 	// An Apply that hears no usable word (finding M2): the write may have gone through, so the page reads the

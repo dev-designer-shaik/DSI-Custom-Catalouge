@@ -119,8 +119,9 @@ const sp = (dsi_catalogue.sp = {
 
 	// The sentences of a refusal that came through Frappe's message path, each as plain text: the server escapes
 	// what people typed in them (the desk shows them as HTML), so each is read with frappe.utils.html2text. A
-	// message is one sentence, a list of them (as_list) or a table (as_table). `response` is what Frappe hands an
-	// error callback: the answer, or for a code it has no handler for, the request (its responseJSON).
+	// message is one sentence, a list of them (as_list) or a table (as_table), and a <br> in it starts a new line.
+	// `response` is what Frappe hands an error callback: the answer, or for a code it has no handler for, the
+	// request (its responseJSON).
 	refusal_lines(response) {
 		let answer = response;
 		if (answer && typeof answer.getResponseHeader === "function") {
@@ -140,8 +141,11 @@ const sp = (dsi_catalogue.sp = {
 		const add = (value) => {
 			if (Array.isArray(value)) value.forEach(add);
 			else if (value !== null && value !== undefined && value !== "") {
-				const text = frappe.utils.html2text(String(value)).trim();
-				if (text) lines.push(text);
+				// Frappe joins the sentences of one message with <br>: each is a line of its own
+				for (const part of String(value).split(/<br\s*\/?>/i)) {
+					const text = frappe.utils.html2text(part).trim();
+					if (text) lines.push(text);
+				}
 			}
 		};
 		for (const entry of Array.isArray(messages) ? messages : []) {

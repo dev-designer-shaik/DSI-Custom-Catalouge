@@ -1128,11 +1128,60 @@ def test_the_review_reads_names_as_the_erp_keeps_them_without_outer_spaces(tmp_p
 	assert (bahrain["no_rules"], gcc["no_rules"]) == ("", "")
 
 
+@pytest.fixture
+def wizard_module(monkeypatch):
+	"""dsi_catalogue.shipping_policy_wizard, imported with a stand-in for frappe that has only what the module and
+	shipping_policy need to load (the decorator, the translation function, a few names from frappe.utils): the
+	functions used from it here are pure. The stand-in and the two modules are gone again after the test."""
+	import importlib
+	import sys
+	import types
+
+	pytest.importorskip("requests")
+	pytest.importorskip("urllib3")
+	fake = types.ModuleType("frappe")
+	fake._ = lambda text: text
+	fake.whitelist = lambda *args, **kwargs: lambda function: function
+	utils = types.ModuleType("frappe.utils")
+	for name in ("escape_html", "get_url", "sbool", "add_to_date", "getdate", "now_datetime"):
+		setattr(utils, name, lambda *args, **kwargs: None)
+	utils.flt = lambda value, places=None: (
+		float(value or 0) if places is None else round(float(value or 0), places)
+	)
+	file_lock = types.ModuleType("frappe.utils.file_lock")
+	file_lock.LockTimeoutError = type("LockTimeoutError", (Exception,), {})
+	synchronization = types.ModuleType("frappe.utils.synchronization")
+	synchronization.filelock = lambda *args, **kwargs: None
+	model = types.ModuleType("frappe.model")
+	base_document = types.ModuleType("frappe.model.base_document")
+	base_document.BaseDocument = type("BaseDocument", (), {})
+	fake.utils, fake.model = utils, model
+	stand_ins = {
+		"frappe": fake,
+		"frappe.utils": utils,
+		"frappe.utils.file_lock": file_lock,
+		"frappe.utils.synchronization": synchronization,
+		"frappe.model": model,
+		"frappe.model.base_document": base_document,
+	}
+	for name, module in stand_ins.items():
+		monkeypatch.setitem(sys.modules, name, module)
+	loaded = ("dsi_catalogue.shipping_policy_wizard", "dsi_catalogue.shipping_policy")
+	package = importlib.import_module("dsi_catalogue")
+	try:
+		yield importlib.import_module(loaded[0])
+	finally:
+		for name in loaded:
+			sys.modules.pop(name, None)
+			if hasattr(package, name.rsplit(".", 1)[1]):
+				delattr(package, name.rsplit(".", 1)[1])
+
+
 @needs_node
-def test_a_problem_links_to_the_step_that_owns_it(tmp_path):
+def test_a_problem_links_to_the_step_that_owns_it(tmp_path, wizard_module):
 	"""The Review step's "Fix it" goes to the step that owns a problem: sp.problem_step reads the way the engine's
-	and the wizard's sentences start. Here are the engine's real sentences (validate_policy), and the wizard
-	module's own, each pinned to its source."""
+	and the wizard's sentences start. Here are the engine's real sentences (validate_policy) and the wizard
+	module's own (made by the functions preview_changes and apply_policy use), each made, not copied."""
 
 	def problems(**policy):
 		return validate_policy({"zones": [], "item_sets": [], "rules": [], **policy})
@@ -1187,42 +1236,44 @@ def test_a_problem_links_to_the_step_that_owns_it(tmp_path):
 		],
 	}
 	assert all(engine.values()), "each kind of problem was made"
-	source = (ROOT / "dsi_catalogue" / "shipping_policy_wizard.py").read_text(encoding="utf-8")
-	for template in (
-		'f"Country code {code} is not a country in the ERP."',
-		'f"Country code {code} in zone {zone_name} ({profile_name}) is not a country in the ERP."',
-		'_UNSAVABLE_CARD = "The rate card cannot be saved as it is',
-		"""f'{kind}s "{earlier}" and "{name}" differ only in capital letters, which the ERP reads as one '""",
-		"""f'{kind} "{held}" is the saved {kind.lower()} "{name}" with other capital letters. The ERP '""",
-		'f"{subject} has an amount below zero for when the carrier can\'t quote. Make it 0 or more."',
-		'fallbacks = [("The policy default", policy["default_fallback"])]',
-		'SHAPE_PROBLEM = "The draft is not in the expected shape."',
-	):
-		assert template in source, template
-	wizard = {
+	wizard = wizard_module
+	empty = {"zones": [], "item_sets": [], "default_fallback": None}
+	saved = {"zones": [{"name": "Gulf"}], "item_sets": [{"name": "W"}]}
+	card = {
+		**TINY_CARD,
+		"profiles": [
+			{
+				**TINY_CARD["profiles"][0],
+				"zones": [{**TINY_CARD["profiles"][0]["zones"][0], "countries": ["ZZ"]}],
+			}
+		],
+	}
+	made = {
 		"zones": [
-			"Country code ZZ is not a country in the ERP.",
-			'Zones "Gulf" and "gulf" differ only in capital letters, which the ERP reads as one name. Zone names '
-			"have to be different.",
-			'Zone "gulf" is the saved zone "Gulf" with other capital letters. The ERP reads them as one name, so keep '
-			'"Gulf" or choose another name.',
+			*wizard._unknown_countries({"zones": [{"countries": ["ZZ"]}]}, {}),
+			*wizard._saving_problems({**empty, "zones": [{"name": "Gulf"}, {"name": "gulf"}]}, empty),
+			*wizard._saving_problems({**empty, "zones": [{"name": "gulf"}]}, saved),
 		],
 		"rates": [
-			"Country code ZZ in zone Gulf (Everything) is not a country in the ERP.",
-			"The rate card cannot be saved as it is (it is nested too deeply or holds values that are not plain data).",
+			*wizard._unknown_card_countries(card, {}),
+			*wizard._unsavable_card({"profiles": [{"name": float("nan")}]}),
 		],
 		"rules": [
-			'Item sets "W" and "w" differ only in capital letters, which the ERP reads as one name. Item set names '
-			"have to be different.",
-			'Item set "w" is the saved item set "W" with other capital letters. The ERP reads them as one name, so '
-			'keep "W" or choose another name.',
+			*wizard._saving_problems({**empty, "item_sets": [{"name": "W"}, {"name": "w"}]}, empty),
+			*wizard._saving_problems({**empty, "item_sets": [{"name": "w"}]}, saved),
 		],
 		"fallback": [
-			"The policy default has an amount below zero for when the carrier can't quote. Make it 0 or more.",
-			'Zone "A" has an amount below zero for when the carrier can\'t quote. Make it 0 or more.',
+			*wizard._saving_problems({**empty, "default_fallback": {"method": "free", "amount": -1}}, empty),
+			*wizard._saving_problems(
+				{**empty, "zones": [{"name": "A", "fallback": {"method": "free", "amount": -1}}]}, empty
+			),
 		],
-		None: ["The draft is not in the expected shape."],
+		None: [wizard.SHAPE_PROBLEM],
 	}
+	assert [len(listed) for listed in made.values()] == [3, 2, 2, 2, 1], (
+		"each of the wizard's own sentences was made"
+	)
+	wizard = made
 	sentences = [
 		[step, sentence]
 		for found in (engine, wizard)
@@ -1239,8 +1290,9 @@ def test_a_problem_links_to_the_step_that_owns_it(tmp_path):
 @needs_node
 def test_a_refusal_is_read_a_sentence_a_line_as_plain_text(tmp_path):
 	"""sp.refusal_lines reads the sentences of a refusal from Frappe's message path: one message, a list of them
-	(apply_policy refuses with a list, escaped), what a code without a handler of its own hands over (the
-	request), and nothing at all. Each goes through frappe.utils.html2text, here a stand-in that decodes."""
+	(apply_policy refuses with a list, escaped), sentences Frappe joined with <br> (a line each), what a code
+	without a handler of its own hands over (the request), and nothing at all. Each goes through
+	frappe.utils.html2text, here a stand-in that decodes (the browser script checks the real one)."""
 	listed = json.dumps(
 		{
 			"message": [
@@ -1251,6 +1303,7 @@ def test_a_refusal_is_read_a_sentence_a_line_as_plain_text(tmp_path):
 		}
 	)
 	single = json.dumps({"message": "Someone else is applying a change right now. Try again in a moment."})
+	joined = json.dumps({"message": "One sentence.<br>Another one.<BR/>A &lt;b&gt;third&lt;/b&gt;."})
 	got = run_page_helpers(
 		tmp_path,
 		f"""
@@ -1263,6 +1316,7 @@ def test_a_refusal_is_read_a_sentence_a_line_as_plain_text(tmp_path):
 			sp.refusal_lines({{ getResponseHeader() {{}}, responseJSON: {{ _server_messages: messages({json.dumps(single)}) }} }}),
 			sp.refusal_lines(undefined),
 			sp.refusal_lines({{ _server_messages: "not a list" }}),
+			sp.refusal_lines({{ _server_messages: messages({json.dumps(joined)}) }}),
 		];
 		""",
 	)
@@ -1272,6 +1326,7 @@ def test_a_refusal_is_read_a_sentence_a_line_as_plain_text(tmp_path):
 		["Someone else is applying a change right now. Try again in a moment."],
 		[],
 		[],
+		["One sentence.", "Another one.", "A <b>third</b>."],
 	]
 
 
