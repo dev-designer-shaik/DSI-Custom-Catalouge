@@ -6,7 +6,8 @@ They share the helpers of `test_shipping_policy` (seeding and wiping the policy,
 Error Log guard) and, like those tests, refuse to run on a site that already holds a shipping policy,
 because they reset it: run them on erp2, the sandbox.
 
-	bench --site erp.shaik.net run-tests --module dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy_ratecard
+	bench --site erp.shaik.net run-tests \\
+		--module dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy_ratecard
 
 The card used here is a literal: a trimmed copy of the prices in the Shopify export, as the hermetic sample
 is. The sample CSV files themselves do not reach erp2 (the push script refuses them).
@@ -171,7 +172,7 @@ US_OTHER = 40.0  # one catch-all item of 0.3 kg to the USA (or anywhere in its W
 
 
 def card_policy(**fields) -> dict:
-	"""The example policy (its zones and rules) with the card as its price source. `active` is seed_policy's."""
+	"""The example policy's zones and rules with the card as its price source. `active` is seed_policy's."""
 	return {**load_example(), "price_source": "rate_card", "rate_card": copy.deepcopy(CARD), **fields}
 
 
@@ -443,19 +444,13 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 		zone = zone_of("Gulf", ["AE"], fallback={"method": "rate_card", "amount": 0.0})
 		with self.assertRaises(frappe.ValidationError) as caught:
 			seed_policy(policy_of([zone], [rule_of("Gulf")]), active=True)
-		self.assertEqual(
-			caught.exception.args[0],
-			sentences(
-				[
-					'Zone "Gulf" uses the rate card when the carrier can\'t quote, but there is no rate card yet.'
-				]
-			),
-		)
+		said = 'Zone "Gulf" uses the rate card when the carrier can\'t quote, but there is no rate card yet.'
+		self.assertEqual(caught.exception.args[0], sentences([said]))
 
 	def test_a_policy_that_is_off_keeps_a_card_it_cannot_read_and_is_not_switched_on_with_it(self):
-		# While the policy is off nothing of its content is checked, the stored card included: a card that is not
-		# JSON is kept as it was typed (the loader reads it as no card, and an off policy prices nothing). Saving
-		# the policy on is refused until the card is fixed.
+		# While the policy is off nothing of its content is checked, the stored card included: a card that is
+		# not JSON is kept as it was typed (the loader reads it as no card, and an off policy prices nothing).
+		# Saving the policy on is refused until the card is fixed.
 		seed_policy(
 			policy_of([zone_of("Gulf", ["AE"])], [rule_of("Gulf")], price_source="carrier"), active=True
 		)
