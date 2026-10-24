@@ -87,19 +87,24 @@ class FallbackView {
 }
 
 // What a fallback comes to, on the right of its card: an amount in brass, Free in sage, Not offered in brick, or
-// a quiet word. The sentence under the choice says the same in words.
+// a quiet word. A zone that only takes the policy default shows what the default comes to quietly, without an
+// accent (the default's own card carries it), so that "Not offered" in brick is said only where it was chosen.
+// The sentence under the choice says the same in words.
 function show_figure(figure, outcome) {
 	figure.className = "sp-fallback-figure";
+	const accent = (name) => {
+		figure.classList.add(outcome.by_default ? "is-inherited" : name);
+	};
 	let text = "";
 	if (outcome.kind === "fixed" && outcome.amount > 0) {
 		text = sp.money(outcome.amount);
-		figure.classList.add("is-paid");
+		accent("is-paid");
 	} else if (outcome.kind === "fixed" || outcome.kind === "free") {
 		text = __("Free");
-		figure.classList.add("is-free");
+		accent("is-free");
 	} else if (outcome.kind === "none") {
 		text = __("Not offered");
-		figure.classList.add("is-not-offered");
+		accent("is-not-offered");
 	} else if (outcome.kind === "rate_card") {
 		text = __("Rate card");
 	} else if (outcome.kind === "carrier") {
@@ -304,8 +309,8 @@ class FallbackCard {
 		this.choices.hidden = closed;
 		const method = this.method();
 		for (const radio of this.radios) radio.checked = radio.value === method;
-		// "Use the rate card" says, while there is none, that a card has to be added first
-		const no_card = !sp.is_record(draft.rate_card);
+		// "Use the rate card", once chosen while there is no card, says that one has to be added first
+		const no_card = !sp.is_record(draft.rate_card) && method === "rate_card";
 		this.card_note.hidden = !no_card;
 		const card_radio = this.radios.find((radio) => radio.value === "rate_card");
 		if (no_card) card_radio.setAttribute("aria-describedby", `${this.uid}-card-note`);
@@ -337,7 +342,7 @@ class FallbackCard {
 
 		if (closed) {
 			show_figure(this.figure, { kind: "none" });
-			this.sentence.textContent = __("Delivery is never offered here: the zone is not shipped to.");
+			this.sentence.textContent = __("Delivery is never offered here: this zone is not shipped to.");
 			return;
 		}
 		show_figure(this.figure, sp.fallback_outcome(draft, zone));

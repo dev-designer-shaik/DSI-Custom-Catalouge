@@ -190,7 +190,7 @@ class ReviewView {
 			__("Check again")
 		);
 		this.error = el("div", { class: "sp-apply-error", role: "alert", "data-testid": "apply-error" });
-		this.done = el("div", { class: "sp-apply-done", role: "status", tabindex: "-1", "data-testid": "apply-done" });
+		this.done = el("div", { class: "sp-apply-done", role: "status", "data-testid": "apply-done" });
 
 		panel.append(
 			el(
@@ -301,11 +301,22 @@ class ReviewView {
 			const lines = sp.change_lines(ui.answer.changes, this.wizard.store.original, JSON.parse(ui.answer_for));
 			content = lines.length ? lines : __("Nothing to apply yet.");
 		}
-		this.diff.classList.toggle("is-stale", Boolean(ui.answer) && !current);
-		const said = JSON.stringify(content);
+		// after a stale Apply what is shown compares the draft with the policy the page loaded, which has changed
+		const outdated = ui.outcome?.kind === "stale";
+		this.diff.classList.toggle("is-stale", outdated || (Boolean(ui.answer) && !current));
+		const said = JSON.stringify([content, outdated]);
 		if (said === this.changes_said) return;
 		this.changes_said = said;
 		this.diff.replaceChildren(
+			outdated
+				? el(
+						"p",
+						{ class: "sp-out-of-date", "data-testid": "review-out-of-date" },
+						__(
+							"This is out of date: someone changed the policy after you opened it. Review the differences to see what applying would change now."
+						)
+				  )
+				: null,
 			typeof content === "string" ? el("p", { class: "sp-empty" }, content) : change_list(content, "review-changes")
 		);
 	}
@@ -459,7 +470,10 @@ class ReviewView {
 			);
 		} else if (kind === "applied") {
 			const lines = sp.change_lines(outcome.changes, outcome.before, outcome.after);
-			done.push(el("p", { class: "sp-apply-done-title" }, applied_sentence(outcome)));
+			// the title line takes the focus once the step is drawn again, not the whole receipt
+			done.push(
+				el("p", { class: "sp-apply-done-title", tabindex: "-1", "data-testid": "apply-done-title" }, applied_sentence(outcome))
+			);
 			if (lines.length) done.push(change_list(lines, "apply-changes"));
 		} else if (kind === "rebased") {
 			done.push(
@@ -499,7 +513,7 @@ class ReviewView {
 					ui.applying = false;
 					ui.outcome = { kind: "applied", before, after: sent, changes, draft: JSON.stringify(store.draft) };
 					ui.view?.show();
-					ui.view?.done.focus();
+					ui.view?.done.querySelector('[data-testid="apply-done-title"]')?.focus();
 				},
 				() => {
 					ui.applying = false;

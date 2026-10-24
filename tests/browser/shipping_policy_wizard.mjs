@@ -1913,16 +1913,33 @@ try {
 			said: card.querySelector('[data-testid="fallback-sentence"]').textContent,
 		}));
 		assert(!closed.choices, "a Not shipped zone has no choice");
-		assert(closed.said === "Delivery is never offered here: the zone is not shipped to.", closed.said);
+		assert(closed.said === "Delivery is never offered here: this zone is not shipped to.", closed.said);
 		const offered = await page.$$eval(`${by("fallback-policy-default")} ${by("fallback-method")}`, (radios) =>
 			radios.map((radio) => radio.value)
 		);
 		assert(offered.join() === "no_delivery,fixed,free,rate_card", `the policy default offers four: ${offered}`);
 		assert((await picked("fallback-policy-default", 0)) === "no_delivery", "the policy default does not offer delivery");
 		assert((await picked("not-covered", 0, "not-covered-option")) === "pass_through", "and passes the carrier's price");
-		// "Use the rate card" is offered, and says that there is no rate card yet
-		const gcc = await (await nth("fallback-zone", 1)).evaluate((card) => card.innerText);
-		assert(gcc.includes("There is no rate card yet. Add one in the Rates step."), "the rate card's quiet note");
+		// "Use the rate card" is offered; once chosen while there is no card, and only then, it says to add one
+		const note = "There is no rate card yet. Add one in the Rates step.";
+		const notes = async () =>
+			page.$$eval(".sp-fallback .sp-option-note", (found) => found.filter((one) => one.offsetParent).map((one) => one.textContent));
+		assert((await notes()).length === 0, `no note while no zone uses the rate card: ${await notes()}`);
+		await pick("fallback-zone", 1, "rate_card");
+		assert(JSON.stringify(await notes()) === JSON.stringify([note]), `the note, once, beside the choice: ${await notes()}`);
+		await expectIn("fallback-zone", 1, "fallback-sentence", "customers here pay what the rate card charges.");
+		// a zone that only takes the policy default shows what that comes to quietly: brick is for a choice made
+		const tones = await page.evaluate(() => {
+			const colour = (element) => getComputedStyle(element).color;
+			const figure = (n) => document.querySelectorAll('[data-testid="fallback-zone"]')[n].querySelector('[data-testid="fallback-figure"]');
+			return {
+				inherited: [colour(figure(0)), figure(0).textContent],
+				closed: colour(figure(3)),
+				quiet: colour(document.querySelector("#sp-panel-fallback .sp-step-intro")),
+			};
+		});
+		assert(tones.inherited[0] === tones.quiet && tones.inherited[1] === "Not offered", `inherited, quiet: ${JSON.stringify(tones)}`);
+		assert(tones.closed === "rgb(168, 71, 58)", `a Not shipped zone's own outcome is brick: ${tones.closed}`);
 		// GCC: a fixed amount, blank until it is typed, kept in cents
 		await pick("fallback-zone", 1, "fixed");
 		assert((await valueIn("fallback-zone", 1, "fallback-amount")) === "", "the amount is blank until it is typed");
@@ -2043,6 +2060,13 @@ try {
 		assert(summary.startsWith("Prices start from the carrier's quote for each order."), "where prices start, first");
 		assert(summary.endsWith("When no rule fits an order, customers pay the carrier's price."), "Anything not covered, last");
 		assert(!(await page.$eval(by("policy-active"), (box) => box.checked)), "the switch is off");
+		// its pale track has a ring in the muted text colour, so the control is seen on the desk's surface
+		const ring = await page.evaluate(() => {
+			const style = getComputedStyle(document.querySelector('[data-testid="policy-active"]'));
+			const quiet = getComputedStyle(document.querySelector("#sp-panel-review .sp-step-intro")).color;
+			return { width: style.borderTopWidth, style: style.borderTopStyle, colour: style.borderTopColor, quiet };
+		});
+		assert(ring.width === "1px" && ring.style === "solid" && ring.colour === ring.quiet, `the ring: ${JSON.stringify(ring)}`);
 		const state = await textOf("policy-active-state");
 		assert(state === "Switched off: customers pay the carrier's price", `the switch's state in words: ${state}`);
 		assert((await textOf("apply-button")) === "Apply", "Apply: nothing about Active changes");
@@ -2162,7 +2186,7 @@ try {
 		]) {
 			assert(done.includes(said), `what was applied says "${said}": ${done}`);
 		}
-		assert((await focusedTestid()) === "apply-done", `what was applied has the focus: ${await focusedTestid()}`);
+		assert((await focusedTestid()) === "apply-done-title", `its first line has the focus: ${await focusedTestid()}`);
 		const saved = await store();
 		assert(!saved.dirty && saved.original.active === true, "the draft is the saved policy, and it is on");
 		assert(saved.version !== version, "a new version");
@@ -2237,9 +2261,17 @@ try {
 		assert(why === "Review the differences or reload the saved policy first.", `beside Apply: ${why}`);
 		await pause(1500);
 		assert(applied === 1, `nothing is sent again by itself: ${applied}`);
+		// what will change is out of date now: it says so, and the comparison under it is dimmed
+		await expectText(
+			"review-out-of-date",
+			"This is out of date: someone changed the policy after you opened it. Review the differences to see what applying would change now."
+		);
+		const dim = await page.$eval(`${by("review-diff")} .sp-changes`, (list) => getComputedStyle(list).opacity);
+		assert(dim === "0.55", `the comparison is dimmed: ${dim}`);
 		const file = await tallShot("wizard-stale");
 		await page.click(by("stale-review"));
 		await expectText("apply-done", "The saved policy was read again: what will change now compares your draft with it.");
+		assert(!(await page.$(by("review-out-of-date"))), "what will change is current again");
 		const rebased = await store();
 		assert(rebased.version === changed, "Apply now goes over the policy as it is saved");
 		assert(rebased.dirty && rebased.draft.rules[2].label === "Gulf at the carrier price, edited", "the draft stays");
