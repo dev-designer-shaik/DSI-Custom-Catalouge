@@ -765,6 +765,9 @@ class TestGuestMethods(ShippingPolicyTestCase):
 		)
 
 	def test_policy_off_returns_the_quotes_unchanged(self):
+		"""Promotion proof: while the policy is off, price_delivery gives a guest back the quotes it posted,
+		unchanged, the partial quote B (one carton of two) among them, before any policy is saved and with the
+		example policy saved off. The policy ships off, so installing it changes no price."""
 		quotes = [
 			{"service_id": "A", "name": "Whole", "amount": 12.5, "boxes_quoted": 2},
 			{"service_id": "B", "name": "Short", "amount": 7, "boxes_quoted": 1},
