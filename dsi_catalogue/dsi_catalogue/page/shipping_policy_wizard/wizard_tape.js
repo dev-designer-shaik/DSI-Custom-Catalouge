@@ -687,8 +687,9 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			this.after_total.hidden = false;
 		}
 		// The other delivery methods, a quiet row each (its name, what it costs), so that the total above stays
-		// the one loud figure.
-		if (others.length) {
+		// the one loud figure. Left out when they would only repeat the carrier's list under the quote (the
+		// policy left their prices as quoted).
+		if (others.length && !this.repeats_services(others)) {
 			const row = (offer) => {
 				const amount = offer.amount;
 				const price = amount === 0 ? __("Free") : sp.is_number(amount) ? sp.money(amount) : "";
@@ -709,6 +710,15 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 
 	amount_of(offer) {
 		return sp.is_number(offer.amount) ? offer.amount : Infinity;
+	}
+
+	// Whether the other offers are the carrier's list under the quote again: each at the price the list shows.
+	repeats_services(others) {
+		if (!this.asked || this.services.hidden) return false;
+		const listed = new Map(this.asked.quotes.map((quote) => [String(quote.service_id), sp.money(quote.amount)]));
+		return others.every(
+			(offer) => sp.is_number(offer.amount) && listed.get(String(offer.service_id)) === sp.money(offer.amount)
+		);
 	}
 
 	// The engine's trace of one offer, a line per step: its text, and its amount when it has one. The step

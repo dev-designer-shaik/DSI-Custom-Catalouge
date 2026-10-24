@@ -81,6 +81,9 @@ function assert(condition, message) {
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// An amount as the page prints it: a dollar sign and two decimals.
+const sp_money = (amount) => `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
 // ---------------------------------------------------------------- the browser
 const browser = await puppeteer.launch({
 	headless: true,
@@ -469,6 +472,27 @@ async function answerDialog(yes) {
 	await pause(150);
 }
 
+// Puts on (or takes off again) a draft that charges a dollar more than the carrier in Bahrain: the zone "Island"
+// and one formula rule. The receipt then has other delivery methods at prices of the policy's own.
+async function priceUp(on) {
+	await page.evaluate((on) => {
+		frappe.pages["shipping-policy-wizard"].wizard.change((draft) => {
+			if (!on) {
+				draft.zones.pop();
+				draft.rules.pop();
+				return;
+			}
+			const zone = dsi_catalogue.sp.new_zone("Island");
+			zone.countries.push("BH");
+			draft.zones.push(zone);
+			const rule = dsi_catalogue.sp.new_rule("Island");
+			rule.method = "formula";
+			rule.formula = "carrier_price + 1";
+			draft.rules.push(rule);
+		});
+	}, on);
+}
+
 // Types into the tape's item field and takes the desk's first suggestion.
 async function addTapeItem(code) {
 	await page.focus(by("tape-add-item"));
@@ -746,12 +770,19 @@ await check("asking the carrier fills the quote and lists what it said", async (
 	const cheapest = await page.$eval(`${by("tape-services")} .sp-service-name`, (name) => name.textContent);
 	await expectText("tape-lines", `${cheapest} The carrier quoted ${quote}.`);
 	assert(!(await textOf("tape-lines")).includes("[object"), "every line is printed as text");
+	// the empty policy passes the carrier's prices through: the receipt does not list them all again
+	assert(await page.$eval(".sp-more", (block) => block.hidden), "the carrier's list is not repeated");
+	const total = await textOf("tape-total");
+	const file = await shot("wizard-asked-the-carrier");
+	// a draft that changes the prices: the other methods are listed, a quiet row each, at what the customer
+	// would pay (the draft stays on for the next two checks, which need a tall tape)
+	await priceUp(true);
+	await expectText("tape-total", sp_money(Number(quote) + 1));
 	const others = await page.$$eval(`${by("tape-more")} li`, (rows) => rows.map((row) => row.innerText));
 	const quoted = (await page.$$(`${by("tape-services")} li`)).length;
 	assert(others.length === quoted - 1, `one quiet row for each other method: ${others.length}`);
 	assert(!(await textOf("tape-more")).includes("pay"), "no second Customer pays line");
-	const file = await shot("wizard-asked-the-carrier");
-	return `the carrier said "${services}", the quote field holds ${quote}, the total reads ${await textOf("tape-total")}; ${file}`;
+	return `the carrier said "${services}", the quote field holds ${quote}, the total reads ${total}; ${file}`;
 });
 
 await check("at 1400 x 768 the tape scrolls inside and keeps its total in view (screenshot)", async () => {
@@ -769,6 +800,7 @@ await check("at 1400 x 768 the tape scrolls inside and keeps its total in view (
 	});
 	const file = await shot("wizard-1400x768-asked");
 	await viewport(1400);
+	await priceUp(false);
 	assert(Object.values(seen).every(Boolean), JSON.stringify(seen));
 	return file;
 });
