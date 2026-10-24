@@ -12,8 +12,9 @@ The card used here is a literal: a trimmed copy of the prices in the Shopify exp
 is. The sample CSV files themselves do not reach erp2 (the push script refuses them).
 
 The items are real published Website Items of the site, chosen by their index key: a full-size fragrance, a
-refill and a watch fall in three different profiles of the card. No item on erp2 has a unit weight, so a test
-that needs one gives its item a weight and puts the old value back when it ends. Nothing here commits.
+refill and a watch fall in three different profiles of the card. A test that relies on an item's unit weight
+gives it that weight, or 0 for none, and puts the old value back when it ends: what the site holds is not
+relied on. Nothing here commits.
 """
 
 import copy
@@ -476,6 +477,7 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 		[(fragrance, key)] = website_items(FRAGRANCE)
 		[(watch, watch_key)] = website_items(WATCH)
 		weigh(self, fragrance, 0.25)
+		weigh(self, watch, 0)
 		facts = shipping_policy.item_facts_for([fragrance, watch, "NO-SUCH-ITEM", fragrance])
 		self.assertEqual(facts[fragrance], {"index_key": key, "weight_kg": 0.25})
 		self.assertEqual(facts[watch], {"index_key": watch_key, "weight_kg": 0.0}, "no weight on file")
@@ -797,11 +799,12 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 			self.assertEqual(new_entries(), [])
 
 	def test_a_formula_error_is_logged_when_the_card_fallback_cannot_price_the_order_either(self):
-		# The rule's formula fails (the carton weighs 5 kg) and the zone's fallback, the rate card, cannot price
-		# the order either: ten fragrances with no weight on file are 3.5 kg, 7.716 lb, and the card's zone for
-		# AE here stops at 2 lb. The customer gets the card's refusal, and the failed formula is noted once, as
-		# when the fallback prices the order.
+		# The rule's formula fails (the carton weighs 5 kg) and the zone's fallback, the rate card, cannot
+		# price the order either: ten fragrances with no weight on file are 3.5 kg, 7.716 lb, and the card's
+		# zone for AE here stops at 2 lb. The customer gets the card's refusal, and the failed formula is
+		# noted once, as when the fallback prices the order.
 		[(fragrance, _)] = website_items(FRAGRANCE)
+		weigh(self, fragrance, 0)
 		card = copy.deepcopy(CARD)
 		zone_named(card["profiles"][2], "GCC")["tiers"] = [{"from": 0.01, "to": 2.0, "price": 35.0}]
 		zone = zone_of("Zone 1", ["AE"], fallback={"method": "rate_card", "amount": 0.0})
@@ -916,6 +919,7 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 	def test_a_card_that_cannot_price_an_order_is_an_ordinary_refusal_not_a_log_entry(self):
 		[(fragrance, _)] = website_items(FRAGRANCE)
 		[(refill, _)] = website_items(REFILL)
+		weigh(self, fragrance, 0)  # 40 of them at the default weight are 14 kg: above the card's 20 lb
 		seed_policy(card_policy(), active=True)
 		with (
 			error_log_entries(FORMULA_ERROR) as new_entries,
@@ -933,13 +937,15 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 	def test_unknown_items_and_missing_weights_use_the_default_weight(self):
 		[(fragrance, key)] = website_items(FRAGRANCE)
 		[(watch, _)] = website_items(WATCH)
+		weigh(self, fragrance, 0)
+		weigh(self, watch, 0)
 		seed_policy(card_policy(), active=True)
 
 		def price(items):
 			return first_amount(guest_price("US", items=items, boxes=None, quotes=None))
 
-		# No item has a weight on file, so each unit counts as 0.35 kg, 0.772 lb: 60 in the USA zone of
-		# Dangerous Goods (the 0.7 to 2 lb tier) and 40 in the Worldwide zone of the catch-all profile.
+		# With no weight on file, each unit counts as 0.35 kg, 0.772 lb: 60 in the USA zone of Dangerous
+		# Goods (the 0.7 to 2 lb tier) and 40 in the Worldwide zone of the catch-all profile.
 		self.assertEqual(price(one_of(fragrance)), 60.0)
 		self.assertEqual(price(one_of(watch)), 40.0)
 		self.assertEqual(
