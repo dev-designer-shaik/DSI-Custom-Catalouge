@@ -124,10 +124,10 @@ class TestShippingZone(ShippingPolicyTestCase):
 		self.assertIn("Gulf &amp; Co", str(caught.exception))
 		self.assertNotIn("Gulf & Co", str(caught.exception))
 
-	def test_a_zone_lists_only_countries_with_a_two_letter_code(self):
-		# The policy finds a country by its two-letter code, so a Country with no code, or with a code such as gbr,
-		# could never be matched to an order: it is refused in every zone, enabled or not, and also in a draft the
-		# wizard has validated (the wizard checks the codes it was sent, not the Country records behind them).
+	def test_an_enabled_zone_lists_only_countries_with_a_two_letter_code(self):
+		# The policy finds a country by its two-letter code, so a Country with no code, or with a code such as
+		# gbr, could never be matched to an order: an enabled zone refuses it, also in a draft the wizard has
+		# validated (the wizard checks the codes it was sent, not the Country records behind them).
 		britain, oman, france = country_name("GB"), country_name("OM"), country_name("FR")
 		recode(self, britain, "gbr")
 		recode(self, france, None)
@@ -138,14 +138,13 @@ class TestShippingZone(ShippingPolicyTestCase):
 				TWO_LETTER_CODES,
 			]
 		)
-		for fields, validated in (({}, False), ({"enabled": 0}, False), ({}, True)):
-			with self.subTest(fields=fields, validated=validated):
+		for validated in (False, True):
+			with self.subTest(validated=validated):
 				europe = frappe.get_doc(
 					{
 						"doctype": "Shipping Zone",
 						"zone_name": "Europe",
 						"countries": [{"country": name} for name in (britain, oman, france)],
-						**fields,
 					}
 				)
 				europe.flags.policy_draft_validated = validated
@@ -163,6 +162,48 @@ class TestShippingZone(ShippingPolicyTestCase):
 		recode(self, oman, " om ")  # read as OM, as the policy reads it
 		frappe.get_doc("Shipping Zone", "Gulf").update({"customer_line": "Gulf delivery."}).save()
 		self.assertEqual(frappe.db.get_value("Shipping Zone", "Gulf", "customer_line"), "Gulf delivery.")
+
+	def test_a_zone_saved_disabled_always_saves_and_is_checked_once_it_is_enabled(self):
+		# A disabled zone is out of the live policy, so a zone saved with enabled = 0 saves whatever the codes
+		# of its countries are: switching a zone off must always work (the wizard does it to a zone its draft
+		# drops, before it deletes it). Switching it on runs the check, and is refused until the country has
+		# its code.
+		britain, oman = country_name("GB"), country_name("OM")
+		recode(self, britain, "gbr")
+		refusal = f"{bold(britain)} has the country code {bold('gbr')}, which is not two letters."
+		refusal += f"<br>{TWO_LETTER_CODES}"
+		for validated in (False, True):
+			with self.subTest(validated=validated):
+				parked = frappe.get_doc(
+					{
+						"doctype": "Shipping Zone",
+						"zone_name": f"Parked {validated}",
+						"enabled": 0,
+						"countries": [{"country": britain}, {"country": oman}],
+					}
+				)
+				parked.flags.policy_draft_validated = validated
+				parked.insert()
+				self.assertEqual(frappe.db.get_value("Shipping Zone", parked.name, "enabled"), 0)
+		parked = frappe.get_doc("Shipping Zone", "Parked False")
+		parked.enabled = 1
+		with self.assertRaises(frappe.ValidationError) as caught:
+			parked.save()
+		self.assertEqual(str(caught.exception), refusal)
+		self.assertEqual(frappe.db.get_value("Shipping Zone", "Parked False", "enabled"), 0, "still off")
+		# An enabled zone whose country loses its code after it was saved can still be switched off, as the
+		# wizard switches off a zone its draft drops.
+		gulf = zone("Gulf", ["OM"]).insert()
+		recode(self, oman, "")
+		gulf.enabled = 0
+		gulf.flags.policy_draft_validated = True
+		gulf.save()
+		self.assertEqual(frappe.db.get_value("Shipping Zone", "Gulf", "enabled"), 0)
+		# Once every country has its code again, the parked zone can be switched on.
+		recode(self, britain, "gb")
+		recode(self, oman, "om")
+		frappe.get_doc("Shipping Zone", "Parked False").update({"enabled": 1}).save()
+		self.assertEqual(frappe.db.get_value("Shipping Zone", "Parked False", "enabled"), 1)
 
 	def test_the_fallback_amount_is_kept_to_the_cent(self):
 		# The field keeps two decimals, so the saved zone holds the amount the database stores.

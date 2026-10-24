@@ -714,15 +714,27 @@ def _unsavable_card(card) -> list[str]:
 
 
 def _unknown_countries(policy, countries) -> list[str]:
-	"""One sentence for each two-letter code that is no Country of the ERP. (A code that is not two letters
-	gets the engine's own sentence.)"""
+	"""One sentence for each two-letter code that is no Country of the ERP, then one for each code of a
+	disabled zone that is not two letters. In an enabled zone such a code gets the engine's own sentence; the
+	engine leaves a disabled zone's codes alone (the zone is out of the live policy), but the draft's zones
+	are written by their codes, and one that is not two letters is no Country to write: the same sentence
+	comes from here."""
 	unknown = dict.fromkeys(
 		code
 		for zone in policy["zones"]
 		for code in zone["countries"]
 		if normalize_country(code) and code not in countries
 	)
-	return [f"Country code {code} is not a country in the ERP." for code in unknown]
+	problems = [f"Country code {code} is not a country in the ERP." for code in unknown]
+	for position, zone in enumerate(policy["zones"], start=1):
+		if not zone.get("enabled"):
+			ref = f'"{zone["name"]}"' if zone.get("name") else f"number {position}"
+			problems += [
+				f'Zone {ref} lists "{code}", which is not a two-letter country code.'
+				for code in zone["countries"]
+				if not normalize_country(code)
+			]
+	return problems
 
 
 def _capital_letter_clashes(kind, names, saved_names) -> list[str]:

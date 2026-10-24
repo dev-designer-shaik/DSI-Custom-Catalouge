@@ -65,9 +65,11 @@ from dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy im
 	one_of,
 	policy_of,
 	quote_of,
+	recode,
 	rule_of,
 	seed_policy,
 	unserved_code,
+	wipe_policy,
 	zone_of,
 )
 from dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy_ratecard import (
@@ -1800,6 +1802,52 @@ class TestApplyPolicy(WizardTestCase):
 			],
 		)
 		self.assertEqual(snapshot(), before)
+
+	def test_an_apply_that_drops_a_zone_is_not_stopped_by_what_that_zone_lists_or_falls_back_to(self):
+		# Apply switches off a zone its draft drops (step 2), saves the policy, whose own check reads the
+		# zones as they stand (step 4), and then deletes the zone (step 5). A zone saved disabled always
+		# saves, and a disabled zone is out of the live policy, so the dropped zone cannot stop the Apply: not
+		# with a country whose code went bad after the zone was saved, nor with a fallback to the rate card
+		# the draft takes away.
+		bahrain = country_name("BH")
+		code = frappe.db.get_value("Country", bahrain, "code")
+		card = {**load_example(), "rate_card": copy.deepcopy(CARD)}
+		zone_named(card, "Bahrain")["fallback"] = {"method": "rate_card", "amount": 0.0}
+		cases = {
+			"its country's code was blanked": (load_example(), ""),
+			"its country's code is not two letters": (load_example(), "bhr"),
+			"it falls back to the rate card, which the draft takes away": (card, code),
+		}
+		for what, (policy, bahrain_code) in cases.items():
+			with self.subTest(what):
+				wipe_policy()
+				recode(self, bahrain, code)
+				seed_policy(policy, active=True)
+				recode(self, bahrain, bahrain_code)  # after the zone was saved
+				before = snapshot()
+				draft = wizard.wizard_state()["policy"]
+				draft["zones"] = [zone for zone in draft["zones"] if zone["name"] != "Bahrain"]
+				draft["rules"] = [rule for rule in draft["rules"] if rule["zone"] != "Bahrain"]
+				draft["rate_card"] = None
+				with writes() as done:
+					apply(draft)
+				self.assertEqual(
+					done,
+					[
+						("save", "Shipping Zone", "Bahrain"),  # 2. switched off
+						("save", POLICY, POLICY),  # 4. the rules without Bahrain's, and no card
+						("delete", "Shipping Zone", "Bahrain"),  # 5.
+					],
+				)
+				self.assertFalse(frappe.db.exists("Shipping Zone", "Bahrain"))
+				self.assertEqual(without_rule_names(load_policy()), without_rule_names(draft))
+				# Nothing else changed: the other zones and the item set were not written.
+				after = snapshot()
+				self.assertEqual(
+					after["stamps"]["Shipping Zone"],
+					[row for row in before["stamps"]["Shipping Zone"] if row["name"] != "Bahrain"],
+				)
+				self.assertEqual(after["stamps"]["Shipping Item Set"], before["stamps"]["Shipping Item Set"])
 
 	def test_apply_refuses_duplicate_zone_names_and_a_country_in_two_zones(self):
 		seed_policy(load_example())

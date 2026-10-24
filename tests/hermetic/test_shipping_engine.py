@@ -2003,6 +2003,51 @@ def test_validate_policy_allows_what_is_harmless():
 	assert validate_policy(policy) == []
 
 
+def test_a_disabled_zone_is_out_of_the_live_policy():
+	"""A disabled zone prices no order, so what it depends on outside itself is checked only once it is
+	enabled: the codes of its countries (a Country's code can go bad after the zone was saved) and a fallback
+	to the rate card (the card can be taken away). Neither can then stop a save of the policy, nor an Apply
+	that drops the zone. What the zone holds itself is checked whether it is on or off: its name, and a
+	fallback that is one of the choices, with a fixed amount that is a number and not below zero."""
+	policy = example()
+	parked = {
+		**copy.deepcopy(policy["zones"][1]),
+		"name": "Parked",
+		"enabled": False,
+		"countries": ["GBR", "AE"],
+		"fallback": {"method": "rate_card", "amount": 0.0},
+	}
+	policy["zones"].append(parked)
+	assert validate_policy(policy) == []
+	parked["enabled"] = True
+	assert validate_policy(policy) == [
+		'Zone "Parked" lists "GBR", which is not a two-letter country code.',
+		'Zone "Parked" uses the rate card when the carrier can\'t quote, but there is no rate card yet.',
+		'The country AE is in more than one enabled zone ("GCC" and "Parked"). A country can be in only one '
+		"enabled zone.",
+	]
+	parked.update(enabled=False, countries=[])
+	for fallback, words in (
+		(
+			{"method": "maybe", "amount": 0.0},
+			"has a choice for when the carrier can't quote that is not valid.",
+		),
+		(
+			{"method": "fixed", "amount": None},
+			"charges a fixed amount when the carrier can't quote, but the amount",
+		),
+		(
+			{"method": "fixed", "amount": -1.0},
+			"charges a fixed amount below zero when the carrier can't quote.",
+		),
+	):
+		parked["fallback"] = fallback
+		(problem,) = validate_policy(policy)
+		assert problem.startswith('Zone "Parked" ') and words in problem, problem
+	parked.update(name=" ", fallback={"method": "policy_default", "amount": 0.0})
+	assert validate_policy(policy) == ["Zone 5 has no name."]
+
+
 @pytest.mark.parametrize(
 	"junk",
 	[
@@ -2724,14 +2769,15 @@ def test_validate_policy_rate_card_problems():
 	)
 	policy = example()
 	policy["zones"][0]["fallback"] = {"method": "rate_card", "amount": 0.0}
-	policy["zones"].append(
-		{**copy.deepcopy(policy["zones"][0]), "name": " ", "enabled": False, "countries": []}
-	)
+	policy["zones"].append({**copy.deepcopy(policy["zones"][0]), "name": " ", "countries": []})
 	policy["price_source"] = "rate_card"
 	problems = validate_policy(policy)
 	assert NO_CARD_YET in problems
 	assert any(p.startswith('Zone "Bahrain" uses the rate card') for p in problems)
 	assert any(p.startswith("Zone number 5 uses the rate card") for p in problems), problems
+	# A disabled zone prices nothing, so its fallback to the rate card needs no card (until it is enabled).
+	policy["zones"][4]["enabled"] = False
+	assert not any(p.startswith("Zone number 5 uses the rate card") for p in validate_policy(policy))
 	# every problem of the card is reported with its own sentence, after "Rate card: "
 	broken = card_with(lambda c: c["profiles"][2]["zones"][0]["tiers"][0].update(price=-5.0))
 	problems = validate_policy({**example(), "rate_card": broken})

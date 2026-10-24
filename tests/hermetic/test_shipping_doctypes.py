@@ -1257,6 +1257,9 @@ def test_a_problem_links_to_the_step_that_owns_it(tmp_path, wizard_module):
 	made = {
 		"zones": [
 			*wizard._unknown_countries({"zones": [{"countries": ["ZZ"]}]}, {}),
+			*wizard._unknown_countries(
+				{"zones": [{"name": "A", "enabled": False, "countries": ["XYZ"]}]}, {}
+			),
 			*wizard._saving_problems({**empty, "zones": [{"name": "Gulf"}, {"name": "gulf"}]}, empty),
 			*wizard._saving_problems({**empty, "zones": [{"name": "gulf"}]}, saved),
 		],
@@ -1276,7 +1279,7 @@ def test_a_problem_links_to_the_step_that_owns_it(tmp_path, wizard_module):
 		],
 		None: [wizard.SHAPE_PROBLEM],
 	}
-	assert [len(listed) for listed in made.values()] == [3, 2, 2, 2, 1], (
+	assert [len(listed) for listed in made.values()] == [4, 2, 2, 2, 1], (
 		"each of the wizard's own sentences was made"
 	)
 	wizard = made

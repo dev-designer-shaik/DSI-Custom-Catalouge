@@ -744,15 +744,17 @@ def _name_of(entry):
 	return name.strip() if isinstance(name, str) else ""
 
 
-def _fallback_problems(subject, fallback, allowed, has_card):
-	"""`subject` starts the sentence: 'Zone "GCC"' or 'The policy default'."""
+def _fallback_problems(subject, fallback, allowed, has_card, used=True):
+	"""`subject` starts the sentence: 'Zone "GCC"' or 'The policy default'. A fallback that is not `used` (a
+	disabled zone's: it prices no order) may be the rate card while there is none; the rest is checked
+	anyway."""
 	fallback = _as_dict(fallback)
 	method = fallback.get("method")
 	if method in (None, ""):
 		return []
 	if method not in allowed.values():
 		return [f"{subject} has a choice for when the carrier can't quote that is not valid."]
-	if method == "rate_card" and not has_card:
+	if method == "rate_card" and not has_card and used:
 		return [f"{subject} uses the rate card when the carrier can't quote, but there is no rate card yet."]
 	if method != "fixed":
 		return []
@@ -790,6 +792,11 @@ def _setting_problems(policy, has_card):
 
 
 def _zone_problems(zones, has_card):
+	"""What is wrong with the zones. A disabled zone prices no order, so what it relies on outside itself is
+	checked only once it is enabled: that each of its countries has a two-letter code (a Country's code can go
+	bad after the zone was saved), and that there is a rate card when it falls back to the card. Its name, its
+	fallback's choice and amount, and an Everywhere else zone's countries are what the zone itself holds, and
+	are checked enabled or not."""
 	problems = []
 	refs = []  # how a sentence names each zone
 	for position, zone in enumerate(zones, start=1):
@@ -803,19 +810,23 @@ def _zone_problems(zones, has_card):
 	catching_all = []
 	for ref, zone in zip(refs, zones, strict=True):
 		listed = [country for country in _as_list(zone.get("countries")) if country not in (None, "")]
-		for country in listed:
-			if not normalize_country(country):
-				problems.append(
-					f'Zone {ref} lists "{_shown(country)}", which is not a two-letter country code.'
-				)
-		problems += _fallback_problems(f"Zone {ref}", zone.get("fallback"), LABELS["zone_fallback"], has_card)
+		enabled = bool(zone.get("enabled"))
+		if enabled:
+			problems += [
+				f'Zone {ref} lists "{_shown(country)}", which is not a two-letter country code.'
+				for country in listed
+				if not normalize_country(country)
+			]
+		problems += _fallback_problems(
+			f"Zone {ref}", zone.get("fallback"), LABELS["zone_fallback"], has_card, used=enabled
+		)
 		# Enabled or not, as the zone form refuses it: only the count of Everywhere else zones is of enabled ones.
 		if zone.get("everywhere_else") and listed:
 			shown = ", ".join(_shown(country) for country in listed)
 			problems.append(
 				f"Zone {ref} is set to Everywhere else, so it cannot also list countries ({shown})."
 			)
-		if not zone.get("enabled"):
+		if not enabled:
 			continue
 		if zone.get("everywhere_else"):
 			catching_all.append(ref)
@@ -920,6 +931,9 @@ def validate_policy(policy: dict) -> list[str]:
 	The rate card is checked when there is one, used or not (`validate_card`, each sentence starting "Rate
 	card: "), and a price source or a fallback that is the rate card needs one. A good card that nothing uses
 	is no problem.
+
+	A disabled zone is out of the live policy: the codes of its countries and its fallback to the rate card
+	are checked once it is enabled, so neither can stop a save of the policy or an Apply that drops the zone.
 	"""
 	if not isinstance(policy, dict):
 		return ["The policy is missing."]

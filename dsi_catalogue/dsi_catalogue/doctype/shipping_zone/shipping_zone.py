@@ -1,14 +1,16 @@
 """Shipping Zone: a named group of countries whose delivery is priced by the same rules.
 
-A zone lists only countries that have a two-letter code, because the policy finds a country by its code. A
-country can be in only one enabled zone, and at most one enabled zone is Everywhere else. Zone names and
-country names are typed by people, so they are escaped before they go into a message.
+An enabled zone lists only countries that have a two-letter code, because the policy finds a country by its
+code. A zone saved disabled is out of the live policy and always saves, whatever its countries' codes, so that
+switching a zone off always works; switching it on again checks them. A country can be in only one enabled
+zone, and at most one enabled zone is Everywhere else. Zone names and country names are typed by people, so
+they are escaped before they go into a message.
 """
 
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import escape_html
+from frappe.utils import cint, escape_html
 
 from dsi_catalogue.shipping_engine import normalize_country
 
@@ -22,7 +24,8 @@ class ShippingZone(Document):
 		self.zone_name = (self.zone_name or "").strip()
 		self.round_floats_in(self)  # the fallback amount as it is stored, to the cent
 		self.check_everywhere_else_lists_no_countries()
-		self.check_countries_have_two_letter_codes()
+		if cint(self.enabled):  # read as the database will keep it
+			self.check_countries_have_two_letter_codes()
 		# `apply_policy` (the wizard) checks the two rules below across the whole draft with
 		# `validate_policy`, then saves the zones one by one inside one transaction. Checked one zone at a
 		# time, a valid draft that moves a country from one zone to another would be refused half way.
@@ -44,8 +47,10 @@ class ShippingZone(Document):
 
 	def check_countries_have_two_letter_codes(self):
 		"""A Country with no code, or with a code that is not two letters (gbr), could never be matched to an
-		order. Checked in every zone, enabled or not, and in a draft the wizard has validated as well: the wizard
-		checks the codes it was sent, not the Country records behind them."""
+		order. Checked when the zone is saved enabled, in a draft the wizard has validated as well (the wizard
+		checks the codes it was sent, not the Country records behind them). A zone saved disabled prices no
+		order, so it is not checked: the wizard switches off a zone its draft drops before deleting it, and
+		that must work even when a country's code went bad after the zone was saved."""
 		names = list(dict.fromkeys(row.country for row in self.countries if row.country))
 		if not names:
 			return
