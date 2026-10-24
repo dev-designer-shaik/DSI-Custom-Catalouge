@@ -69,6 +69,7 @@ from dsi_catalogue.dsi_catalogue.doctype.shipping_policy.test_shipping_policy im
 	rule_of,
 	seed_policy,
 	unserved_code,
+	watch_group,
 	wipe_policy,
 	zone_of,
 )
@@ -645,7 +646,8 @@ def random_edit(rng, draft, item) -> str:
 	elif kind == "add an item set":
 		name = rng.choice(["Perfume", "Candles", "Mixed"])
 		if name not in {entry["name"] for entry in sets}:
-			sets.append({"name": name, "item_groups": rng.choice([[], ["WATCHES"]]), "items": [item]})
+			# the group as the site spells it: the ERP stores a Link that way (final review M4)
+			sets.append({"name": name, "item_groups": rng.choice([[], [watch_group()]]), "items": [item]})
 	elif kind == "drop an item set" and item_set:
 		sets.remove(item_set)
 		for entry in rules:
@@ -1022,7 +1024,7 @@ class TestTryOrder(WizardTestCase):
 		self.assertEqual(order["country_code"], " ae ", "as it was typed: the engine reads it")
 		self.assertEqual(order["order_value"], flt(2 * price + watch_price, 2), "from USD - Online")
 		self.assertEqual([line["qty"] for line in order["items"]], [2.0, 1.0])
-		self.assertIn("WATCHES", order["items"][1]["groups"])
+		self.assertIn(watch_group(), order["items"][1]["groups"])
 		self.assertEqual(order["items"][1]["groups"][-1], "All Item Groups")
 		self.assertEqual((order["boxes"], order["served"]), ([ONE_BOX], True))
 		self.assertEqual(order["quotes"], [QUOTE])
@@ -2012,18 +2014,18 @@ class TestApplyPolicy(WizardTestCase):
 
 	def test_names_and_codes_typed_with_spaces_around_them_are_stored_without_them(self):
 		seed_policy(load_example())
-		item = perfume()
+		item, group = perfume(), watch_group()
 		draft = wizard.wizard_state()["policy"]
 		draft["zones"].append(zone_of("  Levant ", [" jo ", "LB"]))
 		draft["item_sets"].append(
-			{"name": " Perfume ", "item_groups": [" WATCHES "], "items": [f" {item} ", " "]}
+			{"name": " Perfume ", "item_groups": [f" {group} "], "items": [f" {item} ", " "]}
 		)
 		draft["rules"].append(rule_of(" Levant ", label="Levant", item_set=" Perfume "))
 		result = apply(draft)
 		saved = load_policy()
 		self.assertEqual(zone_named(saved, "Levant")["countries"], ["JO", "LB"])
 		perfume_set = next(item_set for item_set in saved["item_sets"] if item_set["name"] == "Perfume")
-		self.assertEqual(perfume_set, {"name": "Perfume", "item_groups": ["WATCHES"], "items": [item]})
+		self.assertEqual(perfume_set, {"name": "Perfume", "item_groups": [group], "items": [item]})
 		rule = rule_labelled(saved, "Levant")
 		self.assertEqual((rule["zone"], rule["item_set"]), ("Levant", "Perfume"))
 		self.assertEqual(result["changes"]["zones"]["added"], ["Levant"])

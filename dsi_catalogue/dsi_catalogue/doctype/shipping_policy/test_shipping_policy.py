@@ -202,11 +202,19 @@ def policy_of(zones, rules, **fields) -> dict:
 	}
 
 
+def watch_group() -> str | None:
+	"""The watches' Item Group as this site stores its name: erp2 spells it WATCHES, the fixture says Watches,
+	and a replica of the live ERP may spell it either way. The database compares names without regard to
+	capitals, so the lookup finds it however it is spelled, and Frappe stores a Link in the spelling of the
+	record it points at: a test compares with this, never with a spelling of its own."""
+	return frappe.db.exists("Item Group", "Watches")
+
+
 def find_items(*, watches: bool, priced: bool, count: int = 1) -> list[tuple[str, float]]:
 	"""Real items of this site to order, as (code, USD - Online price): inside the watch item groups or outside
 	them, priced in USD - Online (exactly one row) or not priced there at all. Skips the test when the site
 	has no such items, because what they cost and where they sit is the site's data."""
-	group = frappe.db.exists("Item Group", "Watches")
+	group = watch_group()
 	if not group:
 		raise unittest.SkipTest("this site has no Watches item group")
 	lft, rgt = frappe.db.get_value("Item Group", group, ["lft", "rgt"])
@@ -905,8 +913,8 @@ class TestGuestMethods(ShippingPolicyTestCase):
 		self.assertEqual(value(mixed), flt(2 * price, 2), "only what has a price is counted")
 		groups = shipping_policy.item_groups_for(["NO-SUCH-ITEM", priced, watch])
 		self.assertEqual(groups["NO-SUCH-ITEM"], [])
-		self.assertIn("WATCHES", groups[watch], "a group above the item's own counts")
-		self.assertNotIn("WATCHES", groups[priced])
+		self.assertIn(watch_group(), groups[watch], "a group above the item's own counts")
+		self.assertNotIn(watch_group(), groups[priced])
 		for code in (priced, watch):
 			self.assertEqual(
 				groups[code][0], frappe.db.get_value("Item", code, "item_group"), "its own group first"
@@ -1308,7 +1316,7 @@ class TestGuestMethods(ShippingPolicyTestCase):
 		self.assertEqual(order["country_code"], " ae ", "as given: the engine normalises it")
 		self.assertEqual([line["item_code"] for line in order["items"]], [perfume, watch, "NO-SUCH-ITEM"])
 		self.assertEqual([line["qty"] for line in order["items"]], [2.0, 1.0, 1.0])
-		self.assertIn("WATCHES", order["items"][1]["groups"])
+		self.assertIn(watch_group(), order["items"][1]["groups"])
 		self.assertEqual(order["items"][2]["groups"], [])
 		self.assertEqual(order["order_value"], flt(2 * price + watch_price, 2))
 		self.assertEqual((order["boxes"], order["quotes"]), (boxes, [QUOTE]))
