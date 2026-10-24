@@ -10,7 +10,8 @@
 //	sp.fallback_sentence(policy, zone)  that in one sentence: the Fallback step and the Review step say the same
 //	sp.not_covered_sentence(policy)    what "Anything not covered" means for customers
 //	sp.change_lines(changes, before, after)  what preview_changes (or apply_policy) says will change, as lines:
-//	                                    {label, text}, or {label, from, to} for a setting
+//	                                    {label, text}, or {label, from, to} for a setting; names are cut to 140
+//	                                    characters, and a line with a name cut has them whole in `title`
 //	sp.change_text(line)               one of those lines as plain text
 //	sp.rule_statement(rule)            a rule as the Review says it: the words of its card in the Rules step
 //	                                    (sp.rule_words, wizard_rule_words.js) with commas, and a rule for an item
@@ -168,13 +169,17 @@ Object.assign(sp, {
 		if (!sp.is_record(changes)) return [];
 		const lines = [];
 		const names = (list) => (Array.isArray(list) ? list.map(String) : []);
+		// each name cut to 140 characters (a rate card's profile can bring a longer one from its file): the line's
+		// title then holds the names whole
 		const listed = (part, labels) => {
 			const found = sp.is_record(changes[part]) ? changes[part] : {};
 			let any = false;
 			for (const [key, label] of labels) {
 				const entries = names(found[key]);
 				if (!entries.length) continue;
-				lines.push({ label, text: sp.and_list(entries) });
+				const text = sp.and_list(entries.map((name) => sp.clip(name)));
+				const whole = sp.and_list(entries);
+				lines.push(text === whole ? { label, text } : { label, text, title: whole });
 				any = true;
 			}
 			return any;
@@ -246,7 +251,8 @@ Object.assign(sp, {
 				const priced = Boolean(zone.enabled) && !zone.not_shipped;
 				let where = __("No country yet.");
 				if (zone.everywhere_else) where = __("Every other country.");
-				else if (codes.length) where = __("{0}.", [sp.and_list(codes.map((code) => country_name(code)))]);
+				// apart by semicolons: a country's own name can hold a comma or an "and" (sp.country_list)
+				else if (codes.length) where = __("{0}.", [sp.country_list(codes.map((code) => country_name(code)))]);
 				// the ERP keeps a zone's name, and the zone a rule names, without the spaces around them: so are they
 				// matched here (the Zones step writes a name as it is typed, spaces and all, to the zone and its rules)
 				const own = name ? rules.filter((rule) => sp.is_record(rule) && text(rule.zone) === name) : [];

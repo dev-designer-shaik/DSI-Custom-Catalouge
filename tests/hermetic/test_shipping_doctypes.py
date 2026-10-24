@@ -1021,7 +1021,8 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 		"no_rules": "",
 		"fallback": "If the carrier cannot quote, the policy default applies: delivery is not offered.",
 	}
-	assert gcc["where"] == "United Arab Emirates, Saudi Arabia, Kuwait, Oman and Qatar."
+	# apart by semicolons: a country's own name can hold a comma or an "and" (sp.country_list)
+	assert gcc["where"] == "United Arab Emirates; Saudi Arabia; Kuwait; Oman; Qatar."
 	assert gcc["rules"] == [
 		"Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free).",
 		"Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up.",
@@ -1487,6 +1488,53 @@ def test_the_rate_card_is_said_in_plain_words(tmp_path, wizard_module):
 	assert got["uses"] == [may_use(policy) for policy in fallbacks] == [True, True, False, False]
 	assert got["source"] is True
 	assert got["length"] == len("a\U0001f600b") == 3
+
+
+@needs_node
+def test_a_long_name_is_shown_cut_and_kept_whole(tmp_path):
+	"""A name from a file can be of any length (validate_card refuses it, but the page shows it first): what the
+	page shows is cut to 140 characters (sp.clip, the last an ellipsis), with the whole name as a title, and the
+	card keeps it whole; what will change cuts each name it lists, and has them whole in the line's title. Country
+	names are listed apart by semicolons (sp.country_list)."""
+	card = sample_card()
+	long_name = "Gulf " * 60  # 300 characters
+	card["profiles"][0]["name"] = long_name
+	card["profiles"][0]["zones"][0]["name"] = long_name
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		const card = {json.dumps(card)};
+		const summary = sp.card_summary({{ price_source: "rate_card", rate_card: card, zones: [] }});
+		const whole = card.profiles[0].name.trim();
+		return {{
+			clipped: sp.clip("x".repeat(200)),
+			short: sp.clip("Gulf"),
+			edge: [sp.clip("y".repeat(140)), sp.clip("y".repeat(141))],
+			blank: [sp.clip(null), sp.clip(undefined)],
+			profile: summary.profiles[0],
+			zone: summary.profiles[0].zones[0],
+			kept: card.profiles[0].name,
+			changes: sp.change_lines({{ zones: {{ added: ["Gulf"] }}, rate_card: {{ added: [whole, "Refill Service"] }} }}),
+			list: sp.country_list(["Korea, Democratic Peoples Republic of", "Heard Island and McDonald Islands", "Iran"]),
+		}};
+		""",
+	)
+	cut = long_name[:139] + "…"
+	assert len(got["clipped"]) == 140 and got["clipped"].endswith("…") and got["clipped"][:139] == "x" * 139
+	assert got["edge"] == ["y" * 140, "y" * 139 + "…"], "140 characters are shown whole, 141 are cut"
+	assert (got["short"], got["blank"]) == ("Gulf", ["", ""])
+	assert got["profile"]["name"] == cut and got["profile"]["title"] == long_name.strip()
+	assert got["zone"].startswith(cut + ": ")
+	assert got["kept"] == long_name, "the card keeps the whole name"
+	assert got["changes"] == [
+		{"label": "Zones added", "text": "Gulf"},
+		{
+			"label": "Rate card profiles added",
+			"text": f"{cut} and Refill Service",
+			"title": f"{long_name.strip()} and Refill Service",
+		},
+	]
+	assert got["list"] == "Korea, Democratic Peoples Republic of; Heard Island and McDonald Islands; Iran"
 
 
 @needs_node
