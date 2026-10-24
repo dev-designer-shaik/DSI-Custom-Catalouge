@@ -449,8 +449,9 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		this.timer = setTimeout(() => this.price(), PRICE_DELAY);
 	}
 
-	// What to send to try_order: {args, typed_cartons, typed_value, key, epoch}, or {blocked: {empty |
-	// invalid}} when there is nothing to price yet or a field does not hold a number.
+	// What to send to try_order: {args, typed_cartons, typed_value, items_key, key, epoch}; or {packing,
+	// items_key} when the ERP must first pack the items (one measure typed, the items changed); or {blocked:
+	// {empty | invalid}} when there is nothing to price yet or a field does not hold a number.
 	request({ ask = false } = {}) {
 		const sample = this.sample;
 		const block = (reason, text) => ({ blocked: { [reason]: text } });
