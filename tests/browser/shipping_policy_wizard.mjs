@@ -805,6 +805,46 @@ await check("at 1400 x 768 the tape scrolls inside and keeps its total in view (
 	return file;
 });
 
+// The desk scrolls its main section, not the window: the tape must measure its room again when that scrolls,
+// or a room measured while the page was scrolled down stays too tall once it is back at the top.
+await check("beside the steps the tape is measured again as the desk scrolls, so its total stays in view", async () => {
+	await viewport(1400, 768);
+	await priceUp(true); // its other delivery methods make the tape tall
+	const extra = (count) =>
+		page.evaluate((count) => {
+			frappe.pages["shipping-policy-wizard"].wizard.change((draft) => {
+				if (count < 0) draft.rules.splice(count);
+				else for (let n = 0; n < count; n += 1) draft.rules.push(dsi_catalogue.sp.new_rule("Island"));
+			});
+		}, count);
+	await extra(3); // and three more rules make the step taller than the window
+	try {
+		await page.click(by("step-tab-rules"));
+		const scroll = (top) => page.evaluate((top) => document.querySelector(".main-section").scrollTo(0, top), top);
+		await scroll(400);
+		await pause(400);
+		// the layout grows while the page is scrolled down: the tape measures its room where it stands then
+		await page.evaluate(() =>
+			document.querySelectorAll('[data-testid="rule-card"]')[3].querySelector('[data-testid="chip-charge"]').click()
+		);
+		await pause(400);
+		await scroll(0);
+		await pause(400);
+		const seen = await page.evaluate(() => ({
+			tape: Math.round(document.querySelector(".sp-tape").getBoundingClientRect().bottom),
+			total: Math.round(document.querySelector(".sp-total").getBoundingClientRect().bottom),
+			window: window.innerHeight,
+		}));
+		await page.keyboard.press("Escape");
+		assert(seen.tape <= seen.window - 72 && seen.total <= seen.window - 72, `back at the top: ${JSON.stringify(seen)}`);
+	} finally {
+		await extra(-3);
+		await priceUp(false);
+		await page.click(by("step-tab-zones"));
+		await viewport(1400);
+	}
+});
+
 await check("a quote typed while the carrier is asked wins over its late answer", async () => {
 	await intercept(true);
 	try {

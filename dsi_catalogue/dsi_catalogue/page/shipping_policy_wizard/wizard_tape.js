@@ -40,22 +40,35 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	// Beside the steps the tape is never taller than the window below where it starts, and its total is pinned
 	// at its foot (the style does both). The style knows the window's height but not where the tape starts
 	// (under the page head, the tabs and, at times, the draft banner; higher once the page scrolls), so the
-	// room is measured here, as --sp-tape-room, whenever the page scrolls or something above the tape changes.
-	// It stops 88 px above the window's foot: the desk's floating buttons sit in that corner, over the total.
+	// room is measured here, as --sp-tape-room, whenever the page scrolls, the window is resized or something
+	// above the tape changes. Frappe 16 scrolls the desk's main section, not the window, and a scroll does not
+	// bubble: the listener catches every scroll of the page on its way down (capture). It stops 88 px above
+	// the window's foot: the desk's floating buttons sit in that corner, over the total. The listeners go
+	// once the tape has left the page.
 	keep_in_view() {
 		let frame = null;
+		const observer = new ResizeObserver(() => soon());
+		const stop = () => {
+			document.removeEventListener("scroll", soon, { capture: true });
+			window.removeEventListener("resize", soon);
+			observer.disconnect();
+		};
 		const measure = () => {
 			frame = null;
-			if (!this.root.isConnected || !this.root.offsetParent) return; // the page is not shown
+			if (!this.root.isConnected) {
+				stop();
+				return;
+			}
+			if (!this.root.offsetParent) return; // the page is not shown
 			const top = Math.max(this.root.getBoundingClientRect().top, 0);
 			this.root.style.setProperty("--sp-tape-room", `${Math.max(window.innerHeight - top - 88, 240)}px`);
 		};
 		const soon = () => {
 			frame = frame || requestAnimationFrame(measure);
 		};
-		window.addEventListener("scroll", soon, { passive: true });
+		document.addEventListener("scroll", soon, { capture: true, passive: true });
 		window.addEventListener("resize", soon);
-		new ResizeObserver(soon).observe(this.root.parentElement || this.root);
+		observer.observe(this.root.parentElement || this.root);
 		soon();
 	}
 
