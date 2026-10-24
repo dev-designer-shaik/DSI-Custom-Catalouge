@@ -529,6 +529,13 @@ def test_the_wizard_page_puts_text_on_the_page_only_as_text():
 		assert writer not in script, f"the page script uses {writer}"
 
 
+def test_the_policy_form_opens_the_wizard_from_a_primary_button():
+	form = FORM_SCRIPT.read_text(encoding="utf-8")
+	assert '__("Open the wizard")' in form and 'frappe.set_route("shipping-policy-wizard")' in form
+	assert '.addClass("btn-primary")' in form
+	assert "frappe.utils.escape_html(hint)" in form, "the form's one line of HTML escapes its text"
+
+
 def test_the_wizard_style_stays_on_the_page_and_has_three_accents():
 	css = page_file(".css")
 	selectors = css_selectors(css)
