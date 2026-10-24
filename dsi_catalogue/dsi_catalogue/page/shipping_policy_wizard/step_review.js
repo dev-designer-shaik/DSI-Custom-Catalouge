@@ -354,18 +354,21 @@ class ReviewView {
 		const said = JSON.stringify([content, outdated]);
 		if (said === this.changes_said) return;
 		this.changes_said = said;
-		this.diff.replaceChildren(
-			outdated
-				? el(
-						"p",
-						{ class: "sp-out-of-date", "data-testid": "review-out-of-date" },
-						__(
-							"This is out of date: someone changed the policy after you opened it. Review the differences to see what applying would change now."
-						)
-				  )
-				: null,
-			typeof content === "string" ? el("p", { class: "sp-empty" }, content) : change_list(content, "review-changes")
-		);
+		// only nodes: replaceChildren would print a null as the text "null"
+		const parts = [];
+		if (outdated) {
+			parts.push(
+				el(
+					"p",
+					{ class: "sp-out-of-date", "data-testid": "review-out-of-date" },
+					__(
+						"This is out of date: someone changed the policy after you opened it. Review the differences to see what applying would change now."
+					)
+				)
+			);
+		}
+		parts.push(typeof content === "string" ? el("p", { class: "sp-empty" }, content) : change_list(content, "review-changes"));
+		this.diff.replaceChildren(...parts);
 	}
 
 	// The whole draft in plain words, zone by zone. With the rate card as the price source the rules, the fallbacks

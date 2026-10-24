@@ -2045,6 +2045,7 @@ try {
 		await page.click(by("step-tab-review"));
 		await applyReady();
 		const diff = await textOf("review-diff");
+		assert(diff.startsWith("Zones added:"), `what will change starts with its first line: ${diff}`);
 		for (const said of [
 			"Zones added: Bahrain, GCC, Not shipped and Rest of world",
 			"Item sets added: Watches",
