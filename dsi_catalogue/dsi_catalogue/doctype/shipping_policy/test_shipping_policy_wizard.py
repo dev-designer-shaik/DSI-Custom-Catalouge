@@ -743,15 +743,14 @@ class TestWizardAccess(WizardTestCase):
 				self.assertEqual(ast.unparse(body[0]), "frappe.only_for('System Manager')")
 
 	def test_the_methods_are_whitelisted_for_users_and_none_for_guests(self):
-		public = {
+		# Every function the module defines, the private helpers too: one whitelisted by mistake is seen.
+		defined = {
 			name: function
 			for name, function in vars(wizard).items()
-			if inspect.isfunction(function)
-			and function.__module__ == wizard.__name__
-			and not name.startswith("_")
+			if inspect.isfunction(function) and function.__module__ == wizard.__name__
 		}
-		self.assertEqual({name for name, f in public.items() if f in frappe.whitelisted}, set(ALL_METHODS))
-		self.assertEqual({name for name, f in public.items() if f in frappe.guest_methods}, set())
+		self.assertEqual({name for name, f in defined.items() if f in frappe.whitelisted}, set(ALL_METHODS))
+		self.assertEqual({name for name, f in defined.items() if f in frappe.guest_methods}, set())
 		signatures = {name: str(inspect.signature(getattr(wizard, name))) for name in ALL_METHODS}
 		self.assertEqual(
 			signatures,
