@@ -138,7 +138,7 @@ page.on("dialog", async (dialog) => {
 
 // The try_order, check_formula and apply_policy requests the page sends, a way to hold the next one back for a
 // while, and a way to answer the next request of a wizard method in the server's place (fakeNext[method]:
-// {status, body}, or "abort" for a request that never reaches the server).
+// {status, body} (JSON) or {status, raw} (text as it is), or "abort" for a request that never reaches the server).
 let priced = 0;
 let checked = 0;
 let applied = 0;
@@ -146,15 +146,19 @@ let intercepting = false;
 let holdNext = 0; // ms to hold the next try_order request before it goes out
 let holdCheck = 0; // ms to hold the next check_formula request before it goes out
 let holdGroups = 0; // ms to hold the next read of the Item Group list before it goes out
+let holdApply = 0; // ms to hold the next apply_policy request before it goes out
+let holdPreview = 0; // ms to hold the next preview_changes request before it goes out
 const fakeNext = {};
 page.on("request", (request) => {
 	const isTry = request.url().includes("shipping_policy_wizard.try_order");
 	const isCheck = request.url().includes("shipping_policy_wizard.check_formula");
 	const isGroups =
 		request.url().includes("frappe.client.get_list") && (request.postData() || "").includes("doctype=Item+Group");
+	const isApply = request.url().includes("shipping_policy_wizard.apply_policy");
+	const isPreview = request.url().includes("shipping_policy_wizard.preview_changes");
 	if (isTry) priced += 1;
 	if (isCheck) checked += 1;
-	if (request.url().includes("shipping_policy_wizard.apply_policy")) applied += 1;
+	if (isApply) applied += 1;
 	if (!intercepting) return;
 	const fake = Object.keys(fakeNext).find((method) => request.url().includes(`shipping_policy_wizard.${method}`));
 	if (fake) {
@@ -162,15 +166,23 @@ page.on("request", (request) => {
 		delete fakeNext[fake];
 		if (answer === "abort") request.abort("failed").catch(() => {});
 		else {
-			const body = JSON.stringify(answer.body);
+			const body = "raw" in answer ? answer.raw : JSON.stringify(answer.body);
 			request.respond({ status: answer.status, contentType: "application/json", body }).catch(() => {});
 		}
 		return;
 	}
-	const wait = (isTry && holdNext) || (isCheck && holdCheck) || (isGroups && holdGroups) || 0;
+	const wait =
+		(isTry && holdNext) ||
+		(isCheck && holdCheck) ||
+		(isGroups && holdGroups) ||
+		(isApply && holdApply) ||
+		(isPreview && holdPreview) ||
+		0;
 	if (wait) {
 		if (isTry) holdNext = 0;
 		else if (isCheck) holdCheck = 0;
+		else if (isApply) holdApply = 0;
+		else if (isPreview) holdPreview = 0;
 		else holdGroups = 0;
 		setTimeout(() => request.continue().catch(() => {}), wait);
 	} else {
@@ -2170,13 +2182,37 @@ try {
 
 	await check("Apply writes the draft once, says what was applied, and leaves no draft in storage", async () => {
 		applied = 0;
-		// a double click: the second finds the first one's request on its way, and sends nothing
-		await page.$eval(by("apply-button"), (button) => {
-			button.click();
-			button.click();
-		});
-		await expectText("apply-done", "Applied and switched on. Customers see the new prices now.", 30000);
+		await intercept(true);
+		try {
+			holdApply = 2500; // the write is held a moment: what is pressed meanwhile changes nothing (finding M7)
+			// a double click: the second finds the first one's request on its way, and sends nothing
+			await page.$eval(by("apply-button"), (button) => {
+				button.click();
+				button.click();
+			});
+			await pause(400);
+			const meanwhile = await page.evaluate(() => {
+				// as a key would under the desk's freeze: the Active switch, and another step's tab
+				const box = document.querySelector('[data-testid="policy-active"]');
+				box.click();
+				document.querySelector('[data-testid="step-tab-zones"]').click();
+				const wizard = frappe.pages["shipping-policy-wizard"].wizard;
+				return {
+					active: wizard.store.draft.active,
+					switched: box.checked,
+					step: wizard.store.step,
+					busy: document.querySelector(".sp-wizard .sp-step").getAttribute("aria-busy"),
+				};
+			});
+			assert(meanwhile.active === true && meanwhile.switched === true, `the draft stays: ${JSON.stringify(meanwhile)}`);
+			assert(meanwhile.step === "review" && meanwhile.busy === "true", `the step stays: ${JSON.stringify(meanwhile)}`);
+			await expectText("apply-done", "Applied and switched on. Customers see the new prices now.", 30000);
+		} finally {
+			await intercept(false);
+		}
 		assert(applied === 1, `${applied} requests for a double click`);
+		const busy = await page.$eval(".sp-wizard .sp-step", (box) => box.getAttribute("aria-busy"));
+		assert(busy === "false", `not busy once it is applied: ${busy}`);
 		const done = await textOf("apply-done");
 		for (const said of [
 			"Zones added: Bahrain, GCC, Not shipped and Rest of world",
@@ -2370,7 +2406,7 @@ try {
 		return files.join(", ");
 	});
 
-	await check("someone else applying and a lost connection: the message, and Apply stays usable", async () => {
+	await check("someone else applying: the server's sentence, and Apply stays usable", async () => {
 		await go(NEUTRAL);
 		await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
 		await open();
@@ -2390,20 +2426,94 @@ try {
 			await page.click(by("apply-button"));
 			await expectText("apply-error", "The policy was not applied: Someone else is applying a change right now. Try again in a moment.");
 			assert((await ariaDisabled()) === "false", "the same button stays usable");
+		} finally {
+			await intercept(false);
+		}
+		expected(...REFUSED_STATUS);
+		assert((await store()).dirty, "the draft is kept");
+	});
+
+	// An Apply that hears no usable word (finding M2): the write may have gone through, so the page reads the
+	// saved policy before it says anything, and it never stays "Applying…". The answers are given in the server's
+	// place, so none of them writes.
+	await check("an Apply that hears no usable word reads the saved policy first, and never stays stuck", async () => {
+		const notAccepted = "Could not apply: the server did not accept the change. Nothing was changed.";
+		const answers = [
+			["a lost connection", "abort", [/^request failed: POST .*apply_policy/, /^console error: Failed to load resource: .*apply_policy/]],
+			["a refusal without a word", { status: 417, body: { exc_type: "ValidationError" } }, REFUSED_STATUS],
+			// Frappe calls neither callback for these two: the step settles on its own
+			["a 200 Frappe cannot read", { status: 200, raw: "not json" }, [/^console error: TypeError: Cannot read properties of undefined \(reading 'responseText'\)/]],
+			[
+				"Frappe's own deadlock handler",
+				{ status: 500, body: { exception: "frappe.exceptions.QueryDeadlockError: (1213, 'Deadlock')", exc_type: "QueryDeadlockError" } },
+				[/^HTTP 500: POST .*apply_policy/, /^console error: Failed to load resource: .*500.*apply_policy/],
+			],
+		];
+		const said = [];
+		for (const [what, answer, traces] of answers) {
+			await intercept(true);
+			try {
+				fakeNext.apply_policy = answer;
+				await page.click(by("apply-button"));
+				try {
+					await expectText("apply-error", notAccepted, 20000);
+				} catch (error) {
+					throw new Error(`${what}: ${error.message}`);
+				}
+			} finally {
+				await intercept(false);
+			}
+			// Frappe's own dialog for a deadlock is closed again
+			if (await page.$(".modal.show")) {
+				await page.evaluate(() => frappe.hide_msgprint(true));
+				await page.waitForFunction(() => !document.querySelector(".modal.show, .modal-backdrop"), { timeout: 10000 });
+			}
+			expected(...traces);
+			assert((await textOf("apply-button")) === "Apply", `${what}: not stuck in Applying`);
+			assert((await ariaDisabled()) === "false", `${what}: Apply is usable again`);
+			said.push(what);
+		}
+		// the server cannot be asked at all: the old sentence
+		await intercept(true);
+		try {
 			fakeNext.apply_policy = "abort";
+			fakeNext.wizard_state = "abort";
 			await page.click(by("apply-button"));
-			await expectText("apply-error", "Could not reach the server. Nothing was changed.");
-			assert((await ariaDisabled()) === "false", "and usable again");
+			await expectText("apply-error", "Could not reach the server. Nothing was changed.", 20000);
 		} finally {
 			await intercept(false);
 		}
 		expected(
-			...REFUSED_STATUS,
-			/^request failed: POST .*shipping_policy_wizard\.apply_policy/,
-			/^console error: Failed to load resource: .*shipping_policy_wizard\.apply_policy/
+			/^request failed: POST .*apply_policy/,
+			/^console error: Failed to load resource: .*apply_policy/,
+			/^request failed: POST .*wizard_state/,
+			/^console error: Failed to load resource: .*wizard_state/
 		);
+		assert((await ariaDisabled()) === "false", "unreachable: Apply is usable again");
 		assert((await store()).dirty, "the draft is kept");
-		await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+		return `${said.join(", ")}: "${notAccepted}"`;
+	});
+
+	// The write went through but its answer was lost: the saved policy is the draft that was sent (finding M2).
+	await check("an Apply whose answer is lost after the write is taken as applied, and adopted", async () => {
+		const before = await store();
+		// the draft is written as the page would write it, then the page's own Apply loses its answer
+		const written = await wizardCall("apply_policy", { draft: before.draft, expected_version: before.version });
+		await intercept(true);
+		try {
+			fakeNext.apply_policy = "abort";
+			await page.click(by("apply-button"));
+			await expectText("apply-done", "Applied. The server answered late.", 20000);
+		} finally {
+			await intercept(false);
+		}
+		expected(/^request failed: POST .*apply_policy/, /^console error: Failed to load resource: .*apply_policy/);
+		const after = await store();
+		assert(!after.dirty && after.version === written.version, "the saved policy, adopted");
+		assert(after.original.rules[2].label === "Gulf at the carrier price, again", "with the edit");
+		await pause(500);
+		assert((await stored()) === null, "no draft is left in storage");
+		return tallShot("wizard-answered-late");
 	});
 
 	await check("the policy is emptied and switched off again through the page's own Apply", async () => {

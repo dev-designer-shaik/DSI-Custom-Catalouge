@@ -8,17 +8,22 @@
 // 250 ms after each change of the draft while it is shown. Every request gets a number and only the newest
 // one's answer is shown; until the answer is for the draft as it is, the last one is shown dimmed and Apply
 // waits. The policy in plain words is the draft's own (sp.policy_summary, wizard_policy_words.js), its rules in
-// the words of the Rules step's cards (sp.rule_text).
+// the words of the Rules step's cards with commas (sp.rule_statement).
 //
-// Apply sends the whole draft with the version the wizard loaded (apply_policy); the desk is frozen while it
-// runs, so the draft cannot change under it, and a second click sends nothing. Then:
+// Apply sends the whole draft with the version the wizard loaded (apply_policy). While it runs the desk is frozen
+// and the wizard is busy (wizard.set_busy: nothing changes the draft or the step), and a second click sends
+// nothing. Then:
 //	applied      the saved policy is read again (wizard.reload_saved: the draft becomes it, the stored draft goes,
 //	             the tape prices again) and the step says what was applied, in the words of what will change
 //	stale        someone changed the policy meanwhile: the draft is kept, and the person chooses to review the
 //	             differences (wizard.rebase_on_saved) or to reload the saved policy; nothing is sent again by itself
 //	refused      the server's sentences in apply-error, each as plain text: they arrive escaped, through Frappe's
 //	             message path, and are read with sp.refusal_lines. "Someone else is applying" is one of them
-//	unreachable  "Could not reach the server. Nothing was changed."
+//	no word      no answer, or none the step can read (a lost connection, a status Frappe answers by itself, a 200
+//	             it cannot read): the write may still have gone through, so the saved policy is read again before
+//	             anything is said (written): "Applied. The server answered late." (adopted as above), "Could not
+//	             apply: the server did not accept the change. Nothing was changed.", stale as above, or, when the
+//	             server cannot be asked either, "Could not reach the server. Nothing was changed."
 //	unread       applied, but the saved policy could not be read again: Apply waits for a reload of the page
 // What the step shows that is not the draft lives in wizard.ui.review, since the panel is drawn again on every
 // tab switch and after Apply: the newest answer and the draft it is for, the request on its way, the outcome of
@@ -27,7 +32,7 @@
 const PREVIEW_DELAY = 250; // ms after the last change before the server checks the draft again
 
 // An outcome that says something about the draft it was for: it goes once the draft changes.
-const PASSING_OUTCOMES = ["applied", "refused", "unreachable", "rebased"];
+const PASSING_OUTCOMES = ["applied", "refused", "not_accepted", "unreachable", "rebased"];
 
 // Asks the server, now, what applying the draft would change and what stops it from being applied.
 function preview_draft(wizard) {
@@ -71,31 +76,72 @@ function schedule_preview(wizard) {
 	}, PREVIEW_DELAY);
 }
 
-// apply_policy, as a promise of {ok: true, answer} or {ok: false, stale, reached, lines}. A refusal is not shown
-// in Frappe's own dialog (silent): the step shows it. While the request runs the desk is frozen (Frappe's
-// freeze), so that the draft cannot be changed under the write.
+// apply_policy, as a promise of {ok: true, answer} or {ok: false, stale, lines}; no lines and not stale is no
+// usable word. A refusal is not shown in Frappe's own dialog (silent): the step shows it. While the request runs
+// the desk is frozen (Frappe's freeze). The promise always settles: for some answers Frappe calls neither
+// callback (a 200 it cannot read; its own handlers for a deadlock or a timeout on the server), so `always`, which
+// runs once Frappe is done with the request (before its error handlers, hence the tick), settles it with no word.
 function apply_draft(draft, version) {
 	return new Promise((resolve) => {
+		let settled = false;
+		const settle = (reply) => {
+			if (settled) return;
+			settled = true;
+			resolve(reply);
+		};
+		const no_word = { ok: false, stale: false, lines: [] };
 		frappe.call({
 			method: METHOD + "apply_policy",
 			args: { draft, expected_version: version },
 			silent: true,
 			freeze: true,
 			freeze_message: __("Applying the policy…"),
-			callback: (response) => resolve({ ok: true, answer: response?.message }),
+			callback: (response) => {
+				// an answer is the new version and what changed; anything else is no word the step can use
+				const answer = response?.message;
+				settle(sp.is_record(answer) && typeof answer.version === "string" ? { ok: true, answer } : no_word);
+			},
 			error: (response) => {
 				// the answer, or for a code Frappe has no handler for, the request that carries it
 				const answer =
 					response && typeof response.getResponseHeader === "function" ? response.responseJSON : response;
-				resolve({
+				settle({
 					ok: false,
 					stale: answer?.exc_type === "TimestampMismatchError",
-					reached: sp.is_record(answer),
 					lines: sp.refusal_lines(response),
 				});
 			},
+			always: () => setTimeout(() => settle(no_word), 0),
 		});
 	});
+}
+
+// Whether an Apply that gave no usable word was written, from the saved policy read again: "unchanged" (its
+// version is the one the page sent, so nothing was written), "applied" (it is the draft that was sent, the row
+// names Apply gave the new rules aside: compared by the server, preview_changes), "changed" (someone else's
+// change, or one that cannot be compared), or "unreachable" (the server cannot be asked).
+function written(wizard, sent, expected) {
+	return wizard.call("wizard_state", {}, { quiet: true }).then(
+		(state) => {
+			if (state?.version === expected) return "unchanged";
+			const saved = Array.isArray(state?.policy?.rules) ? state.policy.rules : [];
+			const rules = Array.isArray(sent.rules) ? sent.rules : [];
+			if (saved.length !== rules.length) return "changed";
+			// Apply keeps the rules in the draft's order and gives each its row: the server pairs rules by row
+			const named = {
+				...sent,
+				rules: rules.map((rule, at) => (sp.is_record(rule) ? { ...rule, name: saved[at]?.name ?? null } : rule)),
+			};
+			return wizard.call("preview_changes", { draft: named }, { quiet: true }).then(
+				(answer) => {
+					if (!sp.is_record(answer?.changes)) return "changed";
+					return sp.change_lines(answer.changes).length ? "changed" : "applied";
+				},
+				() => "changed"
+			);
+		},
+		() => "unreachable"
+	);
 }
 
 // What the step says once the draft is applied, by whether the policy was and is on.
@@ -167,9 +213,10 @@ class ReviewView {
 		});
 		this.active.addEventListener("change", () => {
 			const on = this.active.checked;
-			wizard.change((draft) => {
+			const changed = wizard.change((draft) => {
 				draft.active = on;
 			});
+			if (!changed) this.active.checked = Boolean(wizard.store.draft.active); // while Apply writes, it stays
 		});
 		this.active_state = el("span", {
 			class: "sp-switch-state",
@@ -420,7 +467,7 @@ class ReviewView {
 	// What the last Apply came to: a problem in apply-error (an alert), what was applied in apply-done (a status).
 	show_outcome() {
 		const outcome = this.ui.outcome;
-		const said = JSON.stringify(outcome ? [outcome.kind, outcome.lines, outcome.unreachable] : null);
+		const said = JSON.stringify(outcome ? [outcome.kind, outcome.lines, outcome.unreachable, outcome.late] : null);
 		if (said === this.outcome_said) return;
 		this.outcome_said = said;
 		const error = [];
@@ -458,6 +505,8 @@ class ReviewView {
 		} else if (kind === "refused") {
 			error.push(el("p", {}, outcome.lines.length ? __("The policy was not applied:") : __("The policy was not applied.")));
 			if (outcome.lines.length) error.push(el("ul", { class: "sp-apply-lines" }, outcome.lines.map((line) => el("li", {}, line))));
+		} else if (kind === "not_accepted") {
+			error.push(el("p", {}, __("Could not apply: the server did not accept the change. Nothing was changed.")));
 		} else if (kind === "unreachable") {
 			error.push(el("p", {}, __("Could not reach the server. Nothing was changed.")));
 		} else if (kind === "unread") {
@@ -472,7 +521,11 @@ class ReviewView {
 			const lines = sp.change_lines(outcome.changes, outcome.before, outcome.after);
 			// the title line takes the focus once the step is drawn again, not the whole receipt
 			done.push(
-				el("p", { class: "sp-apply-done-title", tabindex: "-1", "data-testid": "apply-done-title" }, applied_sentence(outcome))
+				el(
+					"p",
+					{ class: "sp-apply-done-title", tabindex: "-1", "data-testid": "apply-done-title" },
+					outcome.late ? __("Applied. The server answered late.") : applied_sentence(outcome)
+				)
 			);
 			if (lines.length) done.push(change_list(lines, "apply-changes"));
 		} else if (kind === "rebased") {
@@ -493,34 +546,40 @@ class ReviewView {
 		const before = sp.clone(store.original);
 		const sent = sp.clone(store.draft);
 		const sent_key = JSON.stringify(sent);
+		const expected = store.version;
 		ui.applying = true;
 		ui.outcome = null;
+		wizard.set_busy(true);
 		this.show();
-		apply_draft(sent, store.version).then((reply) => {
-			if (!reply.ok) {
-				// Nothing was written. A refusal the preview could not foresee (someone else applying, a save the
-				// ERP itself refused) leaves Apply as it was, with the server's sentences beside it.
-				ui.applying = false;
-				if (reply.stale) ui.outcome = { kind: "stale" };
-				else if (!reply.reached) ui.outcome = { kind: "unreachable", draft: sent_key };
-				else ui.outcome = { kind: "refused", lines: reply.lines, draft: sent_key };
-				ui.view?.show();
-				return;
-			}
-			const changes = reply.answer?.changes;
+		// The end of an Apply: the wizard is free again, and the step says how it went.
+		const finish = (outcome) => {
+			ui.applying = false;
+			wizard.set_busy(false);
+			ui.outcome = outcome;
+			ui.view?.show();
+		};
+		// The write went through: the saved policy is read again, and the step says what was applied.
+		const adopt = (changes, late) =>
 			wizard.reload_saved().then(
 				() => {
-					ui.applying = false;
-					ui.outcome = { kind: "applied", before, after: sent, changes, draft: JSON.stringify(store.draft) };
-					ui.view?.show();
+					finish({ kind: "applied", late, before, after: sent, changes, draft: JSON.stringify(store.draft) });
 					ui.view?.done.querySelector('[data-testid="apply-done-title"]')?.focus();
 				},
-				() => {
-					ui.applying = false;
-					ui.outcome = { kind: "unread" };
-					ui.view?.show();
-				}
+				() => finish({ kind: "unread" })
 			);
+		apply_draft(sent, expected).then((reply) => {
+			if (reply.ok) return adopt(reply.answer.changes, false);
+			// Refused: nothing was written. A refusal the preview could not foresee (someone else applying, a save
+			// the ERP itself refused) leaves Apply as it was, with the server's sentences beside it.
+			if (reply.stale) return finish({ kind: "stale" });
+			if (reply.lines.length) return finish({ kind: "refused", lines: reply.lines, draft: sent_key });
+			// No word the step can use: the write may have gone through, so the saved policy says what happened.
+			return written(wizard, sent, expected).then((found) => {
+				if (found === "applied") return adopt(null, true);
+				if (found === "unchanged") return finish({ kind: "not_accepted", draft: sent_key });
+				if (found === "changed") return finish({ kind: "stale" });
+				return finish({ kind: "unreachable", draft: sent_key });
+			});
 		});
 	}
 

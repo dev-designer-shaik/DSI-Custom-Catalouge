@@ -48,6 +48,7 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 		// the session and are not stored with the draft.
 		this.ui = Object.fromEntries(STEPS.map((step) => [step.id, {}]));
 		this.notice = null; // "restored" or "discarded": what happened to a stored draft on load
+		this.busy = false; // Apply is writing the draft: nothing changes it, and the step stays, until it is done
 		this.save_timer = null;
 		this.loading = true;
 		this.root = el("div", { class: "sp-wizard" });
@@ -209,6 +210,7 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 			});
 		}
 		const tape = el("section", { class: "sp-tape", "aria-labelledby": "sp-tape-title" });
+		this.step_box = el("div", { class: "sp-step", "aria-busy": "false" }, Object.values(this.panels));
 		// The layout is one element inside the root, so that the style can lay it out by the root's own width.
 		this.root.replaceChildren(
 			el(
@@ -216,7 +218,7 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 				{ class: "sp-layout" },
 				this.banner,
 				this.tabs,
-				el("div", { class: "sp-step" }, Object.values(this.panels)),
+				this.step_box,
 				tape
 			)
 		);
@@ -311,7 +313,7 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 	}
 
 	set_step(id, { focus = false } = {}) {
-		if (!STEPS.some((step) => step.id === id)) return;
+		if (this.busy || !STEPS.some((step) => step.id === id)) return; // the step stays while Apply writes
 		if (id !== this.store.step) {
 			this.store.step = id;
 			this.render_tabs();
@@ -334,9 +336,19 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 	}
 
 	// ---------------------------------------------------------- the draft
+	// Changes the draft, and says whether it did: while Apply writes the draft nothing changes it (a key pressed
+	// under the desk's freeze would otherwise be lost when the saved policy is read again).
 	change(mutate) {
+		if (this.busy) return false;
 		mutate(this.store.draft);
 		this.after_change();
+		return true;
+	}
+
+	// Apply is writing the draft (on), or has finished (off): the step area says so to assistive technology.
+	set_busy(on) {
+		this.busy = Boolean(on);
+		this.step_box?.setAttribute("aria-busy", String(this.busy));
 	}
 
 	after_change() {
@@ -389,6 +401,7 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 	}
 
 	discard_draft() {
+		if (this.busy) return;
 		this.store.draft = sp.clone(this.store.original);
 		this.notice = null;
 		this.priced = null; // an answer was for the draft that is gone
