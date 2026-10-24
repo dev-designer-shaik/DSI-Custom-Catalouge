@@ -1065,6 +1065,15 @@ await check("the example policy's four zones are built through the page", async 
 	assert((await textIn("zone-card", 1, "zone-country-chip")) .startsWith("United Arab Emirates"), "a chip names its country");
 	const zones = (await draftNow()).zones;
 	assert(JSON.stringify(zones) === JSON.stringify(builtZones()), `the zones: ${JSON.stringify(zones)}`);
+	// what the switches and the customer texts mean is said once, in the step's legend, not on every card
+	const said = await page.$eval("#sp-panel-zones", (panel) => panel.innerText);
+	for (const words of ["Delivery is not offered to the zone's countries.", "The FAQ and the Shipping page show"]) {
+		assert(said.split(words).length === 2, `said once: ${words}`);
+	}
+	const described = await (await inCard("zone-card", 3, "zone-not-shipped")).evaluate(
+		(box) => document.getElementById(box.getAttribute("aria-describedby"))?.textContent
+	);
+	assert(described?.startsWith("Delivery is not offered"), `a switch is described by its legend line: ${described}`);
 });
 
 await check("a country already in another zone that is on is refused, naming that zone", async () => {

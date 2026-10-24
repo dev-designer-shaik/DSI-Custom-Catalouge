@@ -12,6 +12,13 @@
 
 let zone_cards = 0; // ids for the labels of each card
 
+// The ids of the lines of the step's legend, which every card's switches and texts are described by.
+const ZONE_LEGEND = {
+	not_shipped: "sp-zones-legend-not-shipped",
+	everywhere_else: "sp-zones-legend-everywhere-else",
+	line: "sp-zones-legend-line",
+};
+
 class ZonesView {
 	constructor(wizard, panel) {
 		this.wizard = wizard;
@@ -31,11 +38,34 @@ class ZonesView {
 			__("Add a zone")
 		);
 		this.live = new Announcer("zones-live");
+		// what the switches and the customer texts of every card mean, said once for all of them: each card's
+		// controls point here (aria-describedby)
+		const legend = (id, term, text) =>
+			el("div", { class: "sp-legend-entry" }, el("dt", {}, term), el("dd", { id }, text));
 		panel.append(
 			el(
 				"p",
 				{ class: "sp-step-intro" },
 				__("A zone is a group of countries priced alike. A country can be in only one zone that is on.")
+			),
+			el(
+				"dl",
+				{ class: "sp-legend", "data-testid": "zones-legend" },
+				legend(
+					ZONE_LEGEND.not_shipped,
+					__("Not shipped"),
+					__("Delivery is not offered to the zone's countries. Checkout shows them the zone's message instead.")
+				),
+				legend(
+					ZONE_LEGEND.everywhere_else,
+					__("Everywhere else"),
+					__("The zone takes every country that is in no other zone that is on.")
+				),
+				legend(
+					ZONE_LEGEND.line,
+					__("What customers read"),
+					__("The FAQ and the Shipping page show each zone's line. It is optional.")
+				)
 			),
 			this.list,
 			this.empty,
@@ -204,60 +234,55 @@ class ZoneCard {
 		);
 		this.unserved = el("p", { class: "sp-warning", "data-testid": "zone-unserved-warning" });
 
-		// the switches
-		const switch_row = (testid, label, hint) => {
-			const input = el("input", { type: "checkbox", id: `${id}-${testid}`, "data-testid": testid });
-			const row = el(
-				"label",
-				{ class: "sp-check sp-switch", for: `${id}-${testid}` },
-				input,
-				el("span", {}, el("span", { class: "sp-switch-name" }, label), " ", el("span", { class: "sp-hint" }, hint))
-			);
+		// the switches: their meaning is the step's legend
+		const switch_row = (testid, label, legend) => {
+			const input = el("input", {
+				type: "checkbox",
+				id: `${id}-${testid}`,
+				"aria-describedby": legend,
+				"data-testid": testid,
+			});
+			const row = el("label", { class: "sp-check", for: `${id}-${testid}` }, input, el("span", {}, label));
 			return [input, row];
 		};
-		const [not_shipped, not_shipped_row] = switch_row(
-			"zone-not-shipped",
-			__("Not shipped"),
-			__("Delivery is not offered to these countries.")
-		);
+		const [not_shipped, not_shipped_row] = switch_row("zone-not-shipped", __("Not shipped"), ZONE_LEGEND.not_shipped);
 		const [everywhere, everywhere_row] = switch_row(
 			"zone-everywhere-else",
 			__("Everywhere else"),
-			__("This zone takes every country that is in no other zone.")
+			ZONE_LEGEND.everywhere_else
 		);
 		this.not_shipped = not_shipped;
 		this.everywhere_else = everywhere;
 		this.not_shipped.addEventListener("change", () => this.set("not_shipped", this.not_shipped.checked));
 		this.everywhere_else.addEventListener("change", () => this.switch_everywhere_else());
 
-		// what customers read
-		const text_field = (testid, label, hint) => {
+		// what customers read (the step's legend says where they read it)
+		const text_field = (testid, label, legend) => {
 			const input = el("input", {
 				type: "text",
 				id: `${id}-${testid}`,
 				class: "form-control sp-input",
 				autocomplete: "off",
-				"aria-describedby": hint ? `${id}-${testid}-hint` : null,
+				"aria-describedby": legend,
 				"data-testid": testid,
 			});
 			const field = el(
 				"div",
 				{ class: "sp-field" },
 				el("label", { class: "sp-label", for: `${id}-${testid}` }, label),
-				input,
-				hint ? el("p", { class: "sp-hint", id: `${id}-${testid}-hint` }, hint) : null
+				input
 			);
 			return [input, field];
 		};
 		const [line, line_field] = text_field(
 			"zone-line",
 			__("What customers read about delivery to this zone"),
-			__("The FAQ and the Shipping page show it. Optional.")
+			ZONE_LEGEND.line
 		);
 		const [message, message_field] = text_field(
 			"zone-not-offered-message",
 			__("What customers read when delivery is not offered here"),
-			__("Shown at checkout instead of a delivery price.")
+			ZONE_LEGEND.not_shipped
 		);
 		this.line = line;
 		this.message = message;

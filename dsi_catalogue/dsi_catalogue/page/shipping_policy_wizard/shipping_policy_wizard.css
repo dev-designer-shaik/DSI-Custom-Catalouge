@@ -864,27 +864,45 @@
 	color: var(--text-color);
 }
 
-/* ---- a zone */
+/* ---- a zone; what its switches and texts mean is said once, in the step's legend */
+.sp-wizard .sp-legend {
+	display: grid;
+	gap: 2px;
+	max-width: 80ch;
+	margin: -8px 0 16px;
+	color: var(--text-muted);
+	font-size: var(--text-sm);
+	line-height: 1.45;
+}
+
+.sp-wizard .sp-legend-entry {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 6px;
+}
+
+.sp-wizard .sp-legend dt {
+	margin: 0;
+	color: var(--text-color);
+	font-weight: 500;
+}
+
+.sp-wizard .sp-legend dt::after {
+	content: ":";
+}
+
+.sp-wizard .sp-legend dd {
+	margin: 0;
+}
+
 .sp-wizard .sp-countries .sp-combo {
 	max-width: 360px;
 }
 
 .sp-wizard .sp-switches {
-	display: grid;
-	gap: 6px;
-}
-
-.sp-wizard .sp-switch {
-	align-items: flex-start;
-}
-
-.sp-wizard .sp-switch input[type="checkbox"] {
-	margin-top: 3px !important;
-}
-
-.sp-wizard .sp-switch-name {
-	color: var(--text-color);
-	font-weight: 500;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 28px;
 }
 
 .sp-wizard .sp-usage {
