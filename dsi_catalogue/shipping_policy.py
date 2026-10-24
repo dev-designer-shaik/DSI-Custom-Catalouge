@@ -5,11 +5,13 @@ it: the Shipping Policy single with its rules, the Shipping Zones with their cou
 Item Sets with their groups and items. Everything else (the guest methods, the wizard) prices an order or
 edits the policy through it, so what the quote path sees and what the form saves cannot drift apart.
 
-Two read-only methods are open to guests, because the website calls them without logging anyone in:
+Two read-only methods are open to guests, so that the website can call them without logging anyone in (it
+calls only `price_delivery` so far):
 
 	price_delivery   what a customer pays for delivery: the carrier's quotes run through the policy, or, when
 	                 the policy's price source is the rate card, the card's price for the items ordered
-	public_summary   the zones, countries and customer lines the FAQ and the Shipping page may show
+	public_summary   the zones, countries and customer lines meant for the FAQ and the Shipping page, which
+	                 the website does not show yet (nothing calls this method there)
 
 What a guest gets back is public. Each method hands over only the fields `response_from` and
 `public_summary_from` pick by name: never a trace, a rule number, a formula, a traceback or a line of the
@@ -596,9 +598,10 @@ def _country_names(policy) -> dict[str, str]:
 
 @frappe.whitelist(allow_guest=True)
 def public_summary(language=None) -> dict:
-	"""What the FAQ and the Shipping page may show: {"active": False, "zones": []} while the policy is off,
-	otherwise {"active": True, "zones": [{"name", "countries": [{"code", "name"}], "customer_line",
-	"delivers"}]}, the enabled zones only. Nothing else (no rule, formula, fallback or threshold).
+	"""What the FAQ and the Shipping page may show (the website does not call this yet): {"active": False,
+	"zones": []} while the policy is off, otherwise {"active": True, "zones": [{"name", "countries":
+	[{"code", "name"}], "customer_line", "delivers"}]}, the enabled zones only. Nothing else (no rule,
+	formula, fallback or threshold).
 
 	Each zone's customer line is in `language` when the ERP has a Translation record of it, else English.
 	Country names are English: the website localises them from the codes. The policy is read afresh on

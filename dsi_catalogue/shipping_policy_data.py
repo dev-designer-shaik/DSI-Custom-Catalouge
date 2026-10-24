@@ -540,9 +540,9 @@ def _say(text, translate):
 
 
 def public_summary_from(policy: dict, country_names: dict[str, str], translate) -> dict:
-	"""What the FAQ and the Shipping page may show: {"active": False, "zones": []} while the policy is off,
-	otherwise {"active": True, "zones": [{"name", "countries": [{"code", "name"}], "customer_line",
-	"delivers"}]}.
+	"""What the FAQ and the Shipping page may show (the website does not call this yet): {"active": False,
+	"zones": []} while the policy is off, otherwise {"active": True, "zones": [{"name", "countries":
+	[{"code", "name"}], "customer_line", "delivers"}]}.
 
 	Only enabled zones are listed, in the policy's order. `delivers` is False for a Not shipped zone. An
 	Everywhere-else zone lists no countries. `country_names` maps a code to its Country name (the code

@@ -268,11 +268,12 @@ Object.assign(sp, {
 						zone.everywhere_else && { kind: "everywhere_else", text: __("Everywhere else") },
 					].filter(Boolean),
 					where,
-					// what customers read of a zone that is on (one that is off is shown to nobody); the website's checkout
-					// shows the message only while the policy is on with the rate card (ruling P105)
+					// the texts meant for customers of a zone that is on (one that is off is shown to nobody), and where
+					// they show (ruling P105): the line nowhere yet (the website does not call public_summary), the
+					// message at checkout only while the policy is on with the rate card
 					read: zone.enabled
 						? [
-								line && __("Customers read: “{0}”", [line]),
+								line && __("Line for the FAQ and the Shipping page, not shown on the website yet: “{0}”", [line]),
 								zone.not_shipped &&
 									message &&
 									__("Once the policy is on with the rate card as the price source, checkout shows them: “{0}”", [

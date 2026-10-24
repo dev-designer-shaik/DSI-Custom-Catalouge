@@ -73,10 +73,10 @@
    "label": "What customers are told"
   },
   {
-   "description": "One plain line for the FAQ and the Shipping page. Optional.",
+   "description": "One plain line meant for the FAQ and the Shipping page; the website does not show it yet. Optional.",
    "fieldname": "customer_line",
    "fieldtype": "Small Text",
-   "label": "Shown to customers"
+   "label": "Line for customers"
   },
   {
    "description": "Shown at checkout when delivery is not offered here (a Not shipped zone, a country the rate card does not cover, or a fallback that declines), once the policy is on with the rate card as the price source. Optional.",
@@ -106,7 +106,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-25 01:30:00.000000",
+ "modified": "2026-10-25 01:50:00.000000",
  "modified_by": "Administrator",
  "module": "dsi_catalogue",
  "name": "Shipping Zone",

@@ -1397,7 +1397,7 @@ await check("the example policy's four zones are built through the page", async 
 	assert(JSON.stringify(zones) === JSON.stringify(builtZones()), `the zones: ${JSON.stringify(zones)}`);
 	// what the switches and the customer texts mean is said once, in the step's legend, not on every card
 	const said = await page.$eval("#sp-panel-zones", (panel) => panel.innerText);
-	for (const words of ["Delivery is not offered to the zone's countries.", "The FAQ and the Shipping page show"]) {
+	for (const words of ["Delivery is not offered to the zone's countries.", "is meant for the FAQ and the Shipping page"]) {
 		assert(said.split(words).length === 2, `said once: ${words}`);
 	}
 	const described = await (await inCard("zone-card", 3, "zone-not-shipped")).evaluate(
@@ -2218,10 +2218,10 @@ try {
 		assert((await page.$$(by("review-problem"))).length === 0, "no problems");
 		const zones = await textsOf("review-zone");
 		const want = [
-			"Bahrain Bahrain. Customers read: “Free delivery in Bahrain.” Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free). If the carrier cannot quote, the policy default applies: delivery is not offered.",
-			"GCC United Arab Emirates; Saudi Arabia; Kuwait; Oman; Qatar. Customers read: “Gulf delivery, priced by the carrier. Watches ship free.” Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free). Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up. If the carrier cannot quote, customers here pay a fixed $35.00.",
-			"Rest of world Everywhere else Every other country. Customers read: “International delivery, priced at checkout.” Rule 4 (International with a minimum): In Rest of world, for every item, charge max(carrier_price * 1.1, 45), rounded up. If the carrier cannot quote, the policy default applies: delivery is not offered.",
-			"Not shipped Not shipped Russian Federation; Belarus. Delivery is never offered here. Customers read: “We do not deliver to these countries.” Once the policy is on with the rate card as the price source, checkout shows them: “We don't deliver to this country.”",
+			"Bahrain Bahrain. Line for the FAQ and the Shipping page, not shown on the website yet: “Free delivery in Bahrain.” Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free). If the carrier cannot quote, the policy default applies: delivery is not offered.",
+			"GCC United Arab Emirates; Saudi Arabia; Kuwait; Oman; Qatar. Line for the FAQ and the Shipping page, not shown on the website yet: “Gulf delivery, priced by the carrier. Watches ship free.” Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free). Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up. If the carrier cannot quote, customers here pay a fixed $35.00.",
+			"Rest of world Everywhere else Every other country. Line for the FAQ and the Shipping page, not shown on the website yet: “International delivery, priced at checkout.” Rule 4 (International with a minimum): In Rest of world, for every item, charge max(carrier_price * 1.1, 45), rounded up. If the carrier cannot quote, the policy default applies: delivery is not offered.",
+			"Not shipped Not shipped Russian Federation; Belarus. Delivery is never offered here. Line for the FAQ and the Shipping page, not shown on the website yet: “We do not deliver to these countries.” Once the policy is on with the rate card as the price source, checkout shows them: “We don't deliver to this country.”",
 		];
 		zones.forEach((text, n) => assert(text === want[n], `zone ${n + 1} reads: ${text}`));
 		assert(zones.length === 4, `four zones: ${zones.length}`);

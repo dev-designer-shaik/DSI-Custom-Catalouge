@@ -2,7 +2,7 @@
 //
 // The Zones tab's body: a card per zone of the draft, in its order. A card holds the zone's name, "Use this
 // zone", its countries as removable tokens (added with a dsi_catalogue.CountryPicker), the Not shipped and
-// Everywhere else switches, what customers read about it, and the countries no carrier serves. A country
+// Everywhere else switches, its line and message for customers, and the countries no carrier serves. A country
 // that is already in another zone that is on is refused, naming that zone. Renaming a zone takes its rules
 // along (they name their zone); a zone that rules use cannot be deleted. The zone's fallback is the
 // "If the carrier can't quote" step's and is never touched here.
@@ -64,10 +64,11 @@ class ZonesView {
 					__("Everywhere else"),
 					__("The zone takes every country that is in no other zone that is on.")
 				),
+				// the website never shows a zone's line yet: it does not call public_summary, in any mode (ruling P105)
 				legend(
 					ZONE_LEGEND.line,
-					__("What customers read"),
-					__("The FAQ and the Shipping page show each zone's line. It is optional.")
+					__("A zone's line"),
+					__("Each zone's line is meant for the FAQ and the Shipping page; the website does not show it yet. It is optional.")
 				)
 			),
 			this.list,
@@ -261,7 +262,7 @@ class ZoneCard {
 		this.not_shipped.addEventListener("change", () => this.set("not_shipped", this.not_shipped.checked));
 		this.everywhere_else.addEventListener("change", () => this.switch_everywhere_else());
 
-		// what customers read (the step's legend says where they read it)
+		// the zone's line and its message (the step's legend says where each is meant to be shown)
 		const text_field = (testid, label, legend) => {
 			const input = el("input", {
 				type: "text",
@@ -279,14 +280,10 @@ class ZoneCard {
 			);
 			return [input, field];
 		};
-		const [line, line_field] = text_field(
-			"zone-line",
-			__("What customers read about delivery to this zone"),
-			ZONE_LEGEND.line
-		);
+		const [line, line_field] = text_field("zone-line", __("A line about delivery to this zone"), ZONE_LEGEND.line);
 		const [message, message_field] = text_field(
 			"zone-not-offered-message",
-			__("What customers read when delivery is not offered here"),
+			__("The message when delivery is not offered here"),
 			ZONE_LEGEND.not_shipped
 		);
 		this.line = line;
@@ -502,7 +499,7 @@ class ZoneCard {
 			: "";
 		this.unserved.hidden = !warn;
 
-		// what customers read: the not-offered message only for a Not shipped zone (its value is kept otherwise)
+		// the line and the message: the not-offered message only for a Not shipped zone (its value is kept otherwise)
 		if (document.activeElement !== this.line) this.line.value = String(zone.customer_line ?? "");
 		if (document.activeElement !== this.message) this.message.value = String(zone.not_offered_message ?? "");
 		this.message_field.hidden = !zone.not_shipped;

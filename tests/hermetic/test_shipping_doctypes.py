@@ -261,6 +261,26 @@ def test_a_zones_texts_say_where_the_website_shows_them():
 		"source, checkout shows them the zone's message instead.\""
 	) in zones
 	assert "Checkout shows them the zone's message instead." not in served_page_script()
+	# The zone's line is meant for the FAQ and the Shipping page, which the website does not show yet: it never
+	# calls public_summary, in any mode (ruling P105).
+	line = fields_of(ZONE)["customer_line"]
+	assert (line["label"], line["description"]) == (
+		"Line for customers",
+		"One plain line meant for the FAQ and the Shipping page; the website does not show it yet. Optional.",
+	)
+	assert (
+		"\"Each zone's line is meant for the FAQ and the Shipping page; the website does not show it yet. It is "
+		'optional."'
+	) in zones
+	for label in (
+		'"A zone\'s line"',
+		'"A line about delivery to this zone"',
+		'"The message when delivery is not offered here"',
+	):
+		assert label in zones, label
+	served = served_page_script()
+	for claim in ("The FAQ and the Shipping page show", "What customers read", "Customers read:"):
+		assert claim not in served, claim
 
 
 def test_policy_defaults_ship_the_policy_off():
@@ -1078,7 +1098,9 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 		"name": "Bahrain",
 		"states": [],
 		"where": "Bahrain.",
-		"read": ["Customers read: “Free delivery in Bahrain.”"],
+		"read": [
+			"Line for the FAQ and the Shipping page, not shown on the website yet: “Free delivery in Bahrain.”"
+		],
 		"off": "",
 		"never": "",
 		"rules": ["Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free)."],
@@ -1101,7 +1123,7 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 	assert closed["states"] == [{"kind": "not_shipped", "text": "Not shipped"}]
 	# the website's checkout shows a zone's message only while the policy is on with the rate card (ruling P105)
 	assert closed["read"] == [
-		"Customers read: “We do not deliver to these countries.”",
+		"Line for the FAQ and the Shipping page, not shown on the website yet: “We do not deliver to these countries.”",
 		"Once the policy is on with the rate card as the price source, checkout shows them: “We don't deliver to "
 		"this country.”",
 	]
