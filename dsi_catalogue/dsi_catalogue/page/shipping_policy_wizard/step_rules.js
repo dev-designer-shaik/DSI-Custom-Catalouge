@@ -93,36 +93,24 @@ class RulesView {
 		return Array.isArray(sets) ? sets.filter(sp.is_record) : [];
 	}
 
-	// The cards follow the draft's rules, in their order; a card that moves takes the focus along. A rule that
-	// left the draft takes its open editor with it. Every price waits for the answer to the change.
+	// The cards follow the draft's rules, in their order (keep_cards). A rule that left the draft takes its open
+	// editor with it. Every price waits for the answer to the change.
 	refresh() {
 		const rules = this.rules;
-		for (const [rule, card] of this.cards) {
-			if (!rules.includes(rule)) {
-				card.root.remove();
-				this.cards.delete(rule);
-			}
-		}
 		if (this.ui.open && !rules.includes(this.ui.open.rule)) this.ui.open = null;
 		if (this.ui.set_editor && !rules.includes(this.ui.set_editor.rule)) this.ui.set_editor = null;
-		const active = document.activeElement;
-		let position = 0;
-		rules.forEach((rule, index) => {
-			if (!sp.is_record(rule)) return;
-			let card = this.cards.get(rule);
-			if (!card) {
-				card = new RuleCard(this, rule);
-				this.cards.set(rule, card);
-			}
-			const at = this.list.children[position];
-			if (at !== card.root) this.list.insertBefore(card.root, at || null);
-			position += 1;
-			card.update(index, rules.length);
-			card.price.classList.add("is-stale");
+		const count = keep_cards({
+			entries: rules,
+			cards: this.cards,
+			list: this.list,
+			make: (rule) => new RuleCard(this, rule),
+			each: (card, index) => {
+				card.update(index, rules.length);
+				card.price.classList.add("is-stale");
+			},
 		});
-		if (active?.isConnected && document.activeElement !== active) active.focus({ preventScroll: true });
 		const zone = this.default_zone();
-		this.empty.hidden = position > 0;
+		this.empty.hidden = count > 0;
 		this.empty.textContent = zone
 			? __("No rules yet. Add one to set what customers pay in a zone.")
 			: __("No rules yet.");

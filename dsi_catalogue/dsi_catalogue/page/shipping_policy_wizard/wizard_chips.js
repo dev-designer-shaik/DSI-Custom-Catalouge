@@ -7,6 +7,7 @@
 //	token_list, focus_token       removable tokens: the countries of a zone, the groups and items of a set
 //	Announcer                     a polite live region that says what a click added, moved or deleted
 //	desk_list                     rows of a desk doctype through frappe.client.get_list
+//	keep_cards                    a card per entry of the draft (a zone, a rule), kept in the entries' order
 
 const NAME_LENGTH = 140; // a zone's, an item set's and a rule's name: the ERP keeps at most 140 characters
 
@@ -106,4 +107,35 @@ function desk_list(doctype, fields, filters = []) {
 			error: () => resolve([]),
 		});
 	});
+}
+
+// Keeps one card per entry of `entries` (the draft's zones, its rules) in `list`, in the entries' order. A
+// card belongs to its entry object, so an entry keeps its card while it is in the draft: make(entry) makes the
+// card of a new entry (an object with a `root` element), the card of an entry that left is removed, a card out
+// of place is moved, and each(card, index) is called for every entry, with its index in `entries`. An entry
+// that is not a record (a draft restored from storage may hold anything) gets no card. The element that had
+// the focus keeps it, since moving a card in the page would take it away. Returns the number of cards.
+function keep_cards({ entries, cards, list, make, each }) {
+	for (const [entry, card] of cards) {
+		if (!entries.includes(entry)) {
+			card.root.remove();
+			cards.delete(entry);
+		}
+	}
+	const active = document.activeElement;
+	let position = 0;
+	entries.forEach((entry, index) => {
+		if (!sp.is_record(entry)) return;
+		let card = cards.get(entry);
+		if (!card) {
+			card = make(entry);
+			cards.set(entry, card);
+		}
+		const at = list.children[position];
+		if (at !== card.root) list.insertBefore(card.root, at || null);
+		position += 1;
+		each(card, index);
+	});
+	if (active?.isConnected && document.activeElement !== active) active.focus({ preventScroll: true });
+	return position;
 }

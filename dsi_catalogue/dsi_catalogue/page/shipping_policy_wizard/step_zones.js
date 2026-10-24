@@ -52,35 +52,22 @@ class ZonesView {
 		return Array.isArray(rules) ? rules.filter(sp.is_record) : [];
 	}
 
-	// The cards follow the draft: one per zone, in its order. A card that is moved takes the focus along. A
-	// card's notes (a refused delete or country, a character taken out of the name) last until the next change.
+	// The cards follow the draft: one per zone, in its order (keep_cards). A card's notes (a refused delete or
+	// country, a character taken out of the name) last until the next change.
 	refresh() {
-		const zones = this.zones;
-		for (const [zone, card] of this.cards) {
-			if (!zones.includes(zone)) {
-				card.root.remove();
-				this.cards.delete(zone);
-			}
-		}
-		const active = document.activeElement;
-		let position = 0;
-		zones.forEach((zone, index) => {
-			if (!sp.is_record(zone)) return;
-			let card = this.cards.get(zone);
-			if (!card) {
-				card = new ZoneCard(this, zone);
-				this.cards.set(zone, card);
-			}
-			const at = this.list.children[position];
-			if (at !== card.root) this.list.insertBefore(card.root, at || null);
-			position += 1;
-			card.refusal = "";
-			card.country_refusal = "";
-			card.name_note = "";
-			card.update(index);
+		const count = keep_cards({
+			entries: this.zones,
+			cards: this.cards,
+			list: this.list,
+			make: (zone) => new ZoneCard(this, zone),
+			each: (card, index) => {
+				card.refusal = "";
+				card.country_refusal = "";
+				card.name_note = "";
+				card.update(index);
+			},
 		});
-		if (active?.isConnected && document.activeElement !== active) active.focus({ preventScroll: true });
-		this.empty.hidden = position > 0;
+		this.empty.hidden = count > 0;
 	}
 
 	add() {
