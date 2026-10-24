@@ -9,10 +9,13 @@
 // is read from the environment only and never printed. The script prints one PASS or FAIL line per check and
 // exits with 1 when any check fails. Tasks 8, 9 and 16 add their checks to this file.
 //
-// Nothing here writes to the ERP: the wizard writes only on Apply, and these checks never apply. A draft is
-// put in the browser's own storage, where the wizard keeps it, to test restoring it and showing hostile names.
-// The Zones and Rules checks build the example policy (tests/hermetic/fixtures/shipping_policy_example.json)
-// through the page as a draft, price orders with it, and leave the browser's storage empty again.
+// The wizard writes only on Apply. A draft is put in the browser's own storage, where the wizard keeps it, to
+// test restoring it and showing hostile names. The Zones and Rules checks build the example policy
+// (tests/hermetic/fixtures/shipping_policy_example.json) through the page as a draft and price orders with it;
+// the Fallback and Review checks finish it and APPLY it on erp2, change it from a second tab to see a stale
+// Apply refused, and then empty it again through the page's own Apply. Whatever happens, the run ends with
+// erp2's policy empty and switched off again, as it started (ensureEmptyPolicy, in a finally), and the
+// browser's storage empty.
 
 import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
@@ -42,6 +45,21 @@ const ASTERISK =
 	"* A rule for selected items applies only when every item in the order is one of them. A rule for every " +
 	"item applies to every order.";
 const HOSTILE_SET = "<b>set</b>";
+// A zone name the server's sentences quote: what it says must come back as typed, never as markup (P59).
+const HOSTILE_ZONE = "Gulf & <b>Co</b>";
+const METHOD = "dsi_catalogue.shipping_policy_wizard.";
+// The policy erp2 starts from and is left with: switched off, no zones, item sets or rules (as wizard_state()
+// gives it, keys in the same order).
+const EMPTY = {
+	active: false,
+	price_source: "carrier",
+	rate_card: null,
+	not_covered: "pass_through",
+	default_fallback: { method: "no_delivery", amount: 0 },
+	zones: [],
+	item_sets: [],
+	rules: [],
+};
 
 // What erp2 shows on every desk page, with or without the wizard: the dsi_plm app asks for a script it does
 // not ship. Seen on /desk/shipping-policy and /desk/shipping-dashboard before the wizard existed.
@@ -118,13 +136,17 @@ page.on("dialog", async (dialog) => {
 	await dialog.dismiss();
 });
 
-// The try_order and check_formula requests the page sends, and a way to hold the next one back for a while.
+// The try_order, check_formula and apply_policy requests the page sends, a way to hold the next one back for a
+// while, and a way to answer the next request of a wizard method in the server's place (fakeNext[method]:
+// {status, body}, or "abort" for a request that never reaches the server).
 let priced = 0;
 let checked = 0;
+let applied = 0;
 let intercepting = false;
 let holdNext = 0; // ms to hold the next try_order request before it goes out
 let holdCheck = 0; // ms to hold the next check_formula request before it goes out
 let holdGroups = 0; // ms to hold the next read of the Item Group list before it goes out
+const fakeNext = {};
 page.on("request", (request) => {
 	const isTry = request.url().includes("shipping_policy_wizard.try_order");
 	const isCheck = request.url().includes("shipping_policy_wizard.check_formula");
@@ -132,7 +154,19 @@ page.on("request", (request) => {
 		request.url().includes("frappe.client.get_list") && (request.postData() || "").includes("doctype=Item+Group");
 	if (isTry) priced += 1;
 	if (isCheck) checked += 1;
+	if (request.url().includes("shipping_policy_wizard.apply_policy")) applied += 1;
 	if (!intercepting) return;
+	const fake = Object.keys(fakeNext).find((method) => request.url().includes(`shipping_policy_wizard.${method}`));
+	if (fake) {
+		const answer = fakeNext[fake];
+		delete fakeNext[fake];
+		if (answer === "abort") request.abort("failed").catch(() => {});
+		else {
+			const body = JSON.stringify(answer.body);
+			request.respond({ status: answer.status, contentType: "application/json", body }).catch(() => {});
+		}
+		return;
+	}
 	const wait = (isTry && holdNext) || (isCheck && holdCheck) || (isGroups && holdGroups) || 0;
 	if (wait) {
 		if (isTry) holdNext = 0;
@@ -509,6 +543,98 @@ async function addTapeItem(code) {
 	await page.waitForSelector(by("tape-item"));
 }
 
+// A check that has the server refuse on purpose leaves traces in the list the last check reads: the refusal's
+// HTTP status, the browser's "Failed to load resource" line, and the traceback Frappe prints with console.error
+// on a site that allows tracebacks (erp2 does). Each pattern must be there, once for each time it is given; it
+// is taken out, and nothing else is.
+function expected(...patterns) {
+	for (const pattern of patterns) {
+		const at = trouble.findIndex((line) => pattern.test(line));
+		assert(at >= 0, `expected ${pattern} among what the page reported: ${trouble.join(" | ") || "(nothing)"}`);
+		trouble.splice(at, 1);
+	}
+}
+
+// The traces of one Apply refused with status 417: its status, then the traceback of the exception the server
+// raised (an answer the test gives in the server's place has none).
+const REFUSED_STATUS = [
+	/^HTTP 417: POST .*shipping_policy_wizard\.apply_policy/,
+	/^console error: Failed to load resource: .*417.*shipping_policy_wizard\.apply_policy/,
+];
+const REFUSED = (exception) => [...REFUSED_STATUS, new RegExp(`^console error: [^]*${exception}`)];
+
+// A wizard method called from the page as the page calls it (frappe.call, the test user's session): its
+// answer, or an error naming the exception.
+async function wizardCall(method, args = {}, on = page) {
+	return on.evaluate(
+		(method, args) =>
+			new Promise((resolve, reject) => {
+				frappe.call({
+					method,
+					args,
+					silent: true,
+					callback: (response) => resolve(response.message),
+					error: (response) => reject(new Error(response?.exc_type || "the server did not answer")),
+				});
+			}),
+		METHOD + method,
+		args
+	);
+}
+
+// erp2's policy as the run found it: switched off, with no zones, item sets or rules. Puts it back through the
+// policy's own Apply (apply_policy, the test user's session) unless it is so already. It runs at the end of
+// every run (in a finally), so it opens a desk page of its own first: frappe.call needs the desk.
+async function ensureEmptyPolicy() {
+	await go(NEUTRAL);
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	await go(FORM);
+	await page.waitForFunction(() => Boolean(window.frappe?.csrf_token && frappe.call), { timeout: 20000 });
+	const state = await wizardCall("wizard_state");
+	if (JSON.stringify(state.policy) === JSON.stringify(EMPTY)) return { version: state.version, applied: false };
+	const answer = await wizardCall("apply_policy", { draft: EMPTY, expected_version: state.version });
+	return { version: answer.version, applied: true };
+}
+
+// Someone else changes the saved policy while the wizard has it open: a second tab of the same browser (the
+// test user's session) applies the saved policy with GCC's customer line changed. Returns the new version.
+async function changeUnderFoot(line) {
+	const other = await browser.newPage();
+	try {
+		await other.setCacheEnabled(false);
+		await other.goto(`${BASE}${FORM}`, { waitUntil: "networkidle2", timeout: 60000 });
+		await other.waitForFunction(() => Boolean(window.frappe?.csrf_token && frappe.call), { timeout: 20000 });
+		const state = await wizardCall("wizard_state", {}, other);
+		const policy = state.policy;
+		policy.zones.find((zone) => zone.name === "GCC").customer_line = line;
+		const answer = await wizardCall("apply_policy", { draft: policy, expected_version: state.version }, other);
+		await other.waitForNetworkIdle({ idleTime: 400, timeout: 20000 }).catch(() => {});
+		return answer.version;
+	} finally {
+		await other.close();
+	}
+}
+
+// Waits until Apply can be used: the draft checked by the server as it is, with nothing in the way.
+async function applyReady(timeout = 15000) {
+	try {
+		await page.waitForFunction(
+			() => document.querySelector('[data-testid="apply-button"]')?.getAttribute("aria-disabled") === "false",
+			{ timeout }
+		);
+	} catch {
+		const why = (await page.$(by("apply-hint"))) ? await textOf("apply-hint") : "(no hint)";
+		throw new Error(`Apply did not become ready: ${why}`);
+	}
+}
+
+// The text of each element with the test id, as it reads on the screen.
+async function textsOf(testid, within = "") {
+	return page.$$eval(`${within} ${by(testid)}`.trim(), (found) =>
+		found.map((element) => element.innerText.replace(/\s+/g, " ").trim())
+	);
+}
+
 // ---------------------------------------------------------------- the checks
 await check("log in as the test user", login);
 trouble.splice(0); // what the login page itself does is not the wizard's
@@ -525,7 +651,17 @@ await check("the six step tabs and tape-total are on the page", async () => {
 	}
 });
 
-const { version, original } = await store();
+// The checks below expect erp2's policy to be the empty one: a policy left by a run that was cut off short is
+// emptied first.
+await check("erp2's policy is the empty one, switched off, when the run starts", async () => {
+	if (JSON.stringify((await store()).original) === JSON.stringify(EMPTY)) return "";
+	const cleaned = await ensureEmptyPolicy();
+	await open();
+	assert(JSON.stringify((await store()).original) === JSON.stringify(EMPTY), "the policy is empty now");
+	return `a policy left by an earlier run was emptied first (version ${cleaned.version})`;
+});
+
+let { version, original } = await store();
 
 await check("the tabs are one tablist in order, Zones selected, Test set apart with its own name", async () => {
 	const tabs = await page.$$eval(`${TABLIST} [role="tab"]`, (found) =>
@@ -548,8 +684,9 @@ await check("the tabs are one tablist in order, Zones selected, Test set apart w
 	assert(tabs[5].left - tabs[4].right > 48, "Test sits apart from Review");
 });
 
-await check("each step not built yet shows a plain placeholder line; Zones and Rules show their bodies", async () => {
-	const BUILT = { zones: "zone-add", rules: "rule-add" }; // a control each built body has
+await check("each step not built yet shows a plain placeholder line; Zones, Rules, the fallbacks and Review show their bodies", async () => {
+	// a control each built body has
+	const BUILT = { zones: "zone-add", rules: "rule-add", fallback: "not-covered", review: "apply-button" };
 	for (const step of STEPS) {
 		await page.click(by(`step-tab-${step}`));
 		const panel = await page.$eval(`#sp-panel-${step}`, (element) => ({
@@ -570,6 +707,7 @@ await check("each step not built yet shows a plain placeholder line; Zones and R
 });
 
 await check("the arrow keys, Home and End move between the tabs, with a visible focus ring", async () => {
+	await page.click(by("step-tab-zones")); // from Zones, whatever an earlier check left selected
 	await page.focus(by("step-tab-zones"));
 	const press = async (key, step) => {
 		await page.keyboard.press(key);
@@ -1032,7 +1170,7 @@ await check("the receipt says how a draft that is on priced the order, in plain 
 	assert(!(await textOf("tape-lines")).includes("switched off"), "the draft is on: no note that it is off");
 	assert((await textOf("tape-total-label")) === "Customer pays", "the draft is on: the customer pays");
 	await page.click(by("tape-unavailable"));
-	await expectText("tape-lines", "The carrier could not quote, so the fallback price applies.");
+	await expectText("tape-lines", "The carrier could not quote, so the fallback applies.");
 	await expectText("tape-lines", "Standard delivery");
 	await expectText("tape-total", "$35.00");
 	assert((await lastLine()).startsWith("The carrier could not quote"), "the statement is the last line");
@@ -1728,6 +1866,464 @@ await check("Escape closes a list, an editor or a question, and the focus stays 
 	assert(JSON.stringify(draft.item_sets) === JSON.stringify(builtSets()), "the set, unchanged");
 });
 
+// ---------------------------------------------------------------- Task 9: the fallbacks, Review and Apply
+// These checks finish the example policy built above, APPLY it on erp2 and change it there. The last one
+// empties it again through the page's own Apply; the finally makes sure of it whatever happened.
+
+// The index of the fallback card of a zone, by its name.
+async function fallbackCard(name) {
+	const titles = await page.$$eval(by("fallback-zone"), (cards) =>
+		cards.map((card) => card.querySelector(".sp-fallback-title")?.textContent)
+	);
+	assert(titles.includes(name), `no fallback card for ${name}: ${titles}`);
+	return titles.indexOf(name);
+}
+
+// Picks the radio with this value in the n-th card of a kind, and what is picked there.
+async function pick(kind, n, value, testid = "fallback-method") {
+	const radio = await (await nth(kind, n)).$(`${by(testid)}[value="${value}"]`);
+	assert(radio, `${kind} ${n + 1} offers no ${value}`);
+	await radio.click();
+}
+
+async function picked(kind, n, testid = "fallback-method") {
+	return (await nth(kind, n)).$$eval(by(testid), (radios) => radios.find((radio) => radio.checked)?.value || "");
+}
+
+const ariaDisabled = () => page.$eval(by("apply-button"), (button) => button.getAttribute("aria-disabled"));
+
+// The example policy as the page finishes it on erp2: the fixture's (GCC charges a fixed $35 when the carrier
+// cannot quote), with erp2's watch group, still switched off.
+const finished = () => ({ ...EXAMPLE, active: false, item_sets: builtSets() });
+
+try {
+	await check("If the carrier can't quote: a card per zone, then the policy default and Anything not covered", async () => {
+		await page.click(by("step-tab-fallback"));
+		const titles = await page.$$eval(by("fallback-zone"), (cards) =>
+			cards.map((card) => card.querySelector(".sp-fallback-title").textContent)
+		);
+		assert(titles.join("|") === "Bahrain|GCC|Rest of world|Not shipped", `a card per zone, in order: ${titles}`);
+		for (const n of [0, 1, 2]) assert((await picked("fallback-zone", n)) === "policy_default", `zone ${n + 1}: the default`);
+		const labels = await (await nth("fallback-zone", 1)).$$eval(".sp-option-text", (found) => found.map((label) => label.textContent));
+		const words = "Use the policy default|Don't offer delivery|Charge a fixed amount|Free|Use the rate card";
+		assert(labels.join("|") === words, `the five choices in plain words, the policy default first: ${labels}`);
+		// a Not shipped zone has nothing to fall back to, and says so in words
+		const closed = await (await nth("fallback-zone", 3)).evaluate((card) => ({
+			choices: [...card.querySelectorAll('[data-testid="fallback-method"]')].some((radio) => radio.offsetParent),
+			said: card.querySelector('[data-testid="fallback-sentence"]').textContent,
+		}));
+		assert(!closed.choices, "a Not shipped zone has no choice");
+		assert(closed.said === "Delivery is never offered here: the zone is not shipped to.", closed.said);
+		const offered = await page.$$eval(`${by("fallback-policy-default")} ${by("fallback-method")}`, (radios) =>
+			radios.map((radio) => radio.value)
+		);
+		assert(offered.join() === "no_delivery,fixed,free,rate_card", `the policy default offers four: ${offered}`);
+		assert((await picked("fallback-policy-default", 0)) === "no_delivery", "the policy default does not offer delivery");
+		assert((await picked("not-covered", 0, "not-covered-option")) === "pass_through", "and passes the carrier's price");
+		// "Use the rate card" is offered, and says that there is no rate card yet
+		const gcc = await (await nth("fallback-zone", 1)).evaluate((card) => card.innerText);
+		assert(gcc.includes("There is no rate card yet. Add one in the Rates step."), "the rate card's quiet note");
+		// GCC: a fixed amount, blank until it is typed, kept in cents
+		await pick("fallback-zone", 1, "fixed");
+		assert((await valueIn("fallback-zone", 1, "fallback-amount")) === "", "the amount is blank until it is typed");
+		await expectIn("fallback-zone", 1, "fallback-problem", "Type the amount customers pay, such as 35.");
+		assert((await draftNow()).zones[1].fallback.amount === null, "and the draft has none");
+		await typeIn("fallback-zone", 1, "fallback-amount", "-5");
+		await expectIn("fallback-zone", 1, "fallback-problem", "Type an amount of 0 or more, such as 35.");
+		await typeIn("fallback-zone", 1, "fallback-amount", "35,5");
+		await expectIn("fallback-zone", 1, "fallback-problem", "Use a period for decimals.");
+		assert((await draftNow()).zones[1].fallback.amount === 35, "what is not an amount stays out of the draft");
+		await typeIn("fallback-zone", 1, "fallback-amount", "35.126");
+		await expectIn("fallback-zone", 1, "fallback-problem", "The ERP keeps cents, so this is $35.13.");
+		assert((await draftNow()).zones[1].fallback.amount === 35.13, "35.126 is kept as 35.13");
+		await typeIn("fallback-zone", 1, "fallback-amount", "35");
+		await expectIn("fallback-zone", 1, "fallback-sentence", "If the carrier cannot quote, customers here pay a fixed $35.00.");
+		assert((await textIn("fallback-zone", 1, "fallback-problem")) === "", "no problem left");
+		const figure = await (await inCard("fallback-zone", 1, "fallback-figure")).evaluate((found) => ({
+			text: found.textContent,
+			colour: getComputedStyle(found).color,
+		}));
+		assert(figure.text === "$35.00" && figure.colour === "rgb(154, 113, 22)", `$35.00 in brass: ${JSON.stringify(figure)}`);
+		// the policy default: a change shows in the zones that use it; then back to don't offer
+		await pick("fallback-policy-default", 0, "free");
+		await expectIn("fallback-zone", 0, "fallback-sentence", "If the carrier cannot quote, the policy default applies: delivery is free.");
+		await expectIn("fallback-policy-default", 0, "fallback-note", "Bahrain and Rest of world use it.");
+		await pick("fallback-policy-default", 0, "no_delivery");
+		await expectIn("fallback-zone", 0, "fallback-sentence", "the policy default applies: delivery is not offered.");
+		await expectIn("fallback-policy-default", 0, "fallback-sentence", "When a zone uses the policy default and the carrier cannot quote, delivery is not offered.");
+		// Anything not covered: no delivery, then back to passing the carrier's price through
+		await pick("not-covered", 0, "no_delivery", "not-covered-option");
+		await expectIn("not-covered", 0, "fallback-sentence", "When no rule fits an order, delivery is not offered.");
+		await pick("not-covered", 0, "pass_through", "not-covered-option");
+		await expectIn("not-covered", 0, "fallback-sentence", "When no rule fits an order, customers pay the carrier's price.");
+		const draft = await draftNow();
+		assert(JSON.stringify(draft) === JSON.stringify(finished()), `the draft is the example: ${JSON.stringify(draft)}`);
+	});
+
+	await check("“The carrier can't quote” prices a GCC order at its fixed fallback at once, and Bahrain gets no delivery", async () => {
+		await pickCountry("United Arab Emirates");
+		await expectText("tape-total", "$39.00");
+		await page.click(by("tape-unavailable"));
+		await expectText("tape-total", "$35.00");
+		await expectText("tape-lines", "Standard delivery");
+		await expectText(
+			"tape-lines",
+			"The carrier gave no price for the whole shipment. The fallback applies: a fixed charge of 35.00. $35.00"
+		);
+		assert((await lastLine()) === "The carrier could not quote, so the fallback applies.", `said last: ${await lastLine()}`);
+		assert((await textOf("tape-total-label")) === "Customer would pay", "the draft is still off");
+		// a change of the fallback shows on the tape at once, and an amount typed before comes back with its choice
+		await pick("fallback-zone", 1, "free");
+		await expectText("tape-total", "Free");
+		await pick("fallback-zone", 1, "fixed");
+		await expectText("tape-total", "$35.00");
+		assert((await valueIn("fallback-zone", 1, "fallback-amount")) === "35.00", "the amount comes back with Fixed");
+		await pickCountry("Bahrain");
+		await expectText("tape-total", "Not offered");
+		await expectText("tape-lines", "Delivery is not offered.");
+		await page.click(by("tape-unavailable"));
+		await pickCountry("United Arab Emirates");
+		await expectText("tape-total", "$39.00");
+		assert(JSON.stringify(await draftNow()) === JSON.stringify(finished()), "the draft is the example");
+	});
+
+	await check("screenshots of the fallbacks with the example policy, light and dark", async () => {
+		await page.click(by("tape-unavailable")); // the tape shows a fallback price
+		await expectText("tape-total", "$35.00");
+		await page.evaluate(() => document.activeElement?.blur());
+		const files = [await tallShot("wizard-fallback-light")];
+		await theme("dark");
+		files.push(await tallShot("wizard-fallback-dark"));
+		const brass = await (await inCard("fallback-zone", 1, "fallback-figure")).evaluate((found) => getComputedStyle(found).color);
+		const brick = await (await inCard("fallback-zone", 3, "fallback-figure")).evaluate((found) => getComputedStyle(found).color);
+		await theme("light");
+		await page.click(by("tape-unavailable"));
+		await expectText("tape-total", "$39.00");
+		assert(brass === "rgb(216, 178, 89)" && brick === "rgb(229, 144, 127)", `the accents in the dark: ${brass}, ${brick}`);
+		return files.join(", ");
+	});
+
+	await check("Review: what will change lists the zones, set and rules, and the policy reads zone by zone in plain words", async () => {
+		await page.click(by("step-tab-review"));
+		await applyReady();
+		const diff = await textOf("review-diff");
+		for (const said of [
+			"Zones added: Bahrain, GCC, Not shipped and Rest of world",
+			"Item sets added: Watches",
+			"Rules added: Rule 1 (Free in Bahrain), Rule 2 (Free watches in the Gulf), Rule 3 (Gulf at the carrier price) and Rule 4 (International with a minimum)",
+		]) {
+			assert(diff.includes(said), `what will change says "${said}": ${diff}`);
+		}
+		assert(!diff.includes("Active"), `nothing about Active yet: ${diff}`);
+		assert((await page.$$(by("review-problem"))).length === 0, "no problems");
+		const zones = await textsOf("review-zone");
+		const want = [
+			"Bahrain Bahrain. Customers read: “Free delivery in Bahrain.” Rule 1 (Free in Bahrain): In Bahrain for every item charge nothing (free). If the carrier cannot quote, the policy default applies: delivery is not offered.",
+			"GCC United Arab Emirates, Saudi Arabia, Kuwait, Oman and Qatar. Customers read: “Gulf delivery, priced by the carrier. Watches ship free.” Rule 2 (Free watches in the Gulf): In GCC for Watches charge nothing (free). Rule 3 (Gulf at the carrier price): In GCC for every item charge the carrier's price, rounded up. If the carrier cannot quote, customers here pay a fixed $35.00.",
+			"Rest of world Everywhere else Every other country. Customers read: “International delivery, priced at checkout.” Rule 4 (International with a minimum): In Rest of world for every item charge max(carrier_price * 1.1, 45), rounded up. If the carrier cannot quote, the policy default applies: delivery is not offered.",
+			"Not shipped Not shipped Russian Federation and Belarus. Delivery is never offered here. Customers read: “We do not deliver to these countries.” At checkout they read: “We don't deliver to this country.”",
+		];
+		zones.forEach((text, n) => assert(text === want[n], `zone ${n + 1} reads: ${text}`));
+		assert(zones.length === 4, `four zones: ${zones.length}`);
+		// each rule in the words of its card in the Rules step: the same builder, sp.rule_text
+		const summary = await textOf("review-summary");
+		const sentences = await page.evaluate(() =>
+			frappe.pages["shipping-policy-wizard"].wizard.store.draft.rules.map((rule) => dsi_catalogue.sp.rule_text(rule))
+		);
+		sentences.forEach((text, n) => assert(summary.includes(`: ${text}.`), `rule ${n + 1} in its card's words: ${text}`));
+		assert(summary.startsWith("Prices start from the carrier's quote for each order."), "where prices start, first");
+		assert(summary.endsWith("When no rule fits an order, customers pay the carrier's price."), "Anything not covered, last");
+		assert(!(await page.$eval(by("policy-active"), (box) => box.checked)), "the switch is off");
+		const state = await textOf("policy-active-state");
+		assert(state === "Switched off: customers pay the carrier's price", `the switch's state in words: ${state}`);
+		assert((await textOf("apply-button")) === "Apply", "Apply: nothing about Active changes");
+		const why = await textOf("apply-hint");
+		assert(why === "The policy stays off: customers keep paying the carrier's price.", `beside Apply: ${why}`);
+		await page.evaluate(() => document.activeElement?.blur());
+		const files = [await tallShot("wizard-review-light")];
+		await theme("dark");
+		files.push(await tallShot("wizard-review-dark"));
+		await theme("light");
+		return files.join(", ");
+	});
+
+	await check("the Active switch says its state in words, and Apply then says it switches the policy on", async () => {
+		assert((await textOf("tape-total-label")) === "Customer would pay", "off: the customer would pay");
+		await page.click(by("policy-active"));
+		await expectText("policy-active-state", "Switched on: customers pay what this policy says");
+		assert((await textOf("apply-button")) === "Apply and switch on", `the button: ${await textOf("apply-button")}`);
+		await applyReady();
+		await expectText("review-diff", "Active: off → on");
+		const arrow = await page.$eval(`${by("review-diff")} .sp-change-arrow`, (found) => found.getAttribute("aria-label"));
+		assert(arrow === "becomes", `the arrow is said as a word: ${arrow}`);
+		await expectText("tape-total-label", "Customer pays"); // the receipt once the draft is on
+		await expectText("tape-total", "$39.00");
+		// from the keyboard: Space switches it off and on again
+		await page.focus(by("policy-active"));
+		await page.keyboard.press("Space");
+		await expectText("policy-active-state", "Switched off: customers pay the carrier's price");
+		await page.keyboard.press("Space");
+		await expectText("policy-active-state", "Switched on: customers pay what this policy says");
+		await applyReady();
+		const why = await textOf("apply-hint");
+		assert(why === "Customers pay what this policy says as soon as it is applied.", `beside Apply: ${why}`);
+		assert((await draftNow()).active === true, "the draft is on");
+	});
+
+	await check("Apply writes the draft once, says what was applied, and leaves no draft in storage", async () => {
+		applied = 0;
+		// a double click: the second finds the first one's request on its way, and sends nothing
+		await page.$eval(by("apply-button"), (button) => {
+			button.click();
+			button.click();
+		});
+		await expectText("apply-done", "Applied and switched on. Customers see the new prices now.", 30000);
+		assert(applied === 1, `${applied} requests for a double click`);
+		const done = await textOf("apply-done");
+		for (const said of [
+			"Zones added: Bahrain, GCC, Not shipped and Rest of world",
+			"Item sets added: Watches",
+			"Rules added: Rule 1 (Free in Bahrain)",
+			"Active: off → on",
+		]) {
+			assert(done.includes(said), `what was applied says "${said}": ${done}`);
+		}
+		assert((await focusedTestid()) === "apply-done", `what was applied has the focus: ${await focusedTestid()}`);
+		const saved = await store();
+		assert(!saved.dirty && saved.original.active === true, "the draft is the saved policy, and it is on");
+		assert(saved.version !== version, "a new version");
+		assert(saved.original.rules.length === 4 && saved.original.rules.every((rule) => rule.name), "the rules have rows");
+		await pause(500);
+		assert((await stored()) === null, "no draft is left in storage");
+		await expectText("review-diff", "Nothing to apply yet.");
+		assert((await ariaDisabled()) === "true", "Apply waits for a change");
+		assert(await page.$eval(by("draft-banner"), (banner) => banner.hidden), "no banner: nothing is edited");
+		await expectText("tape-total", "$39.00");
+		assert((await textOf("tape-total-label")) === "Customer pays", "the policy is on: the customer pays");
+		const state = await wizardCall("wizard_state");
+		assert(state.version === saved.version && state.policy.active && state.policy.zones.length === 4, "the server agrees");
+		return tallShot("wizard-applied");
+	});
+
+	await check("after a reload the policy is the applied one, on, and prices a GCC order at $39.00", async () => {
+		await open();
+		await pause(500);
+		assert(await page.$eval(by("draft-banner"), (banner) => banner.hidden), "no draft banner");
+		const saved = await store();
+		assert(!saved.dirty && saved.original.active === true, "the saved policy is on");
+		// the ERP reads zones back sorted by name (load_policy): the order of the zones is not part of a policy
+		const by_name = [...EXAMPLE.zones].sort((one, other) => (one.name < other.name ? -1 : 1));
+		assert(JSON.stringify(saved.original.zones) === JSON.stringify(by_name), "the example's zones, by name");
+		const names = await page.$$eval(by("zone-name"), (inputs) => inputs.map((input) => input.value));
+		assert(names.join("|") === "Bahrain|GCC|Not shipped|Rest of world", `the zones are there: ${names}`);
+		await pickCountry("United Arab Emirates");
+		await fill("tape-quote", "38.20");
+		await expectText("tape-total", "$39.00");
+		assert((await textOf("tape-total-label")) === "Customer pays", "the customer pays");
+		assert(!(await textOf("tape-lines")).includes("switched off"), "no note that the policy is off");
+	});
+
+	await check("an edit while the policy is on: the banner says that edits go live when they are applied", async () => {
+		await page.click(by("step-tab-rules"));
+		await typeIn("rule-card", 2, "rule-label", "Gulf at the carrier price, edited");
+		await expectText("draft-banner", "This policy is on: edits go live when you apply them.");
+		for (const step of ["zones", "fallback", "review"]) {
+			await page.click(by(`step-tab-${step}`));
+			assert(!(await page.$eval(by("draft-banner"), (banner) => banner.hidden)), `the banner stays on ${step}`);
+		}
+		await applyReady();
+		await expectText("review-diff", "Rules changed: Rule 3 (Gulf at the carrier price, edited)");
+		assert((await textOf("apply-button")) === "Apply", "Apply: Active does not change");
+	});
+
+	await check("a policy changed under the page's feet: Apply says so, keeps the draft, and the differences can be reviewed", async () => {
+		const before = await store();
+		const changed = await changeUnderFoot("Gulf delivery, changed in another tab.");
+		assert(changed !== before.version, "the other tab changed the policy");
+		applied = 0;
+		await page.click(by("apply-button"));
+		await expectText("apply-error", "Someone changed the policy after you opened it. Your draft is kept.", 30000);
+		expected(...REFUSED("TimestampMismatchError"));
+		assert((await page.$eval(by("apply-error"), (box) => box.getAttribute("role"))) === "alert", "an alert");
+		const kept = await store();
+		assert(kept.dirty && kept.draft.rules[2].label === "Gulf at the carrier price, edited", "the draft is kept");
+		assert(kept.version === before.version, "and the version the page loaded");
+		assert(JSON.parse(await stored())?.draft?.rules?.[2]?.label === "Gulf at the carrier price, edited", "stored too");
+		assert((await ariaDisabled()) === "true", "Apply waits for a choice");
+		const why = await textOf("apply-hint");
+		assert(why === "Review the differences or reload the saved policy first.", `beside Apply: ${why}`);
+		await pause(1500);
+		assert(applied === 1, `nothing is sent again by itself: ${applied}`);
+		const file = await tallShot("wizard-stale");
+		await page.click(by("stale-review"));
+		await expectText("apply-done", "The saved policy was read again: what will change now compares your draft with it.");
+		const rebased = await store();
+		assert(rebased.version === changed, "Apply now goes over the policy as it is saved");
+		assert(rebased.dirty && rebased.draft.rules[2].label === "Gulf at the carrier price, edited", "the draft stays");
+		assert(rebased.draft.zones[1].customer_line !== "Gulf delivery, changed in another tab.", "as the person left it");
+		await applyReady();
+		const diff = await textOf("review-diff");
+		assert(diff.includes("Zones changed: GCC"), `the other change shows as a difference: ${diff}`);
+		assert(diff.includes("Rules changed: Rule 3 (Gulf at the carrier price, edited)"), `and the edit: ${diff}`);
+		assert((await textOf("apply-error")) === "", "the message is gone");
+		const focus = await page.evaluate(() => document.activeElement?.id);
+		assert(focus === "sp-review-diff-title", `the focus is on what will change: ${focus}`);
+		assert(JSON.parse(await stored())?.version === changed, "the stored draft has the new version");
+		return file;
+	});
+
+	await check("Reload the saved policy asks first, then drops the draft for the policy as it is saved now", async () => {
+		// the stale answer once more, this time from the test, so that nothing is written for it
+		const stale = JSON.stringify({
+			message:
+				"Someone changed the shipping policy after you opened the wizard. Reload the wizard to see the change, then apply again.",
+			title: "The shipping policy cannot be applied",
+			indicator: "red",
+			raise_exception: 1,
+		});
+		await intercept(true);
+		try {
+			fakeNext.apply_policy = {
+				status: 417,
+				body: { exc_type: "TimestampMismatchError", _server_messages: JSON.stringify([stale]) },
+			};
+			await page.click(by("apply-button"));
+			await expectText("apply-error", "Someone changed the policy after you opened it. Your draft is kept.");
+		} finally {
+			await intercept(false);
+		}
+		expected(...REFUSED_STATUS);
+		await page.click(by("stale-reload"));
+		await answerDialog(false);
+		assert((await focusedTestid()) === "stale-reload", `No gives the focus back: ${await focusedTestid()}`);
+		assert((await store()).dirty, "and keeps the draft");
+		await page.click(by("stale-reload"));
+		await answerDialog(true);
+		await page.waitForFunction(() => !frappe.pages["shipping-policy-wizard"].wizard.store.dirty, { timeout: 15000 });
+		const saved = await store();
+		assert(saved.draft.zones[1].customer_line === "Gulf delivery, changed in another tab.", "the policy as saved now");
+		assert(saved.draft.rules[2].label === "Gulf at the carrier price", "the edit is dropped");
+		await expectText("review-diff", "Nothing to apply yet.");
+		assert((await textOf("apply-error")) === "", "the message is gone");
+		await page.waitForFunction(() => document.activeElement?.dataset?.testid === "apply-button", { timeout: 5000 });
+		await pause(500);
+		assert((await stored()) === null, "no draft is left in storage");
+	});
+
+	await check("a zone named Gulf & <b>Co</b>: the Review and a refused Apply show the server's sentences as typed", async () => {
+		const saved = await wizardCall("wizard_state");
+		const zone = zoneOf(HOSTILE_ZONE, ["JO"], { fallback: { method: "rate_card", amount: 0 } });
+		const draft = { ...saved.policy, zones: [...saved.policy.zones, zone] };
+		await openWithStored({ version: saved.version, draft, step: "review" });
+		const sentence = `Zone "${HOSTILE_ZONE}" uses the rate card when the carrier can't quote, but there is no rate card yet.`;
+		await expectText("review-problems", sentence);
+		const fix = await page.$eval(by("review-fix"), (button) => [button.dataset.step, button.getAttribute("aria-label")]);
+		assert(fix[0] === "fallback", `Fix it goes to the step that owns it: ${fix}`);
+		await expectText("apply-hint", "Fix the problem at the top first.");
+		const zones = await textsOf("review-zone");
+		const said = `${HOSTILE_ZONE} Jordan. No rule is for this zone yet. If the carrier cannot quote, customers here pay what the rate card charges.`;
+		assert(zones.at(-1) === said, `the summary says the name as typed: ${zones.at(-1)}`);
+		assert((await page.$$(".sp-wizard b, .sp-wizard img")).length === 0, "no element was made from the name");
+		const files = [await tallShot("wizard-review-problems")];
+		await page.click(by("review-fix"));
+		assert((await selectedTab()) === "step-tab-fallback", "Fix it opens the step that owns the problem");
+		assert((await focusedTestid()) === "step-tab-fallback", "with the focus on its tab");
+		// The server refuses what the preview found. The test answers the next preview itself with "no problems",
+		// so that Apply sends the draft and the server's own refusal (sentences it escaped) comes back.
+		await intercept(true);
+		try {
+			const real = await wizardCall("preview_changes", { draft });
+			fakeNext.preview_changes = { status: 200, body: { message: { changes: real.changes, problems: [] } } };
+			await page.click(by("step-tab-fallback"));
+			await page.click(by("step-tab-review"));
+			await applyReady();
+		} finally {
+			await intercept(false);
+		}
+		applied = 0;
+		await page.click(by("apply-button"));
+		await expectText("apply-error", "The policy was not applied:", 30000);
+		expected(...REFUSED("ValidationError"));
+		const lines = await page.$$eval(`${by("apply-error")} li`, (found) => found.map((line) => line.textContent));
+		assert(JSON.stringify(lines) === JSON.stringify([sentence]), `the server's sentence, as typed: ${JSON.stringify(lines)}`);
+		const box = await textOf("apply-error");
+		assert(!/&amp;|&lt;|&gt;|&quot;/.test(box), `no escaped text shows: ${box}`);
+		assert((await page.$$(".sp-wizard b, .sp-wizard img")).length === 0, "no element was made from the refusal");
+		assert(applied === 1, "one request");
+		files.push(await tallShot("wizard-hostile-refused"));
+		await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+		return files.join(", ");
+	});
+
+	await check("someone else applying and a lost connection: the message, and Apply stays usable", async () => {
+		await go(NEUTRAL);
+		await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+		await open();
+		await page.click(by("step-tab-rules"));
+		await typeIn("rule-card", 2, "rule-label", "Gulf at the carrier price, again");
+		await page.click(by("step-tab-review"));
+		await applyReady();
+		const busy = JSON.stringify({
+			message: "Someone else is applying a change right now. Try again in a moment.",
+			title: "The shipping policy cannot be applied",
+			indicator: "red",
+			raise_exception: 1,
+		});
+		await intercept(true);
+		try {
+			fakeNext.apply_policy = { status: 417, body: { exc_type: "ValidationError", _server_messages: JSON.stringify([busy]) } };
+			await page.click(by("apply-button"));
+			await expectText("apply-error", "The policy was not applied: Someone else is applying a change right now. Try again in a moment.");
+			assert((await ariaDisabled()) === "false", "the same button stays usable");
+			fakeNext.apply_policy = "abort";
+			await page.click(by("apply-button"));
+			await expectText("apply-error", "Could not reach the server. Nothing was changed.");
+			assert((await ariaDisabled()) === "false", "and usable again");
+		} finally {
+			await intercept(false);
+		}
+		expected(
+			...REFUSED_STATUS,
+			/^request failed: POST .*shipping_policy_wizard\.apply_policy/,
+			/^console error: Failed to load resource: .*shipping_policy_wizard\.apply_policy/
+		);
+		assert((await store()).dirty, "the draft is kept");
+		await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	});
+
+	await check("the policy is emptied and switched off again through the page's own Apply", async () => {
+		await go(NEUTRAL);
+		await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+		await open();
+		await page.evaluate((empty) => {
+			frappe.pages["shipping-policy-wizard"].wizard.change((draft) => {
+				for (const key of Object.keys(draft)) delete draft[key];
+				Object.assign(draft, JSON.parse(JSON.stringify(empty)));
+			});
+		}, EMPTY);
+		await page.click(by("step-tab-review"));
+		await applyReady();
+		assert((await textOf("apply-button")) === "Apply and switch off", `the button: ${await textOf("apply-button")}`);
+		const diff = await textOf("review-diff");
+		assert(diff.includes("Zones removed: Bahrain, GCC, Not shipped and Rest of world"), diff);
+		assert(diff.includes("Active: on → off"), diff);
+		await page.click(by("apply-button"));
+		await expectText("apply-done", "Applied and switched off. Customers pay the carrier's price again.", 30000);
+		const state = await wizardCall("wizard_state");
+		assert(JSON.stringify(state.policy) === JSON.stringify(EMPTY), `erp2's policy: ${JSON.stringify(state.policy)}`);
+		assert(state.version === version, `the version the run started from: ${state.version}`);
+		await pause(500);
+		assert((await stored()) === null, "no draft is left in storage");
+		return tallShot("wizard-emptied");
+	});
+} finally {
+	await check("erp2's policy is empty and switched off again, whatever happened above", async () => {
+		const end = await ensureEmptyPolicy();
+		assert(end.version === version, `the version the run started from: ${end.version}`);
+		return end.applied ? "it had to be emptied here" : "";
+	});
+}
+
 await check("hostile zone and item set names are shown as text in Zones and Rules", async () => {
 	const draft = {
 		...original,
@@ -1848,6 +2444,35 @@ await check("at 760 px the zone and rule cards fit, the sentences wrap and nothi
 	assert((await stored()) === null, "nothing is left in the browser's storage");
 	assert(Object.values(rules).every(Boolean), `rules: ${JSON.stringify(rules)}`);
 	assert(Object.values(zones).every(Boolean), `zones: ${JSON.stringify(zones)}`);
+	return files.join(", ");
+});
+
+await check("at 760 px the fallbacks and the Review fit, their lines wrap and nothing scrolls sideways", async () => {
+	const draft = { ...original, zones: EXAMPLE.zones, item_sets: builtSets(), rules: EXAMPLE.rules };
+	await openWithStored({ version, draft, step: "fallback" });
+	const fits = async (selector) =>
+		page.evaluate((selector) => {
+			const root = document.documentElement;
+			const panel = document.querySelector(".sp-step").getBoundingClientRect();
+			const parts = [...document.querySelectorAll(selector)];
+			return {
+				page: root.scrollWidth <= root.clientWidth,
+				parts: parts.length > 0 && parts.every((part) => part.getBoundingClientRect().right <= panel.right + 1),
+				inside: parts.every((part) => part.scrollWidth <= part.clientWidth + 1),
+			};
+		}, selector);
+	const fallback = await fits('[data-testid="fallback-zone"], [data-testid="fallback-policy-default"], [data-testid="not-covered"]');
+	const files = [await tallShot("wizard-fallback-760")];
+	await page.click(by("step-tab-review"));
+	await applyReady();
+	const review = await fits(".sp-review-part, .sp-golive, [data-testid='review-zone']");
+	files.push(await tallShot("wizard-review-760"));
+	// the restored draft was not changed here, so nothing writes it back: the browser's storage is left empty
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	await pause(500);
+	assert((await stored()) === null, "nothing is left in the browser's storage");
+	assert(Object.values(fallback).every(Boolean), `fallbacks: ${JSON.stringify(fallback)}`);
+	assert(Object.values(review).every(Boolean), `review: ${JSON.stringify(review)}`);
 	return files.join(", ");
 });
 
