@@ -12,7 +12,7 @@
 // Nothing here writes to the ERP: the wizard writes only on Apply, and these checks never apply. A draft is
 // put in the browser's own storage, where the wizard keeps it, to test restoring it and showing hostile names.
 
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 const BASE = (process.env.ERP_URL || "https://erp2.shaik.net").replace(/\/+$/, "");
@@ -159,10 +159,14 @@ async function open(route = WIZARD) {
 	}
 }
 
+// A full-page screenshot, written anew; the check that takes it fails unless the file is there and not empty.
 async function shot(name) {
 	await mkdir(OUT_DIR, { recursive: true });
 	const file = path.resolve(OUT_DIR, `${name}.png`);
+	await rm(file, { force: true });
 	await page.screenshot({ path: file, fullPage: true });
+	const written = await stat(file).catch(() => null);
+	assert(written?.size > 0, `the screenshot ${file} was not written`);
 	return file;
 }
 
@@ -365,7 +369,7 @@ await check("the tape starts empty and says what to fill in", async () => {
 	assert((await textOf("tape-total")) === "Not priced yet", "nothing priced yet");
 });
 
-await check("screenshots of the initial state, light and dark (760 px wide comes last)", async () => {
+await check("screenshots of the initial state are written, light and dark (760 px wide comes last)", async () => {
 	await page.evaluate(() => document.activeElement?.blur());
 	const files = [await shot("wizard-light")];
 	await theme("dark");
@@ -631,6 +635,30 @@ await check("with one measure typed, the other is packed again whenever the item
 	return `erp2 has no packer, so the packed volume is 0 there`;
 });
 
+await check("the receipt prints a trace kind it does not know, and the rate card's lines, as text", async () => {
+	const seen = await page.evaluate(() => {
+		const tape = frappe.pages["shipping-policy-wizard"].wizard.tape;
+		const trace = [
+			{ kind: "rate_card", text: "Dangerous Goods, USA: 1.984 lb -> $60.00", amount: 60 },
+			{ kind: "mystery", text: "<i>x</i>", amount: 60 },
+			{ kind: "result", text: "Customer pays 60.00.", amount: 60 },
+		];
+		const offer = { service_id: "rate-card", name: "International Express (4-7 days)", amount: 60, estimated_days: 7, trace };
+		tape.render_receipt({ answer: { result: { offered: true, price_source: "rate_card", offers: [offer] } } });
+		return {
+			lines: [...document.querySelectorAll('[data-testid="tape-lines"] .sp-line')].map((line) => line.innerText),
+			italics: document.querySelectorAll(".sp-wizard i").length,
+			total: document.querySelector('[data-testid="tape-total"]').textContent,
+			days: document.querySelector(".sp-after-total").textContent,
+		};
+	});
+	const lines = seen.lines.map((line) => line.replace(/\s+/g, " "));
+	const want = ["Dangerous Goods, USA: 1.984 lb -> $60.00 $60.00", "<i>x</i> $60.00"];
+	assert(JSON.stringify(lines) === JSON.stringify(want), `lines: ${JSON.stringify(lines)}`);
+	assert(seen.italics === 0, "the unknown kind's text stays text");
+	assert(seen.total === "$60.00" && seen.days === "About 7 days", `total ${seen.total}, ${seen.days}`);
+});
+
 await check("a stored draft of this version is restored with its step, and can be discarded", async () => {
 	const draft = { ...original, not_covered: "no_delivery" };
 	await openWithStored({ version, draft, step: "rules" });
@@ -855,6 +883,16 @@ await check("at 760 px the tape stacks under the steps and nothing scrolls sidew
 });
 
 await check("no console errors or warnings and no failed requests", expectNoConsoleErrors);
+
+await check("log out, so that the run leaves no session behind on the ERP", async () => {
+	const user = await page.evaluate(async () => {
+		const headers = { Accept: "application/json", "X-Frappe-CSRF-Token": frappe.csrf_token };
+		await (await fetch("/api/method/logout", { method: "POST", headers })).text();
+		const after = await fetch("/api/method/frappe.auth.get_logged_user", { headers });
+		return after.ok ? (await after.json()).message : `HTTP ${after.status}`;
+	});
+	assert(user !== process.env.ERP_USER, "still signed in");
+});
 
 await browser.close();
 
