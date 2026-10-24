@@ -785,11 +785,13 @@ class TestWizardAccess(WizardTestCase):
 				"test_integration": "(order=None) -> dict",
 			},
 		)
-		# Apply writes, and the integration test makes HTTP calls: neither takes a GET request (a link cannot
-		# apply a policy or send the server out to the network).
+		# Apply writes, and the integration test and Try an order (asking the carrier, once a carton) make HTTP
+		# calls: none of them takes a GET request (a link cannot apply a policy or send the server out to the
+		# network; final review M5).
 		allowed = frappe.allowed_http_methods_for_whitelisted_func
 		self.assertEqual(allowed[wizard.apply_policy], ["POST"])
 		self.assertEqual(allowed[wizard.test_integration], ["POST"])
+		self.assertEqual(allowed[wizard.try_order], ["POST"])
 		self.assertIn("GET", allowed[wizard.wizard_state])
 
 	def test_the_methods_work_through_the_request_dispatcher_with_text_arguments(self):
@@ -821,6 +823,19 @@ class TestWizardAccess(WizardTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			dispatched("Administrator", "apply_policy", "GET", **posted["apply_policy"])
 		self.assertEqual(dispatched("Administrator", "wizard_state", "GET")["version"], saved["version"])
+		# Try an order asks the carrier once a carton when told to: a link (GET) cannot start it (final review M5).
+		asking = {
+			"draft": draft,
+			"order": json.dumps(sample(quotes=None)),
+			"ask_carrier": "true",
+			"city": "Dubai",
+		}
+		with carrier(return_value=rates(("A", "Express", 10.0))) as asked:
+			with self.assertRaises(frappe.PermissionError):
+				dispatched("Administrator", "try_order", "GET", **asking)
+			asked.assert_not_called()
+			dispatched("Administrator", "try_order", **asking)  # the page's POST
+			asked.assert_called_once()
 
 
 # ---------------------------------------------------------------- wizard_state

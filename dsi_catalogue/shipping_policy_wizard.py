@@ -220,7 +220,7 @@ def wizard_state() -> dict:
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def try_order(draft, order, ask_carrier=False, city=None) -> dict:
 	"""Price a sample order with the draft, not with the saved policy: {"result", "previews", "order"}.
 
@@ -242,7 +242,8 @@ def try_order(draft, order, ask_carrier=False, city=None) -> dict:
 	`result` is the engine's whole answer, the trace of each offer included; `previews` says, rule by rule,
 	what it would charge this order; `order` is the order as it was priced. Input that cannot be read is
 	refused with a plain sentence. Nothing is written, and a formula that fails is not logged: the page
-	prices the draft on every keystroke.
+	prices the draft on every keystroke. It takes POST requests only, as the page sends them: with
+	`ask_carrier` it sends this server out to the carrier, once a carton, and a link cannot start that.
 	"""
 	frappe.only_for("System Manager")
 	policy = _read_draft(draft)

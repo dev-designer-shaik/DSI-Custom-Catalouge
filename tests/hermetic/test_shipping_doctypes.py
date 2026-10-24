@@ -12,6 +12,7 @@ tools/erp2_push.sh copies only those, refuses anything outside its allow-list, a
 dependency order. It is run here against stand-ins for ssh and rsync, so nothing leaves the machine.
 """
 
+import ast
 import json
 import os
 import re
@@ -591,6 +592,37 @@ def test_the_wizard_page_is_a_standard_page_for_system_managers_only():
 	assert page["roles"] == [{"role": "System Manager"}], "one role row: System Manager"
 	assert page_file(".py").startswith("# Copyright"), "the Python file is the license stub"
 	assert "def " not in page_file(".py")
+
+
+def test_the_wizard_methods_that_write_or_reach_out_take_post_only():
+	"""The page's seven methods, read from the wizard module's decorators, and the three that take POST only, so
+	that a link opened by a signed-in System Manager (a GET) cannot start them: apply_policy writes, try_order asks
+	the carrier once a carton (up to 50) when told to, and test_integration calls the ERP's own price API and the
+	website (final review M5). The page sends every call as a POST (frappe.call)."""
+	tree = ast.parse((ROOT / "dsi_catalogue" / "shipping_policy_wizard.py").read_text(encoding="utf-8"))
+	whitelisted, post_only = set(), set()
+	for function in (node for node in tree.body if isinstance(node, ast.FunctionDef)):
+		for decorator in function.decorator_list:
+			call = decorator if isinstance(decorator, ast.Call) else None
+			if ast.unparse(call.func if call else decorator) != "frappe.whitelist":
+				continue
+			whitelisted.add(function.name)
+			given = {
+				keyword.arg: ast.literal_eval(keyword.value) for keyword in (call.keywords if call else [])
+			}
+			assert set(given) <= {"methods"}, f"{function.name}: {given}"
+			if given.get("methods") == ["POST"]:
+				post_only.add(function.name)
+	assert whitelisted == {
+		"wizard_state",
+		"try_order",
+		"check_formula",
+		"preview_changes",
+		"apply_policy",
+		"import_rate_card",
+		"test_integration",
+	}
+	assert post_only == {"try_order", "apply_policy", "test_integration"}
 
 
 def test_the_page_script_is_its_parts_stitched_in_by_the_desk():

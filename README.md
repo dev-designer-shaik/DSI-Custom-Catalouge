@@ -47,7 +47,8 @@ Token-gated (`X-DSI-Token`): `sync_product_catalogue`, `receive_publish_callback
 `receive_generation_callback`.
 System Manager only: the seven `shipping_policy_wizard` methods (`wizard_state`,
 `try_order`, `check_formula`, `preview_changes`, `apply_policy`, `import_rate_card`,
-`test_integration`; `apply_policy` and `test_integration` take POST only).
+`test_integration`; `apply_policy`, `try_order` and `test_integration` take POST
+only).
 Session-required: everything else (publish flow, `create_order_atomic`,
 `capture_web_lead`, gallery write, data_completion).
 
