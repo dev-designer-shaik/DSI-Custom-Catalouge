@@ -183,7 +183,14 @@ class RulesView {
 		return this.ui.open?.rule === rule && this.ui.open?.chip === chip;
 	}
 
+	// A set being made is never dropped by a chip, of its rule or another: it has its own Save and Cancel. The
+	// click shows where it is instead (its editor says to save or cancel it first).
 	toggle(card, chip) {
+		const making = this.ui.set_editor ? this.cards.get(this.ui.set_editor.rule) : null;
+		if (making) {
+			making.editor.querySelector('[data-testid="itemset-name"]')?.focus();
+			return;
+		}
 		if (this.is_open(card.rule, chip)) this.close();
 		else this.open(card, chip);
 	}

@@ -34,7 +34,9 @@ class RuleCard {
 						// the desk's own Escape (on the window) would take the focus away from the chip
 						event.preventDefault();
 						event.stopPropagation();
-						view.close();
+						// Escape closes the innermost thing: a set being made is cancelled first
+						if (view.ui.set_editor?.rule === this.rule) this.set_done(null);
+						else view.close();
 					}
 				},
 			});

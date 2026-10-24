@@ -1457,6 +1457,18 @@ await check("an item set that a rule uses is not deleted, a taken name is refuse
 	await page.keyboard.press("Enter");
 	await clickIn("rule-card", 1, "itemset-save");
 	await expectIn("rule-card", 1, "itemset-problem", "Another item set has this name.");
+	// a set being made is not dropped by a chip, of this rule or another: the editor says to save or cancel it
+	await expectIn("rule-card", 1, "itemset-editor", "Save the set or cancel it to edit anything else in the rules.");
+	for (const [n, chip] of [
+		[1, "chip-zone"],
+		[1, "chip-items"],
+		[2, "chip-charge"],
+	]) {
+		await clickIn("rule-card", n, chip);
+		assert(await (await nth("rule-card", 1)).$(by("itemset-editor")), `${chip} of rule ${n + 1} leaves the set editor open`);
+		assert((await valueIn("rule-card", 1, "itemset-name")) === "watches", "with what was typed in it");
+		assert((await focusedTestid()) === "itemset-name", `and shows where it is: ${await focusedTestid()}`);
+	}
 	await clickIn("rule-card", 1, "itemset-cancel");
 	assert((await focusedTestid()) === "itemset-new", "Cancel goes back to the sets");
 	await page.keyboard.press("Escape");

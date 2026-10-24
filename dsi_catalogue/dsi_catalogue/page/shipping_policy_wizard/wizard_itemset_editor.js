@@ -104,6 +104,8 @@ dsi_catalogue.ItemSetEditor = class ItemSetEditor {
 			),
 			shared ? el("p", { class: "sp-hint", "data-testid": "itemset-shared" }, shared) : null,
 			this.problem,
+			// while it is open the chips do not drop it (step_rules.js): it says so
+			el("p", { class: "sp-hint" }, __("Save the set or cancel it to edit anything else in the rules.")),
 			el(
 				"div",
 				{ class: "sp-editor-actions" },
