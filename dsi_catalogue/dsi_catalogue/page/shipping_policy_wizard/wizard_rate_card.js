@@ -18,7 +18,8 @@
 //	sp.zone_price_words(zone)   what a zone charges, words that start a sentence: "$35.00 at any weight", "Free at
 //	                            any weight", or "4 weight tiers from 0.01 to 7 lb, $75.00 to $135.00"
 //	sp.card_patterns(profile)   its product code patterns that are not blank, trimmed
-//	sp.patterns_words(profile)  "product codes F-*-PT and F-CR-PC-*", or that it has none yet
+//	sp.takes_every_item(profile)  whether one of its patterns is nothing but asterisks (it takes whatever is left)
+//	sp.codes_sentence(profile)  "Product codes F-*-PT and F-CR-PC-*.", "Every other product.", or that it has none
 //	sp.card_summary(policy, country_name)  the card in plain words, for the Review step
 //	sp.uses_the_card(policy)    whether anything prices from the card: the price source, or a fallback that says
 //	                            Use the rate card (shipping_policy.fallback_may_use_the_card, for an enabled zone)
@@ -147,15 +148,23 @@ Object.assign(sp, {
 			.filter(Boolean);
 	},
 
-	patterns_words(profile) {
-		const patterns = sp.card_patterns(profile);
-		return patterns.length
-			? __("product codes {0}", [sp.and_list(patterns)])
-			: __("no product codes yet, so it takes no item");
+	// Whether a profile takes every item: one of its patterns is nothing but asterisks.
+	takes_every_item(profile) {
+		return sp.card_patterns(profile).some((pattern) => !pattern.replace(/\*/g, ""));
 	},
 
-	// {intro, profiles: [{name, codes, zones: [text]}], not_delivered, none}: the card in plain words, in its order.
-	// `country_name(code)` names a country. A zone with many countries is counted, not listed.
+	// The items a profile takes, as a sentence: its product codes, every other product (a pattern of *: it takes
+	// whatever the profiles above it leave), or that it has none yet.
+	codes_sentence(profile) {
+		const patterns = sp.card_patterns(profile);
+		if (!patterns.length) return __("No product codes yet, so it takes no item.");
+		if (sp.takes_every_item(profile)) return __("Every other product.");
+		return __("Product codes {0}.", [sp.and_list(patterns.map((pattern) => sp.clip(pattern)))]);
+	},
+
+	// {intro, profiles: [{name, title, codes, zones: [text]}], not_delivered, none}: the card in plain words, in its
+	// order. `country_name(code)` names a country. A zone with many countries is counted, not listed. Names and
+	// methods are cut to 140 characters (sp.clip); `title` is a profile's whole name when it was cut, else "".
 	card_summary(policy, country_name = (code) => code) {
 		const card = policy?.rate_card;
 		const summary = {
@@ -171,29 +180,31 @@ Object.assign(sp, {
 			return summary;
 		}
 		const text = (value) => String(value ?? "").trim();
-		summary.profiles = sp.card_profiles(card).map((profile, index) => ({
-			name: text(profile.name) || __("Profile {0}, without a name", [index + 1]),
-			codes: sp.card_patterns(profile).length
-				? __("Product codes {0}.", [sp.and_list(sp.card_patterns(profile))])
-				: __("No product codes yet, so it takes no item."),
-			zones: sp.card_zones(profile).map((zone) => {
-				const codes = (Array.isArray(zone.countries) ? zone.countries : []).map(String);
-				let where = __("no country yet");
-				if (codes.length > CARD_NAMED_COUNTRIES) where = __("{0} countries", [codes.length]);
-				else if (codes.length) where = sp.and_list(codes.map((code) => country_name(code)));
-				const method = text(zone.method);
-				const prices = sp.zone_price_words(zone);
-				const said = method ? __("{0}, {1}", [prices, method]) : prices;
-				return __("{0}: {1}. {2}.", [text(zone.name) || __("a zone without a name"), where, said]);
-			}),
-		}));
+		summary.profiles = sp.card_profiles(card).map((profile, index) => {
+			const name = text(profile.name);
+			return {
+				name: sp.clip(name) || __("Profile {0}, without a name", [index + 1]),
+				title: sp.clip(name) === name ? "" : name,
+				codes: sp.codes_sentence(profile),
+				zones: sp.card_zones(profile).map((zone) => {
+					const codes = (Array.isArray(zone.countries) ? zone.countries : []).map(String);
+					let where = __("no country yet");
+					if (codes.length > CARD_NAMED_COUNTRIES) where = __("{0} countries", [codes.length]);
+					else if (codes.length) where = sp.country_list(codes.map((code) => sp.clip(country_name(code))));
+					const method = sp.clip(text(zone.method));
+					const prices = sp.zone_price_words(zone);
+					const said = method ? __("{0}, {1}", [prices, method]) : prices;
+					return __("{0}: {1}. {2}.", [sp.clip(text(zone.name)) || __("a zone without a name"), where, said]);
+				}),
+			};
+		});
 		const closed = (Array.isArray(policy?.zones) ? policy.zones : []).filter(
 			(zone) => sp.is_record(zone) && zone.enabled && zone.not_shipped && Array.isArray(zone.countries)
 		);
 		const codes = [...new Set(closed.flatMap((zone) => zone.countries.map(String)))];
 		if (codes.length) {
 			summary.not_delivered = __("Delivery is not offered to {0}: their zone is not shipped to.", [
-				sp.and_list(codes.map((code) => country_name(code))),
+				sp.country_list(codes.map((code) => country_name(code))),
 			]);
 		}
 		return summary;

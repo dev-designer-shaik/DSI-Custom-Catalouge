@@ -194,15 +194,10 @@ class ZoneCard {
 			"data-testid": "zone-name",
 		});
 		this.name.addEventListener("focus", () => this.begin_rename());
+		// trimmed once committed, while the rename still tracks its rules; then the rename is over
+		commit_on_leave(this.name, () => this.commit_name());
 		this.name.addEventListener("blur", () => {
-			this.commit_name();
 			this.renaming = null;
-		});
-		this.name.addEventListener("keydown", (event) => {
-			if (event.key === "Enter") {
-				event.preventDefault();
-				this.commit_name();
-			}
 		});
 		this.name.addEventListener("input", () => this.rename());
 		this.state = el("span", { class: "sp-states", "data-testid": "zone-state" });
@@ -492,13 +487,14 @@ class ZoneCard {
 		this.everywhere_note.hidden = !zone.everywhere_else;
 		this.country_problem.textContent = this.country_refusal;
 
-		// the countries no carrier serves (in rate-card mode the carrier is not asked)
+		// the countries no carrier serves (in rate-card mode the carrier is not asked), apart by semicolons: a
+		// country's own name can hold a comma (sp.country_list)
 		const served = new Set(this.wizard.state.served_codes || []);
 		const unserved = codes.filter((code) => !served.has(code));
 		const warn = unserved.length && !zone.not_shipped && this.wizard.price_source() === "carrier";
 		this.unserved.textContent = warn
 			? __("No carrier serves: {0}. While prices come from the carrier, customers there are not offered delivery.", [
-					unserved.map((code) => view.country_name(code)).join(", "),
+					sp.country_list(unserved.map((code) => view.country_name(code))),
 			  ])
 			: "";
 		this.unserved.hidden = !warn;

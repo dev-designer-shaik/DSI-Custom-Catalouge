@@ -1475,9 +1475,11 @@ def test_the_rate_card_is_said_in_plain_words(tmp_path, wizard_module):
 		summary["profiles"][2]["zones"][3]
 		== "Bahrain (Local): BH. Free at any weight, Free Shipping (1-2 days)."
 	)
+	# country names apart by semicolons: a name can hold a comma or an "and"
 	assert summary["not_delivered"] == (
-		"Delivery is not offered to Afghanistan and Russian Federation: their zone is not shipped to."
+		"Delivery is not offered to Afghanistan; Russian Federation: their zone is not shipped to."
 	)
+	assert summary["profiles"][3]["codes"] == "Every other product.", "the profile with * takes what is left"
 	assert got["none"]["none"] == "There is no rate card yet." and got["none"]["profiles"] == []
 	assert got["review"] == summary, "the Review says the card with the same words, in rate-card mode only"
 	assert got["carrier"] is None

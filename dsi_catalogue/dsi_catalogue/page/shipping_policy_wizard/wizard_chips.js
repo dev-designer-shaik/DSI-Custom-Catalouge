@@ -1,9 +1,12 @@
 // Part of the Shipping policy wizard page: shipping_policy_wizard.js stitches it in and says how.
 //
-// What the Zones and Rules steps share:
+// What the steps share (the Zones and Rules steps first, the Rates step and the Review since):
 //	sp.fold_name, sp.unique_name  names compared as the ERP compares them, and a new name nobody has yet
 //	sp.and_list                   "2", "2 and 3", "2, 3 and 4"
+//	sp.country_list               country names apart by semicolons: a name can hold a comma or an "and"
 //	NAME_LENGTH, strip_angles     the limits of a name the ERP can keep: 140 characters, no < or >
+//	commit_on_leave               a name field trimmed once its name is committed (the field left, or Enter)
+//	sp.clip                       a text as it is shown: at most 140 characters (the whole of it stays in the draft)
 //	token_list, focus_token       removable tokens: the countries of a zone, the groups and items of a set
 //	Announcer                     a polite live region that says what a click added, moved or deleted
 //	desk_list                     rows of a desk doctype through frappe.client.get_list
@@ -33,7 +36,33 @@ Object.assign(sp, {
 		if (words.length < 2) return words.join("");
 		return __("{0} and {1}", [words.slice(0, -1).join(", "), words[words.length - 1]]);
 	},
+
+	// Country names as a list says them: apart by semicolons, since a country's own name can hold a comma or an
+	// "and" ("Korea, Democratic Peoples Republic of", "Heard Island and McDonald Islands").
+	country_list(names) {
+		return names.join("; ");
+	},
+
+	// A text as the page shows it: at most `limit` characters, the last of them an ellipsis when it is cut. A name
+	// a file brought in can be of any length (the rate card's own check refuses it); the draft keeps it whole, and
+	// whatever shows a cut text gives the whole of it as its title.
+	clip(text, limit = NAME_LENGTH) {
+		const whole = String(text ?? "");
+		return whole.length > limit ? `${whole.slice(0, limit - 1)}…` : whole;
+	},
 });
+
+// A field whose text is kept without the spaces around it, as the ERP keeps a name: `commit` runs once the text is
+// committed, when the field is left or Enter is pressed. While it is typed, a space at its end stays.
+function commit_on_leave(input, commit) {
+	input.addEventListener("blur", commit);
+	input.addEventListener("keydown", (event) => {
+		if (event.key === "Enter") {
+			event.preventDefault();
+			commit();
+		}
+	});
+}
 
 // The ERP refuses < and > in the name of a zone or an item set, so a name field takes them out as they are
 // typed (or pasted): the field keeps the rest, with the caret where it was. Returns whether any was taken out.
@@ -47,29 +76,32 @@ function strip_angles(input) {
 }
 
 // A list of removable tokens: [{key, text}], each a list item with its text and a button that removes it
-// (named "Remove <text>", so it is found by its words). remove(key, index) is called on a click.
+// (named "Remove <text>", so it is found by its words). remove(key, index) is called on a click. A text longer
+// than a name may be is shown cut (sp.clip), with the whole of it as its title.
 function token_list({ tokens, label, testid, remove_testid, remove }) {
 	return el(
 		"ul",
 		{ class: "sp-tokens", "aria-label": label },
-		tokens.map((token, index) =>
-			el(
+		tokens.map((token, index) => {
+			const text = String(token.text ?? "");
+			const shown = sp.clip(text);
+			return el(
 				"li",
 				{ class: "sp-token", "data-testid": testid, "data-key": token.key },
-				el("span", { class: "sp-token-text" }, token.text),
+				el("span", { class: "sp-token-text", title: shown === text ? null : text }, shown),
 				el(
 					"button",
 					{
 						type: "button",
 						class: "sp-token-remove",
-						"aria-label": __("Remove {0}", [token.text]),
+						"aria-label": __("Remove {0}", [shown]),
 						"data-testid": remove_testid,
 						onclick: () => remove(token.key, index),
 					},
 					"×"
 				)
-			)
-		)
+			);
+		})
 	);
 }
 

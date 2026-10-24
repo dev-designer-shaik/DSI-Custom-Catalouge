@@ -18,11 +18,6 @@
 
 let rate_cards = 0; // ids for the labels of each profile, zone and tier
 
-// Whether a profile takes every item: one of its patterns is nothing but asterisks.
-function takes_every_item(profile) {
-	return sp.card_patterns(profile).some((pattern) => !pattern.replace(/\*/g, ""));
-}
-
 // A name as the rate card compares two: runs of spaces as one, capital letters aside (shipping_rate_card).
 function card_name_key(name) {
 	return String(name ?? "")
@@ -32,16 +27,13 @@ function card_name_key(name) {
 		.toLowerCase();
 }
 
-// A name typed into the card is kept without the spaces around it, once it is committed (the field is left, or
-// Enter is pressed): while it is typed, a space at its end stays, so that words can be typed.
-function commit_on_leave(input, commit) {
-	input.addEventListener("blur", commit);
-	input.addEventListener("keydown", (event) => {
-		if (event.key === "Enter") {
-			event.preventDefault();
-			commit();
-		}
-	});
+// Shows a name in an element cut to 140 characters (sp.clip), with the whole of it as the element's title.
+function show_name(element, name) {
+	const shown = sp.clip(name);
+	element.textContent = shown;
+	if (shown === name) element.removeAttribute("title");
+	else element.setAttribute("title", name);
+	return shown;
 }
 
 class RateCardView {
@@ -82,6 +74,19 @@ class RateCardView {
 				{ class: "sp-sheet-note" },
 				__(
 					"Weights are in pounds and prices in US dollars. Each item takes the first profile, from the top, whose product codes fit it."
+				)
+			),
+			// how a pattern is written, said once for every profile's field (each describes itself by it)
+			el(
+				"details",
+				{ class: "sp-pattern-help", "data-testid": "rates-pattern-help" },
+				el("summary", {}, __("How product codes are written")),
+				el(
+					"p",
+					{ class: "sp-hint", id: "sp-pattern-help" },
+					__(
+						"Write a product code without braces. * stands for any run of characters, ? for any one character and [AB] for one of the characters listed. Each item takes the first profile, from the top, with a pattern that fits its product code, so the profile with * goes last."
+					)
 				)
 			),
 			this.list,
@@ -134,7 +139,7 @@ class RateCardView {
 		const profile = sp.new_card_profile(name);
 		// the profile that takes every item stays last: a new one goes before it
 		const last = profiles[profiles.length - 1];
-		const at = sp.is_record(last) && takes_every_item(last) ? profiles.length - 1 : profiles.length;
+		const at = sp.is_record(last) && sp.takes_every_item(last) ? profiles.length - 1 : profiles.length;
 		this.ui.open.add(profile);
 		this.wizard.change((draft) => {
 			if (!Array.isArray(draft.rate_card.profiles)) draft.rate_card.profiles = [];
@@ -166,7 +171,7 @@ class RateCardView {
 			const at = this.profiles.indexOf(profile);
 			if (at < 0) return null;
 			this.wizard.change((draft) => draft.rate_card.profiles.splice(at, 1));
-			this.live.say(__("Profile deleted: {0}.", [String(profile.name ?? "")]));
+			this.live.say(__("Profile deleted: {0}.", [sp.clip(profile.name)]));
 			return at;
 		};
 		const focus = (at) => {
@@ -201,7 +206,7 @@ class RateProfileCard {
 		this.index = 0;
 		this.zones = new Map(); // zone object -> RateZoneCard
 		this.built = false;
-		this.pattern_refusal = ""; // why the last pattern was not added, until the next is typed
+		this.pattern_refusal = ""; // why the last pattern was not added: until one is typed, added or removed
 		this.number = el("span", { class: "sp-profile-number", "aria-hidden": "true" });
 		this.title = el("span", { class: "sp-profile-title" });
 		this.about = el("span", { class: "sp-disclosure-about" });
@@ -248,21 +253,17 @@ class RateProfileCard {
 		this.index = index;
 		const place = index + 1;
 		const name = String(profile.name ?? "").trim();
-		const shown = name || __("A profile without a name");
 		this.number.textContent = String(place);
-		this.title.textContent = shown;
+		const shown = show_name(this.title, name || __("A profile without a name"));
 		const zones = sp.card_zones(profile);
 		const tiers = zones.reduce((sum, zone) => sum + sp.card_tiers(zone).length, 0);
-		const codes = sp.card_patterns(profile).length
-			? __("Product codes {0}.", [sp.and_list(sp.card_patterns(profile))])
-			: __("No product codes yet, so it takes no item.");
 		let holds = __("No zone yet.");
 		if (zones.length) {
 			const zone_words = zones.length === 1 ? __("1 zone") : __("{0} zones", [zones.length]);
 			const tier_words = tiers === 1 ? __("1 weight tier") : __("{0} weight tiers", [tiers]);
 			holds = __("{0} with {1}.", [zone_words, tier_words]);
 		}
-		this.about.textContent = __("{0} {1}", [codes, holds]);
+		this.about.textContent = __("{0} {1}", [sp.codes_sentence(profile), holds]);
 		this.root.setAttribute("aria-label", __("Profile {0}: {1}", [place, shown]));
 		this.up.setAttribute("aria-disabled", String(index === 0));
 		this.down.setAttribute("aria-disabled", String(index >= total - 1));
@@ -314,7 +315,7 @@ class RateProfileCard {
 			autocomplete: "off",
 			spellcheck: "false",
 			placeholder: __("Such as F-*-PT"),
-			"aria-describedby": `${uid}-pattern-problem ${uid}-pattern-help`,
+			"aria-describedby": `${uid}-pattern-problem sp-pattern-help`,
 			"data-testid": "rates-pattern-input",
 		});
 		this.pattern_input.addEventListener("input", () => {
@@ -377,14 +378,7 @@ class RateProfileCard {
 				el("label", { class: "sp-label", for: `${uid}-pattern` }, __("Product codes")),
 				this.patterns,
 				el("div", { class: "sp-pattern-row" }, this.pattern_input, this.pattern_add),
-				this.pattern_problem,
-				el(
-					"p",
-					{ class: "sp-hint", id: `${uid}-pattern-help` },
-					__(
-						"Write a product code without braces. * stands for any run of characters, ? for any one character and [AB] for one of the characters listed. Each item takes the first profile, from the top, with a pattern that fits its product code, so the profile with * goes last."
-					)
-				)
+				this.pattern_problem
 			),
 			el(
 				"div",
@@ -398,12 +392,13 @@ class RateProfileCard {
 		this.built = true;
 	}
 
-	// A closed profile draws nothing: its zones and their countries leave the page.
+	// A closed profile draws nothing: its zones and their countries leave the page, and a refusal it said goes.
 	unbuild() {
 		this.body.replaceChildren();
 		this.zones.clear();
 		this.built = false;
 		this.name = null;
+		this.pattern_refusal = "";
 	}
 
 	update_body() {
@@ -436,7 +431,7 @@ class RateProfileCard {
 			: count
 			? ""
 			: __("No zone yet: this profile delivers nowhere until it has one.");
-		this.delete.setAttribute("aria-label", __("Delete the profile {0}", [name.trim() || String(this.index + 1)]));
+		this.delete.setAttribute("aria-label", __("Delete the profile {0}", [sp.clip(name.trim()) || String(this.index + 1)]));
 	}
 
 	// The patterns as removable chips: drawn again only when the list changed, so a chip keeps the focus.
@@ -487,9 +482,10 @@ class RateProfileCard {
 
 	remove_pattern(at, index) {
 		const removed = String(this.profile.match[at] ?? "");
+		this.pattern_refusal = ""; // a refusal said of the patterns before is out of date now
 		this.wizard.change(() => this.profile.match.splice(at, 1));
 		focus_token(this.patterns.firstChild, index, this.pattern_input);
-		this.sheet.live.say(__("Pattern removed: {0}.", [removed]));
+		this.sheet.live.say(__("Pattern removed: {0}.", [sp.clip(removed)]));
 	}
 
 	add_zone() {
@@ -517,7 +513,7 @@ class RateProfileCard {
 			const at = this.profile.zones.indexOf(zone);
 			if (at < 0) return null;
 			this.wizard.change(() => this.profile.zones.splice(at, 1));
-			this.sheet.live.say(__("Zone deleted: {0}.", [String(zone.name ?? "")]));
+			this.sheet.live.say(__("Zone deleted: {0}.", [sp.clip(zone.name)]));
 			return at;
 		};
 		const focus = (at) => {
