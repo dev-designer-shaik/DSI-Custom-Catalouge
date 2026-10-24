@@ -195,7 +195,14 @@ class ZoneCard {
 		});
 		this.name.addEventListener("focus", () => this.begin_rename());
 		this.name.addEventListener("blur", () => {
+			this.commit_name();
 			this.renaming = null;
+		});
+		this.name.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				this.commit_name();
+			}
 		});
 		this.name.addEventListener("input", () => this.rename());
 		this.state = el("span", { class: "sp-states", "data-testid": "zone-state" });
@@ -425,6 +432,17 @@ class ZoneCard {
 			this.name_note = __("A zone's name cannot hold < or >.");
 			this.update(this.index);
 		}
+	}
+
+	// The ERP keeps a zone's name without the spaces around it, and its rules name the zone so: once the name is
+	// committed (the field is left, or Enter is pressed) it is trimmed, in the field, the zone and the rules the
+	// rename takes along, so the draft never holds the spaces. While it is typed, a space at its end stays.
+	commit_name() {
+		const typed = this.name.value;
+		const trimmed = typed.trim();
+		if (trimmed === typed) return;
+		this.name.value = trimmed;
+		this.rename();
 	}
 
 	// The tokens of the zone's countries: drawn again only when the list changed, so a token keeps the focus.

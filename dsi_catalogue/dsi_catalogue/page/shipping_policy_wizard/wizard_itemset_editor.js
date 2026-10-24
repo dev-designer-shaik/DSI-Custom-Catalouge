@@ -41,6 +41,22 @@ dsi_catalogue.ItemSetEditor = class ItemSetEditor {
 			state.problem = stripped ? __("A set's name cannot hold < or >.") : "";
 			this.show_problem();
 		});
+		// The ERP keeps a set's name without the spaces around it: once the name is committed (the field is left, or
+		// Enter is pressed) it is trimmed in the field and in the editor's copy, as Save trims what goes into the
+		// draft. While it is typed, a space at its end stays.
+		const commit = () => {
+			const trimmed = this.name.value.trim();
+			if (trimmed === this.name.value) return;
+			this.name.value = trimmed;
+			state.name = trimmed;
+		};
+		this.name.addEventListener("blur", commit);
+		this.name.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				commit();
+			}
+		});
 
 		this.groups = el("div", { class: "sp-token-box" });
 		this.group_picker = new dsi_catalogue.CountryPicker({
