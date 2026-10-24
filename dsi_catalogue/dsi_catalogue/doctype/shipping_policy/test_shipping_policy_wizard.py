@@ -420,12 +420,25 @@ def imported(config=CONFIG_CSV, not_delivered=NOT_DELIVERED_CSV) -> dict:
 	return answer
 
 
-def sample_items() -> list[dict]:
+def weighed(test, kind, *kilos) -> list[str]:
+	"""The item codes of the first published Website Items of `kind` (`website_items`), one for each of
+	`kilos`, each given that unit weight until the test ends: 0 for none on file, which the card prices at its
+	default weight (0.35 kg). A test that prices from the card says what each item weighs, so what the site
+	holds (erp2's items have no weight, a replica of the live ERP's may) never changes its answer."""
+	found = website_items(kind, len(kilos))
+	for (code, _), weight in zip(found, kilos, strict=True):
+		weigh(test, code, weight)
+	return [code for code, _ in found]
+
+
+def sample_items(test) -> list[dict]:
 	"""The items of the default sample order of `test_integration`: the first published full-size fragrance and
-	the first published watch of the site."""
-	[(fragrance, _)] = website_items(FRAGRANCE)
-	[(timepiece, _)] = website_items(OTHER)
-	return [{"item_code": fragrance, "qty": 1.0}, {"item_code": timepiece, "qty": 1.0}]
+	the first published {P-% item of the site (the integration check calls it a watch; on erp2 it is a
+	ballpoint pen), each given no weight until the test ends, so that the card prices each at its default
+	weight: 60 and 40 to the USA."""
+	[fragrance] = weighed(test, FRAGRANCE, 0)
+	[other] = weighed(test, OTHER, 0)
+	return [{"item_code": fragrance, "qty": 1.0}, {"item_code": other, "qty": 1.0}]
 
 
 class Reply:
@@ -2691,13 +2704,13 @@ class TestRateCardDrafts(WizardTestCase):
 
 	def test_try_order_in_rate_card_mode_prices_a_draft(self):
 		seed_policy(load_example(), active=False)
-		[(fragrance, _), (second, _)] = website_items(FRAGRANCE, 2)
-		[(timepiece, _)] = website_items(OTHER)
+		fragrance, second = weighed(self, FRAGRANCE, 0, 0)
+		[timepiece] = weighed(self, OTHER, 0)
 		draft = with_card(wizard.wizard_state()["policy"])
 		untouched = copy.deepcopy(draft)
 		self.assertFalse(draft["active"])
 		before = snapshot()
-		# A fragrance and a watch to the USA: 60 and 40, each at the weight it defaults to (no item has one here).
+		# A fragrance and the catch-all item to the USA: 60 and 40, each at the default weight (given none).
 		items = one_of(fragrance) + one_of(timepiece)
 		with carrier(return_value=rates(("A", "Express", 10.0))) as asked:
 			answer = tried(
@@ -2794,15 +2807,14 @@ class TestRateCardDrafts(WizardTestCase):
 	def test_try_order_and_price_delivery_give_the_same_answer_for_a_rate_card_policy(self):
 		seed_policy(card_policy(), active=True)
 		draft = wizard.wizard_state()["policy"]
-		[(fragrance, _), (weighed, _)] = website_items(FRAGRANCE, 2)
-		[(timepiece, _)] = website_items(OTHER)
-		[(refill, _)] = website_items(REFILL)
-		weigh(self, weighed, 1.0)
+		fragrance, heavy = weighed(self, FRAGRANCE, 0, 1.0)
+		[timepiece] = weighed(self, OTHER, 0)
+		[refill] = weighed(self, REFILL, 0)
 		plain = ([ONE_BOX], [QUOTE])
 		orders = {
 			"a fragrance at the weight it defaults to": ("US", one_of(fragrance), *plain),
 			"two of them": ("US", one_of(fragrance, 2), *plain),
-			"a fragrance with a weight": ("US", one_of(weighed), *plain),
+			"a fragrance with a weight": ("US", one_of(heavy), *plain),
 			"a mixed cart": ("US", one_of(fragrance) + one_of(timepiece), [], []),
 			"a refill": ("US", one_of(refill), *plain),
 			"a watch": ("US", one_of(timepiece), *plain),
@@ -2837,8 +2849,8 @@ class TestRateCardDrafts(WizardTestCase):
 			zone_named(policy, name)["fallback"] = {"method": "rate_card", "amount": 0.0}
 		seed_policy(policy, active=True)
 		draft = wizard.wizard_state()["policy"]
-		[(fragrance, _)] = website_items(FRAGRANCE)
-		[(timepiece, _)] = website_items(OTHER)
+		[fragrance] = weighed(self, FRAGRANCE, 0)
+		[timepiece] = weighed(self, OTHER, 0)
 		short = quote_of(10.0, service_id="short", name="Short", boxes_quoted=1)
 		orders = {
 			"the carrier cannot quote, a fragrance in the Gulf": ("AE", one_of(fragrance), [ONE_BOX], []),
@@ -2873,8 +2885,8 @@ class TestRateCardDrafts(WizardTestCase):
 		zone_named(policy, "GCC")["fallback"] = {"method": "policy_default", "amount": 0.0}
 		seed_policy(policy, active=True)
 		draft = wizard.wizard_state()["policy"]
-		[(fragrance, _)] = website_items(FRAGRANCE)
-		[(timepiece, _)] = website_items(OTHER)
+		[fragrance] = weighed(self, FRAGRANCE, 0)
+		[timepiece] = weighed(self, OTHER, 0)
 		orders = {
 			"the carrier cannot quote, a fragrance in the Gulf": ("AE", one_of(fragrance), [ONE_BOX], []),
 			"the carrier cannot quote, a watch in the Gulf": ("AE", one_of(timepiece), [ONE_BOX], []),
@@ -2920,7 +2932,7 @@ class TestRateCardDrafts(WizardTestCase):
 	def test_try_order_reads_a_draft_that_leaves_out_what_is_empty_when_it_decides_about_the_facts(self):
 		seed_policy(card_policy(price_source="carrier"), active=True)
 		saved = wizard.wizard_state()["policy"]
-		[(fragrance, _)] = website_items(FRAGRANCE)
+		[fragrance] = weighed(self, FRAGRANCE, 0)
 		loose = copy.deepcopy(saved)
 		loose["default_fallback"] = {}
 		loose["zones"] = [
@@ -3146,7 +3158,7 @@ class TestRateCardDrafts(WizardTestCase):
 		self.assertEqual(result["changes"]["settings"], ["price_source", "rate_card"])
 		self.assertEqual(result["version"], wizard.wizard_state()["version"])
 		# Live at once: a fragrance and a watch to the USA are priced from the card.
-		priced = guest_price("US", items=sample_items())
+		priced = guest_price("US", items=sample_items(self))
 		self.assertEqual(
 			(
 				priced["policy_active"],
@@ -3167,7 +3179,7 @@ class TestRateCardDrafts(WizardTestCase):
 
 	def test_a_draft_that_changes_only_the_price_source_or_only_the_card_is_applied(self):
 		seed_policy(card_policy(price_source="carrier"), active=True)
-		[(refill, _)] = website_items(REFILL)
+		[refill] = weighed(self, REFILL, 0)
 		opened = wizard.wizard_state()
 		stamps = snapshot()["stamps"]
 		draft = copy.deepcopy(opened["policy"])
@@ -3411,7 +3423,7 @@ class TestRateCardDrafts(WizardTestCase):
 		}
 		self.assertEqual(wizard.preview_changes(ordinary)["problems"], [])
 		# Trying an order is not saving: it prices with such a card all the same.
-		[(fragrance, _)] = website_items(FRAGRANCE)
+		[fragrance] = weighed(self, FRAGRANCE, 0)
 		answer = tried(
 			{**opened["policy"], "rate_card": {**CARD, "extra": deep}}, sample("US", one_of(fragrance))
 		)
@@ -3487,7 +3499,7 @@ class TestTestIntegration(WizardTestCase):
 
 	def test_test_integration_runs_all_three_checks_with_mocked_http(self):
 		seed_policy(card_policy(), active=True)  # the rate card is the price source
-		items = sample_items()
+		items = sample_items(self)
 		answer = shipping_policy.price_delivery("US", json.dumps(items))
 		amount = first_amount(answer)
 		self.assertEqual(
@@ -3592,7 +3604,7 @@ class TestTestIntegration(WizardTestCase):
 
 	def test_test_integration_sends_a_sample_carton_and_no_quotes_when_the_carrier_is_the_price_source(self):
 		seed_policy(card_policy(price_source="carrier"), active=True)
-		items = sample_items()
+		items = sample_items(self)
 		boxes = json.dumps([{"weight_kg": 1.0, "volume_l": 3.0}])
 		answer = shipping_policy.price_delivery("US", json.dumps(items), boxes, "[]")
 		self.assertEqual(
@@ -3626,7 +3638,7 @@ class TestTestIntegration(WizardTestCase):
 
 	def test_the_verdict_follows_what_the_three_checks_found(self):
 		seed_policy(card_policy(), active=True)
-		items = sample_items()
+		items = sample_items(self)
 		answer = shipping_policy.price_delivery("US", json.dumps(items))
 		no_rates = {"return_value": {"success": True, "rates": []}}
 		good = {"return_value": rates(THE_CARRIER)}
@@ -3759,7 +3771,7 @@ class TestTestIntegration(WizardTestCase):
 		carrier_patch = carrier(return_value=rates(THE_CARRIER))
 		carrier_patch.start()
 		self.addCleanup(carrier_patch.stop)
-		items = sample_items()
+		items = sample_items(self)
 		erp = Reply(200, {"message": shipping_policy.price_delivery("US", json.dumps(items))})
 		erp_url = frappe.utils.get_url() + PRICE_API
 		never = AssertionError("the website was called")
@@ -3933,7 +3945,7 @@ class TestTestIntegration(WizardTestCase):
 				self.assertTrue(reply.closed)
 		# All the way through: the website check says it did not answer, not that it did not answer with JSON.
 		seed_policy(card_policy(), active=True)
-		answer = shipping_policy.price_delivery("US", json.dumps(sample_items()))
+		answer = shipping_policy.price_delivery("US", json.dumps(sample_items(self)))
 		with (
 			the_network(Reply(200, {"message": answer}), Reply(200, chunks=stalls())),
 			carrier(return_value=rates(THE_CARRIER)),
@@ -3946,7 +3958,7 @@ class TestTestIntegration(WizardTestCase):
 
 	def test_the_erps_own_address_is_not_taken_from_the_headers_of_the_request(self):
 		seed_policy(card_policy(), active=True)
-		answer = shipping_policy.price_delivery("US", json.dumps(sample_items()))
+		answer = shipping_policy.price_delivery("US", json.dumps(sample_items(self)))
 		request = types.SimpleNamespace(
 			method="POST",
 			path=f"/api/method/{wizard.__name__}.test_integration",
@@ -4008,7 +4020,7 @@ class TestTestIntegration(WizardTestCase):
 
 	def test_test_integration_survives_timeouts_and_garbage(self):
 		seed_policy(card_policy(), active=True)
-		items = sample_items()
+		items = sample_items(self)
 		answer = shipping_policy.price_delivery("US", json.dumps(items))
 		errors = frappe.db.count("Error Log")
 		shown = len(frappe.local.message_log)
@@ -4096,7 +4108,7 @@ class TestTestIntegration(WizardTestCase):
 
 	def test_the_carrier_check_survives_what_the_shipping_module_can_do(self):
 		seed_policy(card_policy(), active=True)
-		answer = shipping_policy.price_delivery("US", json.dumps(sample_items()))
+		answer = shipping_policy.price_delivery("US", json.dumps(sample_items(self)))
 		errors, shown = frappe.db.count("Error Log"), len(frappe.local.message_log)
 
 		def throws(**arguments):
@@ -4162,7 +4174,7 @@ class TestTestIntegration(WizardTestCase):
 
 	def test_an_unexpected_error_is_logged_once_and_reported_plainly(self):
 		seed_policy(card_policy(), active=True)
-		answer = shipping_policy.price_delivery("US", json.dumps(sample_items()))
+		answer = shipping_policy.price_delivery("US", json.dumps(sample_items(self)))
 		real_post = wizard._post_json
 
 		def breaks_on_the_website(url, payload):
@@ -4216,7 +4228,7 @@ class TestTestIntegration(WizardTestCase):
 			self.assertEqual(len(wizard.test_integration()["checks"]), 3)
 
 	def test_the_sample_order_comes_from_the_site_and_can_be_changed(self):
-		items = sample_items()
+		items = sample_items(self)
 		[(fragrance, _)] = website_items(FRAGRANCE)
 
 		def ordered(order=None):
