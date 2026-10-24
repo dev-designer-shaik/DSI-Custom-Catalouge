@@ -14,9 +14,10 @@ The draft is a policy in the shape `shipping_engine` documents, as `wizard_state
 edits it in the browser, with its price source and rate card. Only `apply_policy` writes. It takes the whole
 draft in one request, refuses it when someone changed the policy after the wizard loaded it or when the draft
 has a problem (the rate card included), and writes it inside one savepoint, so that a failure at any step
-rolls back every step before it: a half-finished policy never goes live. Applies are taken one at a time.
-`import_rate_card` only reads: the page puts the card it returns into the draft, and Apply is still the only
-writer.
+rolls back every step before it: a half-finished policy never goes live. Two Applies never write at the
+same moment (a file lock); the lock is let go before the request commits, so it does not order them up to
+the commit, and the stale-version check and the database's own checks catch the rest. `import_rate_card`
+only reads: the page puts the card it returns into the draft, and Apply is still the only writer.
 
 Before a draft is priced, checked, compared or written it is read as it will be stored: names and codes
 without outer spaces, country codes in capitals, amounts rounded to cents and weights and volumes to the
@@ -88,8 +89,10 @@ POLICY = "Shipping Policy"
 ZONE = "Shipping Zone"
 ITEM_SET = "Shipping Item Set"
 
-# One apply at a time, across every worker of the site: a second one waits this long for the first to
-# finish, and is then refused.
+# Two applies never write at the same moment, across every worker of the site: a second one waits this long
+# for the first to finish writing, and is then refused. The lock is let go when the first has written, before
+# Frappe commits the request, so it is no guarantee that the second sees what the first wrote: the
+# stale-version check and the database's own checks (row locks, unique names) catch the rest.
 APPLY_LOCK = "shipping_policy_apply"
 APPLY_LOCK_SECONDS = 30
 _SAVEPOINT = "shipping_policy_apply"
@@ -316,8 +319,12 @@ def apply_policy(draft, expected_version) -> dict:
 	to refresh through dsi_core's outbox, when the site has it. Returns the new version and the changes
 	(`diff_policy(policy before, draft)`).
 
-	Only one apply runs at a time: a second waits for the first, and is refused if that takes over 30 seconds.
-	It is the one method that writes, so it takes POST requests only (a link cannot apply a policy).
+	Two applies never write at the same moment: a second waits for the first to finish writing, and is
+	refused if that takes over 30 seconds. The lock is let go before the first is committed, so it does not
+	order applies up to the commit: the stale-version check and the database's own checks (row locks, unique
+	names) catch the rest of a collision, but two drafts that pass on their own and clash only together (one
+	country put in two zones by two applies at once) are not caught. It is the one method that writes, so it
+	takes POST requests only (a link cannot apply a policy).
 	"""
 	frappe.only_for("System Manager")
 	try:
