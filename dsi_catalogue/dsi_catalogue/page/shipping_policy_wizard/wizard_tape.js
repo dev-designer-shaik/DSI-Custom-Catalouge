@@ -612,28 +612,23 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			this.after_total.textContent = days === 1 ? __("About 1 day") : __("About {0} days", [days]);
 			this.after_total.hidden = false;
 		}
+		// The other delivery methods, a quiet row each (its name, what it costs), so that the total above stays
+		// the one loud figure.
 		if (others.length) {
-			this.more.append(el("h3", { class: "sp-more-title" }, __("Other delivery methods")));
-			for (const offer of others) {
-				const amount = this.amount_of(offer);
-				this.more.append(
-					el(
-						"div",
-						{ class: "sp-offer" },
-						this.offer_lines(offer, true),
-						el(
-							"p",
-							{ class: "sp-offer-total" },
-							el("span", {}, this.total_label.textContent),
-							el(
-								"span",
-								{ class: amount === 0 ? "sp-money is-free" : "sp-money" },
-								amount === 0 ? __("Free") : sp.money(amount)
-							)
-						)
-					)
+			const row = (offer) => {
+				const amount = offer.amount;
+				const price = amount === 0 ? __("Free") : sp.is_number(amount) ? sp.money(amount) : "";
+				return el(
+					"li",
+					{ class: "sp-more-row" },
+					el("span", { class: "sp-more-name" }, String(offer.name || offer.service_id || "")),
+					el("span", { class: amount === 0 ? "sp-money is-free" : "sp-money" }, price)
 				);
-			}
+			};
+			this.more.append(
+				el("h3", { class: "sp-more-title" }, __("Other delivery methods")),
+				el("ul", { class: "sp-more-list", "data-testid": "tape-more" }, others.map(row))
+			);
 			this.more.hidden = false;
 		}
 	}

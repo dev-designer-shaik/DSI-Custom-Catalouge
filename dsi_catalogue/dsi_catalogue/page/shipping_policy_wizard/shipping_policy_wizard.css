@@ -523,11 +523,12 @@
 	text-align: right;
 }
 
+/* the other delivery methods: a quiet row each, so the total above stays the one loud figure */
 .sp-wizard .sp-more {
 	display: grid;
-	gap: 14px;
-	margin-top: 18px;
-	padding-top: 14px;
+	gap: 6px;
+	margin-top: 16px;
+	padding-top: 12px;
 	border-top: 1px dashed var(--sp-rule);
 	font-size: var(--text-sm);
 	line-height: 1.45;
@@ -540,16 +541,19 @@
 	font-weight: 400;
 }
 
-.sp-wizard .sp-offer {
+.sp-wizard .sp-more-list {
 	display: grid;
-	gap: 6px;
+	gap: 2px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
 }
 
-.sp-wizard .sp-offer-total {
+.sp-wizard .sp-more-row {
 	display: flex;
 	justify-content: space-between;
 	gap: 16px;
-	font-weight: 600;
+	color: var(--text-color);
 }
 
 .sp-wizard .sp-money.is-free {

@@ -525,6 +525,10 @@ await check("asking the carrier fills the quote and lists what it said", async (
 	const cheapest = await page.$eval(`${by("tape-services")} .sp-service-name`, (name) => name.textContent);
 	await expectText("tape-lines", `${cheapest} The carrier quoted ${quote}.`);
 	assert(!(await textOf("tape-lines")).includes("[object"), "every line is printed as text");
+	const others = await page.$$eval(`${by("tape-more")} li`, (rows) => rows.map((row) => row.innerText));
+	const quoted = (await page.$$(`${by("tape-services")} li`)).length;
+	assert(others.length === quoted - 1, `one quiet row for each other method: ${others.length}`);
+	assert(!(await textOf("tape-more")).includes("pay"), "no second Customer pays line");
 	const file = await shot("wizard-asked-the-carrier");
 	return `the carrier said "${services}", the quote field holds ${quote}, the total reads ${await textOf("tape-total")}; ${file}`;
 });
