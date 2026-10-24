@@ -833,9 +833,10 @@ def test_the_wizard_style_stays_on_the_page_and_has_three_accents():
 	):
 		assert f"--sp-{accent}: {light};" in css and f"--sp-{accent}: {dark};" in css
 	assert "@media (prefers-reduced-motion: reduce)" in css
-	# laid out by the room the wizard has (the desk's sidebar takes some of the window), with a fallback
+	# laid out by the room the wizard has (the desk's sidebar takes some of the window), written once: every
+	# browser the desk supports has container queries
 	assert "container: sp-wizard / inline-size;" in css and "@container sp-wizard (min-width: 860px)" in css
-	assert "@supports not (container-type: inline-size)" in css
+	assert css.count('"step tape"') == 1 and "@supports not (container-type" not in css
 	for word in ("gradient", "text-transform", "monospace"):
 		assert word not in css, word
 

@@ -581,8 +581,8 @@
 /* ---------------------------------------------------------------- the tape beside the steps */
 /* Once the wizard leaves the steps about 460 px beside the tape, the tape stands on the right and stays in
  * view as the page scrolls. It is never taller than the window below it (it scrolls inside; the tape
- * measures that room, --sp-tape-room, in wizard_tape.js), and its total stays at its foot. Browsers without
- * container queries go by the window's width, the desk's sidebar counted in. */
+ * measures that room, --sp-tape-room, in wizard_tape.js), and its total stays at its foot. Every browser the
+ * desk supports has container queries, so the layout is written once, here. */
 @container sp-wizard (min-width: 860px) {
 	.sp-wizard .sp-layout {
 		grid-template-columns: minmax(0, 1fr) var(--sp-tape-width);
@@ -613,41 +613,6 @@
 		bottom: 0;
 		padding-bottom: 12px;
 		background: var(--fg-color);
-	}
-}
-
-@supports not (container-type: inline-size) {
-	@media (min-width: 1140px) {
-		.sp-wizard .sp-layout {
-			grid-template-columns: minmax(0, 1fr) var(--sp-tape-width);
-			grid-template-areas:
-				"banner banner"
-				"tabs tabs"
-				"step tape";
-		}
-
-		.sp-wizard .sp-tape {
-			position: sticky;
-			top: calc(var(--sp-head) + 17px);
-			max-height: var(--sp-tape-room, calc(100vh - var(--sp-head) - 105px));
-			margin-top: 0;
-			padding-bottom: 0; /* the space below is a spacer that scrolls: nothing shows under the total */
-			overflow-y: auto;
-		}
-
-		.sp-wizard .sp-tape::after {
-			content: "";
-			display: block;
-			height: 18px;
-		}
-
-		.sp-wizard .sp-total {
-			position: sticky;
-			z-index: 1;
-			bottom: 0;
-			padding-bottom: 12px;
-			background: var(--fg-color);
-		}
 	}
 }
 
