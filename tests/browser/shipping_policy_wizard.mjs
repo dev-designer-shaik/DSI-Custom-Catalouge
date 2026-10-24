@@ -533,6 +533,24 @@ await check("asking the carrier fills the quote and lists what it said", async (
 	return `the carrier said "${services}", the quote field holds ${quote}, the total reads ${await textOf("tape-total")}; ${file}`;
 });
 
+await check("a quote typed while the carrier is asked wins over its late answer", async () => {
+	await intercept(true);
+	try {
+		holdNext = 2500; // the carrier's answer arrives late
+		await page.click(by("tape-ask-carrier"));
+		await pause(300);
+		await fill("tape-quote", "40");
+		await expectText("tape-total", "$40.00");
+		await pause(3500); // the answer to Ask arrives now
+		const quote = await page.$eval(by("tape-quote"), (input) => input.value);
+		assert(quote === "40", `the typed quote stays: ${quote}`);
+		assert((await textOf("tape-total")) === "$40.00", `and prices the order: ${await textOf("tape-total")}`);
+		assert(await page.$eval(by("tape-services"), (list) => list.hidden), "the carrier's list is gone");
+	} finally {
+		await intercept(false);
+	}
+});
+
 await check("removing the item takes it out of the order", async () => {
 	await page.click(by("tape-item-remove"));
 	assert((await page.$$(by("tape-item"))).length === 0, "no item lines left");

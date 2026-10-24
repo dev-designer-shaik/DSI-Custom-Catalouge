@@ -21,6 +21,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		};
 		this.asked = null; // {key, quotes}: what the carrier quoted when it was last asked
 		this.asking = false;
+		this.quote_epoch = 0; // moves on when a quote is typed: an answer to an earlier Ask is then dropped
 		this.ask_tried = false; // "Ask the carrier" was pressed while it could not be used
 		this.packed = { weight: 0, volume: 0, cartons: 0 }; // the cartons the ERP packed the items into
 		this.computed_value = null; // the items' value in the price list, from the last answer
@@ -47,7 +48,11 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			});
 			input.addEventListener("input", () => {
 				this.sample[key] = input.value;
-				if (key === "quote") this.asked = null; // a typed quote replaces what the carrier said
+				if (key === "quote") {
+					// a typed quote replaces what the carrier said, and wins over an answer still on its way
+					this.asked = null;
+					this.quote_epoch += 1;
+				}
 				this.changed();
 			});
 			return input;
@@ -420,8 +425,8 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		this.timer = setTimeout(() => this.price(), PRICE_DELAY);
 	}
 
-	// What to send to try_order: {args, typed_cartons, typed_value, key}, or {blocked: {empty | invalid}}
-	// when there is nothing to price yet or a field does not hold a number.
+	// What to send to try_order: {args, typed_cartons, typed_value, key, epoch}, or {blocked: {empty |
+	// invalid}} when there is nothing to price yet or a field does not hold a number.
 	request({ ask = false } = {}) {
 		const sample = this.sample;
 		const block = (reason, text) => ({ blocked: { [reason]: text } });
@@ -439,7 +444,8 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			if (!items.length) {
 				return block("empty", __("Add the items in the order. The rate card prices them by weight."));
 			}
-			return { args: { draft, order: { country_code: sample.country, items } }, key: this.asked_key() };
+			const args = { draft, order: { country_code: sample.country, items } };
+			return { args, key: this.asked_key(), epoch: this.quote_epoch };
 		}
 		const value = sp.read_number(sample.order_value);
 		const weight = sp.read_number(sample.weight);
@@ -497,7 +503,8 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			args.ask_carrier = 1;
 			args.city = sample.city.trim();
 		}
-		return { args, typed_cartons, typed_value: value.value !== null, key: this.asked_key() };
+		const typed_value = value.value !== null;
+		return { args, typed_cartons, typed_value, key: this.asked_key(), epoch: this.quote_epoch };
 	}
 
 	// Price the sample with the draft now. Every call gets a number; an answer that is not to the newest
@@ -515,7 +522,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		this.set_busy(true);
 		return this.wizard.call("try_order", request.args, { quiet: true }).then(
 			(answer) => {
-				if (ask) this.keep_asked(request.key, answer);
+				if (ask) this.keep_asked(request, answer);
 				if (sequence !== this.sequence) {
 					if (ask && this.asked) this.schedule(); // price the newer sample with the carrier's quotes
 					return;
@@ -532,10 +539,11 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		);
 	}
 
-	keep_asked(key, answer) {
-		if (key !== this.asked_key()) return; // the sample changed while the carrier was asked
+	// The carrier's answer becomes the quote, unless the sample changed or a quote was typed while it was asked.
+	keep_asked(request, answer) {
+		if (request.key !== this.asked_key() || request.epoch !== this.quote_epoch) return;
 		const quotes = Array.isArray(answer?.order?.quotes) ? answer.order.quotes : [];
-		this.asked = { key, quotes };
+		this.asked = { key: request.key, quotes };
 		const cheapest = [...quotes].sort((one, other) => one.amount - other.amount)[0];
 		this.sample.quote = cheapest ? cheapest.amount.toFixed(2) : "";
 		this.quote_input.value = this.sample.quote;
