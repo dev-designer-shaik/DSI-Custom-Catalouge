@@ -309,17 +309,30 @@ def _codes(countries):
 	return [text.upper() for text in (code.strip() for code in _texts(_list(countries))) if text]
 
 
+def _no_json_word(word):
+	raise ValueError(f"{word} is not JSON")
+
+
+def read_json(text):
+	"""JSON text as Python data, read the way a browser reads it: NaN, Infinity and -Infinity, which Python's
+	own reader takes, raise ValueError like anything else that is not JSON (so does an integer of over 4,300
+	digits; nesting too deep raises RecursionError). The stored rate card is read with it, by the loader and
+	by the policy's own check, so a card holding one is no card, never a number a browser cannot read."""
+	return json.loads(text, parse_constant=_no_json_word)
+
+
 def _card_from(value):
 	"""The rate card of a row: the dict that a Code field's JSON text holds, or a dict already. Text that is
-	not JSON, JSON that is not an object, and anything else are no card (None)."""
+	not JSON (`read_json`: NaN and the infinities are not), JSON that is not an object, and anything else are
+	no card (None)."""
 	try:
 		if isinstance(value, dict):
 			return copy.deepcopy(value)
 		if not isinstance(value, str) or not value.strip():
 			return None
-		card = json.loads(value)
+		card = read_json(value)
 	except (ValueError, RecursionError, TypeError):
-		# not JSON, an integer of over 4300 digits, nesting too deep, or a dict that cannot be copied
+		# not JSON (NaN included), an integer of over 4300 digits, nesting too deep, or a dict that cannot be copied
 		return None
 	return card if isinstance(card, dict) else None
 

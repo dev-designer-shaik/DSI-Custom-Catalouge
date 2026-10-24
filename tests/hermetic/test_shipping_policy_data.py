@@ -2388,6 +2388,26 @@ def test_a_card_holding_a_number_json_has_no_words_for_is_written_as_no_text(num
 	assert text == ""
 
 
+@pytest.mark.parametrize("number", [math.nan, math.inf, -math.inf], ids=["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize(
+	"put",
+	[_put_in_a_tier, _put_in_a_key_of_its_own, _put_in_a_list, _put_deep_inside],
+	ids=lambda put: put.__name__,
+)
+def test_stored_card_text_holding_a_number_json_has_no_words_for_reads_as_no_card(number, put):
+	"""The other way round: Python reads NaN, Infinity and -Infinity in JSON text, but they are not JSON.
+	Stored card text that holds one anywhere (a form save while the policy is off keeps what was typed) reads
+	as no card, as any text that is not JSON does: the wizard's state would carry the number to a browser
+	that refuses it, and the card could never be written back."""
+	card = sample_card()
+	put(card, number)
+	text = json.dumps(card)  # written as Python writes it, with the words
+	assert policy_from_rows({"rate_card": text}, [], [], {})["rate_card"] is None
+	assert (
+		policy_from_rows({"rate_card": json.dumps(sample_card())}, [], [], {})["rate_card"] == sample_card()
+	)
+
+
 def test_a_card_of_numbers_json_can_hold_is_written_as_it_always_was():
 	"""Only NaN and the infinities changed: any other card is written byte for byte as before, odd values kept
 	as text (a set, a Decimal), the smallest and the biggest floats as they are."""
@@ -2442,8 +2462,9 @@ def test_broken_card_text_reads_as_no_card():
 		('{"version": 1, "x": [1, 2.5, null, true, "a"]}', {"version": 1, "x": [1, 2.5, None, True, "a"]}),
 	):
 		assert policy_from_rows({"rate_card": text}, [], [], {})["rate_card"] == expected
-	nan = policy_from_rows({"rate_card": '{"a": NaN}'}, [], [], {})["rate_card"]
-	assert math.isnan(nan["a"]), "the checker will say what is wrong with it"
+	# NaN and the infinities are words Python reads but JSON has none of: text holding one is no card either
+	for constant in ("NaN", "Infinity", "-Infinity"):
+		assert policy_from_rows({"rate_card": f'{{"a": {constant}}}'}, [], [], {})["rate_card"] is None
 	# a dict that is too deep to copy is no card
 	deep = []
 	for _ in range(5000):

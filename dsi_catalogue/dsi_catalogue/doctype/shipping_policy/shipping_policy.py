@@ -17,8 +17,6 @@ JSON as no card at all, which would send the person to the wrong sentence ("ther
 Once it parses, the card's own problems come out of `validate_policy` with everything else.
 """
 
-import json
-
 import frappe
 from frappe import _
 from frappe.model.document import Document
@@ -26,6 +24,7 @@ from frappe.utils import cint, escape_html
 
 from dsi_catalogue.shipping_engine import validate_policy
 from dsi_catalogue.shipping_policy import load_policy
+from dsi_catalogue.shipping_policy_data import read_json
 
 NOT_JSON = "The stored rate card is not valid JSON. Import the rates again in the wizard."
 NOT_A_CARD = (
@@ -38,7 +37,8 @@ def stored_card_problem(value) -> str | None:
 	"""A sentence when the stored rate card cannot be read as a JSON object, else None.
 
 	No text, or nothing but blanks, is no card, which is fine. A dict (a document filled in by code) is read
-	as it is, as the loader reads it. Never raises.
+	as it is, as the loader reads it. Text is read as the loader reads it (`read_json`), so NaN, Infinity and
+	-Infinity, which are not JSON, make it text that is not JSON. Never raises.
 	"""
 	if value is None or isinstance(value, dict):
 		return None
@@ -47,8 +47,8 @@ def stored_card_problem(value) -> str | None:
 	if not value.strip():
 		return None
 	try:
-		card = json.loads(value)
-	except (ValueError, RecursionError):  # not JSON, a number of over 4300 digits, nesting too deep
+		card = read_json(value)
+	except (ValueError, RecursionError):  # not JSON, NaN, a number of over 4300 digits, nesting too deep
 		return NOT_JSON
 	return None if isinstance(card, dict) else NOT_A_CARD
 
