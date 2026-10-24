@@ -100,6 +100,9 @@ def load_example() -> dict:
 	are the database's): item groups and items carry the name this site stores, and the zones and item sets
 	are sorted by name, the order the loader gives them in. A group the site lacks is created and remembered
 	for cleanup; an item the site lacks is left as it is, and seeding it fails loudly.
+
+	`wipe_policy` deletes the groups it made after every test and empties `_made_item_groups`, so a policy
+	loaded in one test is not one to keep for the next: each test calls `load_example()` itself.
 	"""
 	with open(frappe.get_app_path("dsi_catalogue", *FIXTURE), encoding="utf-8") as fixture:
 		policy = json.load(fixture)
@@ -132,15 +135,19 @@ def wipe_policy() -> None:
 	"""Remove every zone and item set, the item groups `load_example` made, and everything the single holds.
 
 	The single goes back to never saved: no stored values, so inactive, with the default settings and no rules.
+	The documents are deleted for good (no Deleted Document row), but a delete still writes Frappe's "Deleted"
+	Comment: like everything else a test writes, that is taken back by the class-level rollback of the native
+	tests, which this relies on. No test may commit.
 	"""
 	frappe.db.delete("Shipping Policy Rule", {"parent": POLICY, "parenttype": POLICY})
 	frappe.db.delete("Singles", {"doctype": POLICY})
 	frappe.clear_document_cache(POLICY, POLICY)
+	gone = {"force": True, "ignore_permissions": True, "delete_permanently": True}
 	for doctype in ("Shipping Zone", "Shipping Item Set"):
 		for name in frappe.get_all(doctype, pluck="name"):
-			frappe.delete_doc(doctype, name, force=True, ignore_permissions=True)
+			frappe.delete_doc(doctype, name, **gone)
 	while _made_item_groups:
-		frappe.delete_doc("Item Group", _made_item_groups.pop(), force=True, ignore_permissions=True)
+		frappe.delete_doc("Item Group", _made_item_groups.pop(), **gone)
 
 
 def zone_of(name: str, countries=(), **fields) -> dict:
