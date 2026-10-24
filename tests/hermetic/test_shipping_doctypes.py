@@ -511,6 +511,11 @@ HTML_WRITERS = (
 # or from a person), and why it is safe.
 ALLOWED_HTML_WRITERS = {
 	'frappe.confirm(__("Discard your unsaved draft and start again from the saved policy?")': "a fixed question",
+	'frappe.confirm(__("Delete this rule?")': "a fixed question",
+	(
+		"frappe.confirm(__(\"Remove this zone's countries, so that it takes every country that is in no other "
+		'zone?")'
+	): "a fixed question",
 }
 # The pattern of an include directive in Frappe's render_include (frappe/model/utils/__init__.py), which the
 # desk runs on a page's script when it loads the page (Page.load_assets).
@@ -730,6 +735,55 @@ def test_new_entries_of_the_draft_follow_the_servers_key_order(tmp_path):
 	assert got["zone"] == read_back["zones"][0], "a new zone is what the server reads back for a new row"
 	assert got["item_set"] == read_back["item_sets"][0]
 	assert got["rule"] == {**read_back["rules"][0], "enabled": True}, "a rule added in the wizard is on"
+
+
+@needs_node
+def test_names_are_compared_as_the_erp_compares_them(tmp_path):
+	"""The ERP's database reads names that differ only in capital letters or accents as one name, so the Zones and
+	Rules steps compare zone and item set names so, and a new zone is named so that no other zone has its name."""
+	got = run_page_helpers(
+		tmp_path,
+		"""
+		return {
+			same: [sp.fold_name(" Gùlf "), sp.fold_name("GULF"), sp.fold_name("gulf")],
+			other: sp.fold_name("Gulf 2"),
+			blank: [sp.fold_name(null), sp.fold_name(undefined)],
+			fresh: sp.unique_name("New zone", ["Bahrain"]),
+			second: sp.unique_name("New zone", ["new ZONE", "Bahrain"]),
+			third: sp.unique_name("New zone", ["New zone", "Néw zone 2"]),
+			lists: [sp.and_list([]), sp.and_list(["2"]), sp.and_list(["2", "3"]), sp.and_list(["2", "3", "4"])],
+		};
+		""",
+	)
+	assert got == {
+		"same": ["gulf", "gulf", "gulf"],
+		"other": "gulf 2",
+		"blank": ["", ""],
+		"fresh": "New zone",
+		"second": "New zone 2",
+		"third": "New zone 3",
+		"lists": ["", "2", "2 and 3", "2, 3 and 4"],
+	}
+
+
+def test_the_rules_step_shows_the_asterisk_sentence_word_for_word():
+	"""The plan's Global Constraints: the sentence is on the wizard's Rules step, verbatim."""
+	assert f'"{ASTERISK}"' in (PAGE_DIR / "step_rules.js").read_text(encoding="utf-8")
+
+
+def test_the_formula_names_the_rules_step_lists_are_the_servers():
+	"""The line under a rule's formula names what a formula may use: a copy of shipping_formula's two lists."""
+	from dsi_catalogue.shipping_formula import FUNCTIONS, VARIABLES
+
+	rules = (PAGE_DIR / "step_rules.js").read_text(encoding="utf-8")
+
+	def listed(name):
+		found = re.search(rf"^const {name} = (\[[^\]]*\]);$", rules, re.MULTILINE)
+		assert found, f"{name} is one line of step_rules.js"
+		return tuple(json.loads(found.group(1)))
+
+	assert listed("FORMULA_VARIABLES") == VARIABLES
+	assert listed("FORMULA_FUNCTIONS") == FUNCTIONS
 
 
 @needs_node

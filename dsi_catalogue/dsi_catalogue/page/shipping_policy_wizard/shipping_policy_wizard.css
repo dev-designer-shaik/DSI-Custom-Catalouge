@@ -14,6 +14,7 @@
 	--sp-rule: var(--outline-gray-3, var(--dark-border-color));
 	--sp-rule-strong: var(--outline-gray-4, var(--text-light));
 	--sp-edge: var(--border-color);
+	--sp-chip-hover: var(--control-bg-on-gray, var(--fg-hover-color));
 	--sp-tape-width: 360px;
 	--sp-head: var(--page-head-height, 48px);
 
@@ -40,6 +41,8 @@
 [data-theme="dark"] .sp-wizard {
 	/* the desk's own border is nearly the colour of its dark surface: the tape's edge needs a lighter rule */
 	--sp-edge: var(--outline-gray-3, var(--dark-border-color));
+	/* the desk's dark field tint has no darker step for a hover: the subtle surface is one */
+	--sp-chip-hover: var(--subtle-fg, var(--fg-hover-color));
 	--sp-brass: #D8B259;
 	--sp-sage: #74C9A0;
 	--sp-brick: #E5907F;
@@ -63,7 +66,9 @@
 .sp-wizard button:focus-visible,
 .sp-wizard [role="tab"]:focus-visible,
 .sp-wizard [role="tabpanel"]:focus-visible,
-.sp-wizard input[type="checkbox"]:focus-visible {
+.sp-wizard input[type="checkbox"]:focus-visible,
+.sp-wizard input[type="radio"]:focus-visible,
+.sp-wizard .sp-title-input:focus-visible {
 	outline: 2px solid var(--text-color);
 	outline-offset: 2px;
 	box-shadow: none;
@@ -643,6 +648,646 @@
 			padding-bottom: 12px;
 			background: var(--fg-color);
 		}
+	}
+}
+
+/* ---------------------------------------------------------------- the Zones and Rules steps */
+/* Zones and rules are flat cards on the desk's surface. A rule reads as a clause with its blanks filled in:
+ * the joining words are muted, each value is a chip (the desk's own field tint over a baseline rule, so it
+ * looks like something to fill in), and what the rule charges the tape's order sits on the right like a
+ * receipt line, brass only when it is what the customer pays. Countries, item groups and items are tokens. */
+.sp-wizard .sp-step-intro {
+	max-width: 72ch;
+	margin-bottom: 16px;
+	color: var(--text-muted);
+}
+
+.sp-wizard .sp-empty-state {
+	padding: 4px 0 8px;
+	color: var(--text-muted);
+}
+
+.sp-wizard .sp-add {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 12px;
+	margin-top: 16px;
+}
+
+.sp-wizard .sp-add .btn[aria-disabled="true"] {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+.sp-wizard .sp-sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.sp-wizard .sp-zones,
+.sp-wizard .sp-rules {
+	display: grid;
+	gap: 14px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.sp-wizard .sp-zone,
+.sp-wizard .sp-rule {
+	position: relative;
+	display: grid;
+	gap: 12px;
+	min-width: 0;
+	padding: 12px 16px 14px;
+	border: 1px solid var(--sp-edge);
+	border-radius: var(--border-radius-md, 10px);
+	background: var(--fg-color);
+}
+
+.sp-wizard .sp-card-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px 16px;
+}
+
+.sp-wizard .sp-card-title {
+	display: flex;
+	flex: 1 1 260px;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.sp-wizard .sp-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 14px;
+}
+
+/* a name that is edited where it is shown: it looks like the card's title until it is pointed at */
+.sp-wizard .sp-title-input {
+	flex: 1 1 auto;
+	width: 100%;
+	min-width: 0;
+	max-width: 38ch;
+	margin: 0 0 0 -7px;
+	padding: 2px 6px;
+	border: 1px solid transparent;
+	border-radius: var(--border-radius-sm, 6px);
+	background: transparent;
+	color: var(--heading-color);
+	font: inherit;
+	font-size: var(--text-lg);
+	font-weight: 600;
+	line-height: 1.4;
+}
+
+.sp-wizard .sp-title-input::placeholder {
+	color: var(--text-light);
+	font-weight: 400;
+}
+
+.sp-wizard .sp-title-input:hover {
+	border-color: var(--border-color);
+}
+
+.sp-wizard .sp-title-input:focus {
+	border-color: var(--sp-rule-strong);
+	background: var(--control-bg);
+}
+
+/* as wide as the name (or the placeholder), where the browser can, so the words after it stay close */
+@supports (field-sizing: content) {
+	.sp-wizard .sp-title-input {
+		flex: 0 1 auto;
+		width: auto;
+		min-width: 8ch;
+		field-sizing: content;
+	}
+}
+
+/* a word about the whole card: Off, Not shipped, Everywhere else */
+.sp-wizard .sp-states {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.sp-wizard .sp-state:not(:empty) {
+	flex: none;
+	padding: 0 7px;
+	border: 1px solid var(--sp-rule);
+	border-radius: 999px;
+	color: var(--text-muted);
+	font-size: var(--text-xs);
+	line-height: 18px;
+	white-space: nowrap;
+}
+
+.sp-wizard .sp-state.is-not-shipped {
+	border-color: currentColor;
+	color: var(--sp-brick);
+}
+
+.sp-wizard .sp-quiet {
+	color: var(--text-muted);
+	font-size: var(--text-sm);
+}
+
+.sp-wizard .sp-quiet:hover {
+	color: var(--text-color);
+}
+
+.sp-wizard .sp-problems {
+	display: grid;
+	gap: 4px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	color: var(--text-color);
+	font-size: var(--text-sm);
+	line-height: 1.45;
+}
+
+.sp-wizard .sp-problems:empty,
+.sp-wizard .sp-zone .sp-problem:empty,
+.sp-wizard .sp-editor .sp-problem:empty {
+	display: none;
+}
+
+.sp-wizard .sp-problems li,
+.sp-wizard .sp-zone .sp-problem,
+.sp-wizard .sp-editor .sp-problem {
+	padding-left: 10px;
+	border-left: 2px solid var(--sp-rule-strong);
+	font-size: var(--text-sm);
+}
+
+/* delivery that is not offered: the countries no carrier serves */
+.sp-wizard .sp-warning {
+	padding-left: 10px;
+	border-left: 2px solid var(--sp-brick);
+	color: var(--sp-brick);
+	font-size: var(--text-sm);
+	line-height: 1.45;
+}
+
+/* ---- tokens: the countries of a zone, the groups and items of a set */
+.sp-wizard .sp-token-box:empty {
+	display: none;
+}
+
+.sp-wizard .sp-tokens {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.sp-wizard .sp-token {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	max-width: 100%;
+	padding: 1px 2px 1px 10px;
+	border-radius: 999px;
+	background: var(--control-bg);
+	color: var(--text-color);
+	font-size: var(--text-sm);
+	line-height: 22px;
+}
+
+.sp-wizard .sp-token-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sp-wizard .sp-token-remove {
+	appearance: none;
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: none;
+	color: var(--text-muted);
+	font-size: 15px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.sp-wizard .sp-token-remove:hover {
+	background: var(--sp-chip-hover);
+	color: var(--text-color);
+}
+
+/* ---- a zone */
+.sp-wizard .sp-countries .sp-combo {
+	max-width: 360px;
+}
+
+.sp-wizard .sp-switches {
+	display: grid;
+	gap: 6px;
+}
+
+.sp-wizard .sp-switch {
+	align-items: flex-start;
+}
+
+.sp-wizard .sp-switch input[type="checkbox"] {
+	margin-top: 3px !important;
+}
+
+.sp-wizard .sp-switch-name {
+	color: var(--text-color);
+	font-weight: 500;
+}
+
+.sp-wizard .sp-usage {
+	margin-top: -4px;
+}
+
+.sp-wizard .sp-zone.is-off .sp-title-input {
+	color: var(--text-muted);
+}
+
+/* ---- a rule */
+.sp-wizard .sp-grip {
+	flex: none;
+	width: 10px;
+	height: 16px;
+	border-right: 2px dotted var(--text-light);
+	border-left: 2px dotted var(--text-light);
+	cursor: grab;
+	touch-action: none;
+	user-select: none;
+}
+
+.sp-wizard .sp-grip:hover {
+	border-color: var(--text-muted);
+}
+
+.sp-wizard .sp-rule-number {
+	flex: none;
+	color: var(--heading-color);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.sp-wizard .sp-rule-label {
+	margin-left: 0;
+	color: var(--text-color);
+	font-size: var(--text-base);
+	font-weight: 400;
+}
+
+.sp-wizard .sp-moves {
+	display: inline-flex;
+	gap: 2px;
+}
+
+.sp-wizard .sp-icon-button {
+	appearance: none;
+	display: inline-grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--border-radius-sm, 6px);
+	background: none;
+	color: var(--text-muted);
+	font: inherit;
+	font-size: var(--text-base);
+	cursor: pointer;
+}
+
+.sp-wizard .sp-icon-button:hover {
+	background: var(--fg-hover-color);
+	color: var(--text-color);
+}
+
+.sp-wizard .sp-icon-button[aria-disabled="true"] {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.sp-wizard .sp-icon-button[aria-disabled="true"]:hover {
+	background: none;
+}
+
+/* the sentence, and what the rule charges on the right */
+.sp-wizard .sp-rule-line {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: start;
+	column-gap: 24px;
+}
+
+.sp-wizard .sp-sentence {
+	color: var(--text-color);
+	font-size: var(--text-lg);
+	line-height: 2;
+	overflow-wrap: anywhere;
+}
+
+.sp-wizard .sp-words {
+	color: var(--text-muted);
+}
+
+.sp-wizard .sp-chip {
+	appearance: none;
+	display: inline;
+	margin: 0;
+	padding: 2px 7px 1px;
+	border: 0;
+	border-bottom: 2px solid var(--sp-rule-strong);
+	border-radius: var(--border-radius-tiny, 4px) var(--border-radius-tiny, 4px) 0 0;
+	background: var(--control-bg);
+	color: var(--heading-color);
+	font: inherit;
+	font-weight: 500;
+	line-height: 1.5;
+	text-align: start;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+	box-decoration-break: clone;
+	-webkit-box-decoration-break: clone;
+	transition: background-color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.sp-wizard .sp-chip:hover {
+	border-bottom-color: var(--text-color);
+	background: var(--sp-chip-hover);
+}
+
+/* the chip whose editor is open: the same mark as the selected tab */
+.sp-wizard .sp-chip[aria-expanded="true"] {
+	border-bottom-color: var(--heading-color);
+	background: var(--sp-chip-hover);
+}
+
+.sp-wizard .sp-asterisk {
+	margin-left: 1px;
+	color: var(--text-muted);
+	font-weight: 400;
+}
+
+.sp-wizard .sp-rule-price {
+	min-width: 7ch;
+	text-align: right;
+	transition: opacity 120ms ease-out;
+}
+
+/* waiting for the answer to a change, as the tape's receipt does */
+.sp-wizard .sp-rule-price.is-stale {
+	opacity: 0.55;
+}
+
+.sp-wizard .sp-rule-amount {
+	display: block;
+	color: var(--text-muted);
+	font-size: var(--text-2xl, 20px);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums lining-nums;
+	line-height: 32px;
+	white-space: nowrap;
+}
+
+.sp-wizard .sp-rule-amount.is-paid {
+	color: var(--sp-brass);
+}
+
+.sp-wizard .sp-rule-amount.is-free {
+	color: var(--sp-sage);
+}
+
+.sp-wizard .sp-rule-amount.is-none {
+	font-weight: 400;
+}
+
+.sp-wizard .sp-rule-reason {
+	display: block;
+	color: var(--text-muted);
+	font-size: var(--text-xs);
+	line-height: 1.35;
+}
+
+.sp-wizard .sp-only-when {
+	margin-top: -6px;
+	font-size: var(--text-sm);
+	line-height: 2;
+}
+
+.sp-wizard .sp-rule.is-off .sp-sentence,
+.sp-wizard .sp-rule.is-off .sp-chip {
+	color: var(--text-muted);
+}
+
+/* moving a rule with the mouse: a line shows where it lands */
+.sp-wizard .sp-rules.is-reordering {
+	user-select: none;
+}
+
+.sp-wizard .sp-rule.is-dragging {
+	z-index: 2;
+	border-color: var(--sp-rule-strong);
+	cursor: grabbing;
+}
+
+.sp-wizard .sp-rule.is-drop-before::before,
+.sp-wizard .sp-rule.is-drop-after::after {
+	content: "";
+	position: absolute;
+	right: 0;
+	left: 0;
+	height: 2px;
+	border-radius: 1px;
+	background: var(--heading-color);
+}
+
+.sp-wizard .sp-rule.is-drop-before::before {
+	top: -9px;
+}
+
+.sp-wizard .sp-rule.is-drop-after::after {
+	bottom: -9px;
+}
+
+.sp-wizard .sp-rules-note {
+	max-width: 72ch;
+	margin-top: 20px;
+	color: var(--text-muted);
+	font-size: var(--text-sm);
+	line-height: 1.5;
+}
+
+/* ---- the editor a chip opens, under the line of its chip: a ruled region on the card's own surface, so the
+ * fields in it keep the desk's field tint */
+.sp-wizard .sp-editor {
+	display: grid;
+	gap: 12px;
+	margin-top: -4px;
+	padding: 12px 14px;
+	border: 1px solid var(--sp-rule);
+	border-radius: var(--border-radius, 8px);
+	background: var(--fg-color);
+	font-size: var(--text-base);
+}
+
+.sp-wizard .sp-editor-title {
+	margin: 0 0 6px;
+	padding: 0;
+	color: var(--heading-color);
+	font-size: var(--text-sm);
+	font-weight: 600;
+}
+
+.sp-wizard .sp-editor-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.sp-wizard .sp-choices {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.sp-wizard .sp-option-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 14px;
+}
+
+.sp-wizard .sp-option {
+	display: flex;
+	flex: 1 1 220px;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+	margin: 0;
+	padding: 4px 8px;
+	border-radius: var(--border-radius-sm, 6px);
+	color: var(--text-color);
+	font-weight: 400;
+	cursor: pointer;
+}
+
+.sp-wizard .sp-option:hover {
+	background: var(--fg-hover-color);
+}
+
+.sp-wizard .sp-option input[type="radio"] {
+	flex: none;
+	margin: 0;
+	transform: translateY(1px);
+}
+
+.sp-wizard .sp-option-text {
+	overflow-wrap: anywhere;
+}
+
+.sp-wizard .sp-option-note {
+	color: var(--text-muted);
+	font-size: var(--text-xs);
+}
+
+.sp-wizard .sp-formula-field {
+	max-width: 560px;
+}
+
+.sp-wizard .sp-formula-error {
+	padding-left: 10px;
+	border-left: 2px solid var(--sp-rule-strong);
+	color: var(--text-color);
+	font-size: var(--text-sm);
+}
+
+.sp-wizard .sp-formula-error:empty {
+	display: none;
+}
+
+.sp-wizard .sp-limits {
+	display: grid;
+	gap: 8px;
+}
+
+.sp-wizard .sp-limit-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+}
+
+.sp-wizard .sp-limit-label {
+	flex: 0 0 9.5em;
+	color: var(--text-color);
+	font-size: var(--text-sm);
+}
+
+.sp-wizard .sp-limit-word {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: var(--text-sm);
+	font-weight: 400;
+}
+
+.sp-wizard .sp-limit {
+	width: 8em;
+	text-align: right;
+}
+
+.sp-wizard .sp-limit::placeholder {
+	text-align: left;
+}
+
+.sp-wizard .sp-set-editor {
+	display: grid;
+	gap: 12px;
+}
+
+.sp-wizard .sp-set-editor .sp-input,
+.sp-wizard .sp-set-editor .sp-combo,
+.sp-wizard .sp-set-editor .sp-item-picker {
+	max-width: 360px;
+}
+
+/* a narrow wizard: what a rule charges goes under its sentence */
+@container sp-wizard (max-width: 560px) {
+	.sp-wizard .sp-rule-line {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.sp-wizard .sp-rule-price {
+		text-align: left;
 	}
 }
 

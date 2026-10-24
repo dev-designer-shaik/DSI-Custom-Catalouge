@@ -12,8 +12,13 @@
 //	wizard_country_picker.js  dsi_catalogue.CountryPicker: a field that finds a country by its name or code
 //	wizard_tape.js            dsi_catalogue.ShippingPolicyTape: "Try an order", its controls and the receipt
 //	wizard_core.js            dsi_catalogue.ShippingPolicyWizard: the store, the regions, the server calls
+//	wizard_chips.js           what the Zones and Rules steps share: names as the ERP compares them, removable
+//	                          tokens, a polite announcer, reading a desk list
+//	wizard_itemset_editor.js  dsi_catalogue.ItemSetEditor: an item set's name, groups and items (Rules step)
+//	wizard_rule_card.js       one rule of the Rules step as a card: its sentence of chips, price and editors
 //	step_<id>.js              the body of each tab, one file each, step_<id> = {render, refresh, priced}:
-//	                          Tasks 8, 9 and 16 replace these stubs, each task its own files
+//	                          Tasks 8, 9 and 16 replace these stubs, each task its own files (Zones and Rules
+//	                          are built: step_zones.js, step_rules.js)
 //	this file                 the constants, the parts in order, STEPS (the six tabs) and the page's events:
 //	                          on_page_load builds the page and starts the wizard; on_page_show reloads the
 //	                          saved policy while the draft is clean
@@ -81,6 +86,9 @@ frappe.provide("dsi_catalogue");
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_country_picker.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_tape.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_core.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_chips.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_itemset_editor.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_card.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_zones.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_rates.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_rules.js" %}

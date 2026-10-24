@@ -56,9 +56,12 @@ dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_review.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_rules.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_test.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_zones.js
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_chips.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_core.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_country_picker.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_helpers.js
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_itemset_editor.js
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_card.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_tape.js
 
 # The example policy the native tests seed (it is also the hermetic tests' fixture)
