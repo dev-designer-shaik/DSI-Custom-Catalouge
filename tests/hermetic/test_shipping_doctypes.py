@@ -1490,6 +1490,45 @@ def test_the_rate_card_is_said_in_plain_words(tmp_path, wizard_module):
 
 
 @needs_node
+def test_the_rates_step_lists_the_cards_own_problems_the_review_sends_it(tmp_path, wizard_module):
+	"""The Rates step lists the sentences about the card itself (sp.is_card_problem), all of which the Review's
+	"Fix it" sends to the Rates step (sp.problem_step); the price source's own sentences go to the Rates step too,
+	but its switch says them, so they are not listed. One list of patterns says both (CARD_PROBLEMS)."""
+
+	def problems(**policy):
+		return validate_policy({"zones": [], "item_sets": [], "rules": [], **policy})
+
+	card = {
+		**TINY_CARD,
+		"profiles": [
+			{
+				**TINY_CARD["profiles"][0],
+				"zones": [{**TINY_CARD["profiles"][0]["zones"][0], "countries": ["ZZ"]}],
+			}
+		],
+	}
+	listed = [
+		*problems(rate_card={"profiles": "x"}),
+		*wizard_module._unknown_card_countries(card, {}),
+		*wizard_module._unsavable_card({"profiles": [{"name": float("nan")}]}),
+	]
+	said_by_the_switch = [*problems(price_source="bogus"), *problems(price_source="rate_card")]
+	elsewhere = [*problems(zones=[{"name": "", "enabled": True, "countries": ["AE"]}])]
+	sentences = [*listed, *said_by_the_switch, *elsewhere]
+	assert all((listed, said_by_the_switch, elsewhere)), "each kind of sentence was made"
+	got = run_page_helpers(
+		tmp_path,
+		f"return {json.dumps(sentences)}.map((sentence) => [sp.is_card_problem(sentence), sp.problem_step(sentence)]);",
+	)
+	want = [
+		*([True, "rates"] for _ in listed),
+		*([False, "rates"] for _ in said_by_the_switch),
+		*([False, "zones"] for _ in elsewhere),
+	]
+	assert got == want
+
+
+@needs_node
 def test_a_check_of_the_test_tab_says_its_status_in_words(tmp_path):
 	"""sp.check_status (step_test.js) on the checks shipping_integration_check really makes: a check that passed, one
 	that did not, a website that was not asked and one that limits the route (HTTP 429: neutral, not a failure)."""

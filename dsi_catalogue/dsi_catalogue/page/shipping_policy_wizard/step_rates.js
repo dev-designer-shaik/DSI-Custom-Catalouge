@@ -31,11 +31,6 @@ const PRICE_SOURCES = [
 	},
 ];
 
-// The sentences of preview_changes that are about the card: its own (validate_card's, after "Rate card: "), its
-// countries the ERP does not know, and a card that cannot be saved. (A price source without a card is said by the
-// switch itself.)
-const CARD_PROBLEM = /^(?:Rate card: |Country code \S+ in zone |The rate card cannot be saved)/;
-
 class RatesView {
 	constructor(wizard, panel) {
 		this.wizard = wizard;
@@ -167,8 +162,10 @@ class RatesView {
 				(answer) => {
 					if (sequence !== ui.check_sequence) return;
 					const problems = Array.isArray(answer?.problems) ? answer.problems.map(String) : [];
+					// the card's own sentences (sp.is_card_problem: the patterns the Review's "Fix it" sends to this
+					// step, less the price source's, which the switch says itself)
 					ui.card_problems = problems
-						.filter((problem) => CARD_PROBLEM.test(problem))
+						.filter((problem) => sp.is_card_problem(problem))
 						.map((problem) => problem.replace(/^Rate card: /, ""));
 					ui.problems_for = key;
 					ui.view?.show_problems();

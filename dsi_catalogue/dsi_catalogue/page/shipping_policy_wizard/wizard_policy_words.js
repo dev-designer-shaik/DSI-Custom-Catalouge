@@ -18,6 +18,7 @@
 //	sp.policy_summary(policy, country_name)  the whole policy in plain words, zone by zone (and, with the rate
 //	                                    card as the price source, the card's own lines first)
 //	sp.problem_step(sentence)          the step that owns a problem preview_changes found, or null when unsure
+//	sp.is_card_problem(sentence)       whether the sentence is about the rate card itself (the Rates step lists it)
 
 const FALLBACK_CHOICES = [
 	{ method: "policy_default", label: __("Use the policy default") },
@@ -79,14 +80,17 @@ function rule_reference(entry) {
 	return zone ? __("Rule {0} (in {1})", [number, zone]) : __("Rule {0}", [number]);
 }
 
+// The sentences of preview_changes about the rate card itself: its own (validate_card's, after "Rate card: "), a card
+// that cannot be saved, and its countries the ERP does not know. The Rates step lists them (sp.is_card_problem); the
+// price source's own sentences belong to the Rates step too, which says them with its switch.
+const CARD_PROBLEMS = [/^Rate card: /, /^The rate card cannot be saved/, /^Country code \S+ in zone /];
+
 // Which step owns a sentence of preview_changes, from the way the engine and the wizard's methods start them
 // (shipping_engine.validate_policy, shipping_policy_wizard._problems): the first pattern that fits wins.
 const PROBLEM_STEPS = [
-	[/^Rate card: /, "rates"],
+	...CARD_PROBLEMS.map((pattern) => [pattern, "rates"]),
 	[/^The setting for "Price source"/, "rates"],
 	[/^The price source is the rate card/, "rates"],
-	[/^The rate card cannot be saved/, "rates"],
-	[/^Country code \S+ in zone /, "rates"],
 	[/^The policy default /, "fallback"],
 	[/^The setting for "Anything not covered"/, "fallback"],
 	[
@@ -296,5 +300,10 @@ Object.assign(sp, {
 		const said = String(sentence ?? "");
 		const found = PROBLEM_STEPS.find(([pattern]) => pattern.test(said));
 		return found ? found[1] : null;
+	},
+
+	is_card_problem(sentence) {
+		const said = String(sentence ?? "");
+		return CARD_PROBLEMS.some((pattern) => pattern.test(said));
 	},
 });
