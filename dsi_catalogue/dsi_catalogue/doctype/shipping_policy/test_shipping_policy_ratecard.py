@@ -418,16 +418,18 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 
 	def test_a_stored_card_holding_nan_or_an_infinity_is_not_valid_json(self):
 		# Python reads NaN, Infinity and -Infinity in JSON text, but they are not JSON: a browser refuses text
-		# that holds one, and the card could never be written back. Saved on, such text is refused as text
+		# that holds one, and the card could never be written back. Nor is a number too big for a float, such
+		# as 1e999, which Python reads as an infinity without a word. Saved on, such text is refused as text
 		# that is not JSON; saved off it is kept as it was typed (nothing is checked), and read as no card.
 		seed_policy(
 			policy_of([zone_of("Gulf", ["AE"])], [rule_of("Gulf")], price_source="carrier"), active=True
 		)
 		before = shipping_policy.load_policy()
-		for constant in ("NaN", "Infinity", "-Infinity"):
-			text = json.dumps({**CARD, "note": float(constant)})
-			self.assertIn(constant, text)
-			with self.subTest(constant=constant):
+		texts = {word: json.dumps({**CARD, "note": float(word)}) for word in ("NaN", "Infinity", "-Infinity")}
+		texts["1e999"] = json.dumps({**CARD, "note": 1}).replace('"note": 1', '"note": 1e999')
+		for written, text in texts.items():
+			self.assertIn(written, text)
+			with self.subTest(written=written):
 				self.assertEqual(stored_card_problem(text), NOT_JSON)
 				policy = frappe.get_doc(POLICY)
 				policy.rate_card = text
@@ -436,9 +438,11 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 				self.assertEqual(caught.exception.args[0], [NOT_JSON])
 				self.assertEqual(shipping_policy.load_policy(), before, "nothing was saved")
 		self.assertIsNone(stored_card_problem(json.dumps(CARD)), "the same card without it is fine")
-		frappe.get_doc(POLICY).update({"active": 0, "rate_card": text}).save()
-		self.assertEqual(frappe.db.get_single_value(POLICY, "rate_card"), text)
-		self.assertIsNone(shipping_policy.load_policy()["rate_card"])
+		for written, text in texts.items():
+			with self.subTest(written=written, active=0):
+				frappe.get_doc(POLICY).update({"active": 0, "rate_card": text}).save()
+				self.assertEqual(frappe.db.get_single_value(POLICY, "rate_card"), text)
+				self.assertIsNone(shipping_policy.load_policy()["rate_card"])
 
 	def test_a_zone_that_uses_the_rate_card_needs_one_when_the_policy_is_saved(self):
 		zone = zone_of("Gulf", ["AE"], fallback={"method": "rate_card", "amount": 0.0})

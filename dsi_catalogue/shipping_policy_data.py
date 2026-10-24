@@ -329,12 +329,20 @@ def _no_json_word(word):
 	raise ValueError(f"{word} is not JSON")
 
 
+def _finite_float(text):
+	number = float(text)
+	if not math.isfinite(number):
+		raise ValueError(f"{text} is too big for a number")
+	return number
+
+
 def read_json(text):
 	"""JSON text as Python data, read the way a browser reads it: NaN, Infinity and -Infinity, which Python's
-	own reader takes, raise ValueError like anything else that is not JSON (so does an integer of over 4,300
-	digits; nesting too deep raises RecursionError). The stored rate card is read with it, by the loader and
-	by the policy's own check, so a card holding one is no card, never a number a browser cannot read."""
-	return json.loads(text, parse_constant=_no_json_word)
+	own reader takes, raise ValueError like anything else that is not JSON, and so does a number too big for a
+	float (1e999, which Python would read as an infinity), an integer of over 4,300 digits too; nesting too
+	deep raises RecursionError. The stored rate card is read with it, by the loader and by the policy's own
+	check, so a card holding one is no card, never a number a browser cannot read."""
+	return json.loads(text, parse_constant=_no_json_word, parse_float=_finite_float)
 
 
 def _card_from(value):

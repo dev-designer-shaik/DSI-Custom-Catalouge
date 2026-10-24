@@ -32,6 +32,7 @@ from dsi_catalogue.shipping_policy_data import (
 	parse_json_arg,
 	policy_from_rows,
 	public_summary_from,
+	read_json,
 	response_from,
 	rows_from_policy,
 	snapshot_version,
@@ -2406,6 +2407,35 @@ def test_stored_card_text_holding_a_number_json_has_no_words_for_reads_as_no_car
 	assert (
 		policy_from_rows({"rate_card": json.dumps(sample_card())}, [], [], {})["rate_card"] == sample_card()
 	)
+
+
+@pytest.mark.parametrize("literal", ["1e999", "-1e999"])
+@pytest.mark.parametrize(
+	"put",
+	[_put_in_a_tier, _put_in_a_key_of_its_own, _put_in_a_list, _put_deep_inside],
+	ids=lambda put: put.__name__,
+)
+def test_stored_card_text_holding_a_number_too_big_for_a_float_reads_as_no_card(literal, put):
+	"""1e999 is a number by JSON's grammar, but too big for a float: Python reads it as an infinity without
+	a word for it, so it is no more a number a browser can be sent than Infinity is. Text holding one reads
+	as no card too."""
+	card = sample_card()
+	put(card, 0.125)  # a mark to put the literal in its place
+	text = json.dumps(card).replace("0.125", literal)
+	assert literal in text and "Infinity" not in text
+	assert policy_from_rows({"rate_card": text}, [], [], {})["rate_card"] is None
+
+
+def test_read_json_reads_every_number_a_float_can_hold():
+	"""Only what a float cannot hold is refused: the numbers of a card, the smallest and the biggest float,
+	an integer of any size up to Python's own limit, and a negative zero are read as they always were."""
+	numbers = read_json("[0.5, 1e2, -0.0, 10, 2.675, 1.7976931348623157e308, 5e-324, 123456789012345678901]")
+	assert numbers == [0.5, 100.0, 0.0, 10, 2.675, 1.7976931348623157e308, 5e-324, 123456789012345678901]
+	assert math.copysign(1.0, numbers[2]) == -1.0, "a negative zero stays one"
+	assert [type(number) for number in numbers[2:4]] == [float, int]
+	for text in ("1e999", "-1e999", "[1E309]", '{"a": {"b": [-2e400]}}', "NaN", "-Infinity"):
+		with pytest.raises(ValueError):
+			read_json(text)
 
 
 def test_a_number_frappe_would_round_to_zero_without_a_word_is_not_finite():
