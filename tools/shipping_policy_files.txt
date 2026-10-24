@@ -43,5 +43,12 @@ dsi_catalogue/dsi_catalogue/doctype/shipping_zone_country/__init__.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_zone_country/shipping_zone_country.json
 dsi_catalogue/dsi_catalogue/doctype/shipping_zone_country/shipping_zone_country.py
 
+# The wizard page: bench reload-doc loads the JSON; the desk reads the script and the style from the folder
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/__init__.py
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.css
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.js
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.json
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.py
+
 # The example policy the native tests seed (it is also the hermetic tests' fixture)
 tests/hermetic/fixtures/shipping_policy_example.json

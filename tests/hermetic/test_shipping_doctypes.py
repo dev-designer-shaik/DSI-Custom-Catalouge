@@ -4,7 +4,8 @@ Seven standard doctypes in the dsi_catalogue module: Shipping Zone, Shipping Ite
 single, with four child tables between them (zone countries, item set groups, item set items, policy rules).
 Nothing here needs Frappe or bench: the doctypes are JSON, and the tests check what the engine and the data
 module rely on (field names, Select strings, defaults), who may edit them, and that the asterisk sentence is on
-the form.
+the form. The wizard page is pinned the same way: who may open it, that its script never writes text as HTML,
+and that its style stays on the page.
 
 The second half pins the way these files reach erp2: tools/shipping_policy_files.txt names every file, and
 tools/erp2_push.sh copies only those, refuses anything outside its allow-list, and reloads the doctypes in
@@ -481,6 +482,83 @@ def test_the_data_module_reads_the_new_fields():
 	assert read == policy, "and the whole policy comes back as it went"
 
 
+# ---------------------------------------------------------------- the wizard page
+PAGE_DIR = ROOT / "dsi_catalogue" / "dsi_catalogue" / "page" / "shipping_policy_wizard"
+FORM_SCRIPT = DOCTYPE_DIR / "shipping_policy" / "shipping_policy.js"
+# Ways a script could put text on the page as HTML. The wizard builds its elements from text instead.
+HTML_WRITERS = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", ".html(", ".append(`")
+
+
+def page_file(suffix):
+	return (PAGE_DIR / f"shipping_policy_wizard{suffix}").read_text(encoding="utf-8")
+
+
+def css_selectors(css):
+	"""Every selector of the rules in `css`, the rules inside an @media block included."""
+	text, selectors, start = css, [], 0
+	while (comment := text.find("/*")) != -1:
+		text = text[:comment] + text[text.index("*/", comment) + 2 :]
+	for position, character in enumerate(text):
+		if character in "{}":
+			if character == "{":
+				prelude = text[start:position].strip()
+				if not prelude.startswith("@"):
+					selectors += [selector.strip() for selector in prelude.split(",")]
+			start = position + 1
+	return selectors
+
+
+def test_the_wizard_page_is_a_standard_page_for_system_managers_only():
+	page = json.loads(page_file(".json"))
+	assert page["doctype"] == "Page"
+	assert page["name"] == page["page_name"] == "shipping-policy-wizard"
+	assert (page["module"], page["standard"], page["title"]) == (
+		"dsi_catalogue",
+		"Yes",
+		"Shipping policy wizard",
+	)
+	assert page["roles"] == [{"role": "System Manager"}], "one role row: System Manager"
+	assert page_file(".py").startswith("# Copyright"), "the Python file is the license stub"
+	assert "def " not in page_file(".py")
+
+
+def test_the_wizard_page_puts_text_on_the_page_only_as_text():
+	script = page_file(".js")
+	assert 'frappe.pages["shipping-policy-wizard"].on_page_load' in script
+	for writer in HTML_WRITERS:
+		assert writer not in script, f"the page script uses {writer}"
+
+
+def test_the_wizard_style_stays_on_the_page_and_has_three_accents():
+	css = page_file(".css")
+	selectors = css_selectors(css)
+	assert len(selectors) > 50
+	for selector in selectors:
+		assert selector.startswith((".sp-wizard", '[data-theme="dark"] .sp-wizard')), selector
+	for accent, light, dark in (
+		("brass", "#9A7116", "#D8B259"),
+		("sage", "#2B7A57", "#74C9A0"),
+		("brick", "#A8473A", "#E5907F"),
+	):
+		assert f"--sp-{accent}: {light};" in css and f"--sp-{accent}: {dark};" in css
+	assert "@media (prefers-reduced-motion: reduce)" in css and "@media (max-width: 899.98px)" in css
+	for word in ("gradient", "text-transform", "monospace"):
+		assert word not in css, word
+
+
+def test_the_wizard_files_are_indented_with_tabs():
+	for path in (
+		PAGE_DIR / "shipping_policy_wizard.js",
+		PAGE_DIR / "shipping_policy_wizard.css",
+		FORM_SCRIPT,
+	):
+		for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+			# a line inside a CSS comment block starts with " *"
+			assert not line.startswith(" ") or line.startswith(" *"), (
+				f"{path.name}:{number} starts with spaces"
+			)
+
+
 # ---------------------------------------------------------------- how the files reach erp2
 PUSH = ROOT / "tools" / "erp2_push.sh"
 FILE_LIST = ROOT / "tools" / "shipping_policy_files.txt"
@@ -644,7 +722,7 @@ def test_a_dry_run_checks_the_list_prints_every_step_and_touches_nothing(real_li
 	assert result.returncode == 0, result.stderr
 	assert real_list.calls() == [], "a dry run must not call ssh, rsync or docker at all"
 	reloads = [line.split()[-1] for line in result.stdout.splitlines() if "reload-doc" in line]
-	assert reloads == RELOAD_ORDER
+	assert reloads == [*RELOAD_ORDER, "shipping_policy_wizard"], "the doctypes in order, then the wizard page"
 	lines = result.stdout.splitlines()
 	cleared = [number for number, line in enumerate(lines) if "clear-cache" in line]
 	last_reload = max(number for number, line in enumerate(lines) if "reload-doc" in line)
@@ -679,8 +757,8 @@ def test_a_real_run_copies_the_listed_files_reloads_in_order_and_clears_the_cach
 	assert len(remote) == 2, "one process reloads every doctype, one clears the cache, and nothing else"
 	reload_call, cache_call = remote
 	assert "/env/bin/python - erp.shaik.net dsi_catalogue doctype:" in reload_call
-	asked = [word.rstrip("'") for word in reload_call.split() if word.startswith("doctype:")]
-	assert asked == [f"doctype:{name}" for name in RELOAD_ORDER]
+	asked = [word.rstrip("'") for word in reload_call.split() if word.startswith(("doctype:", "page:"))]
+	assert asked == [*(f"doctype:{name}" for name in RELOAD_ORDER), "page:shipping_policy_wizard"]
 	assert cache_call.rstrip("'").endswith("bench --site erp.shaik.net clear-cache")
 	assert not any(call.startswith(("docker ", "bench ")) for call in calls)
 	assert "restart" not in " ".join(calls)
