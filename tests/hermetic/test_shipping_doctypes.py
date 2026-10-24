@@ -1043,8 +1043,19 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 	assert levant["read"] == [], "a zone that is off is shown to nobody"
 	assert (levant["rules"], levant["no_rules"], levant["fallback"]) == ([], "", "")
 	assert summary["closing"] == ["When no rule fits an order, customers pay the carrier's price."]
-	assert card["source"] == "Prices come from the rate card, so the rules and the fallbacks are not used."
-	assert (card["zones"][0]["rules"], card["zones"][0]["fallback"], card["closing"]) == ([], "", [])
+	# ruling P89: with the rate card as the price source the carrier is not asked; the summary says so first, and
+	# still says the rules and the fallbacks as they stand in the draft, for the page to show them quietly
+	assert card["source"] == (
+		"Prices come from the rate card: the carrier is not asked, and the rules and fallbacks below are not used."
+	)
+	assert (card["unused"], summary["unused"]) == (True, False)
+	assert card["zones"][0]["rules"] == [
+		"Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free)."
+	]
+	assert card["zones"][0]["fallback"] == (
+		"If the carrier cannot quote, the policy default applies: delivery is not offered."
+	)
+	assert card["closing"] == ["When no zone or no rule fits an order, customers pay the carrier's price."]
 	assert empty["closing"] == [
 		"There is no zone yet.",
 		"When no zone or no rule fits an order, customers pay the carrier's price.",

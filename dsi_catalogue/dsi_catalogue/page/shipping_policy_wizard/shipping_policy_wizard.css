@@ -1384,6 +1384,24 @@
 	margin-top: 28px;
 }
 
+/* With the rate card as the price source none of the fallbacks is used: a note says so, and what each would
+ * come to goes quiet (the choices can still be made, for when the carrier is the price source again). */
+.sp-wizard .sp-mode-note {
+	max-width: 72ch;
+	margin: -4px 0 16px;
+	padding-left: 10px;
+	border-left: 2px solid var(--sp-rule-strong);
+	color: var(--text-color);
+	line-height: 1.45;
+}
+
+.sp-wizard .sp-fallback-step.is-unused .sp-fallback-sentence,
+.sp-wizard .sp-fallback-step.is-unused .sp-fallback-figure {
+	color: var(--text-muted);
+	font-size: var(--text-sm);
+	font-weight: 400;
+}
+
 /* The Review step reads as one statement, top down, not as cards: the problems, what will change, the policy
  * in plain words; then the receipt's double rule, and under it the decision to go live, as the tape's total
  * stands under its own. */
@@ -1514,6 +1532,17 @@
 	padding: 0;
 	list-style: none;
 	line-height: 1.55;
+}
+
+/* with the rate card as the price source, what is not used reads quietly (the first sentence says why) */
+.sp-wizard .sp-review-summary.is-unused .sp-summary-rules,
+.sp-wizard .sp-review-summary.is-unused .sp-summary-pricing,
+.sp-wizard .sp-review-summary.is-unused .sp-summary-closing {
+	color: var(--text-muted);
+}
+
+.sp-wizard .sp-review-summary.is-unused .sp-summary-source {
+	color: var(--text-color);
 }
 
 /* a rule that wraps hangs under its own first word, so each starts where the eye looks for it */

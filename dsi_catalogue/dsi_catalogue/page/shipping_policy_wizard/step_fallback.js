@@ -8,6 +8,10 @@
 // default (for every zone that uses it) and "Anything not covered". The words are sp.fallback_sentence and its
 // kin (wizard_policy_words.js), which the Review step prints too.
 //
+// With the rate card as the price source the carrier is not asked, so none of the choices is used (ruling P89):
+// a quiet line says so at the top, and the cards' sentences and figures go quiet. The choices can still be made,
+// for when the carrier is the price source again.
+//
 // The cards change only the fallback of their zone (or the policy's default_fallback and not_covered), through
 // wizard.change. A fixed amount is kept to the cents the ERP keeps, rounded as the ERP rounds it (the desk's own
 // flt, as the Rules step's limits are). Choosing "Charge a fixed amount" leaves the amount blank until one is
@@ -33,7 +37,14 @@ class FallbackView {
 		);
 		this.policy_default = new FallbackCard(this, null);
 		this.not_covered = new NotCoveredCard(this);
-		panel.append(
+		this.unused = el(
+			"p",
+			{ class: "sp-mode-note", "data-testid": "fallback-unused" },
+			__("While the price source is the rate card the carrier is not asked, so none of these choices is used.")
+		);
+		this.root = el(
+			"div",
+			{ class: "sp-fallback-step" },
 			el(
 				"p",
 				{ class: "sp-step-intro" },
@@ -41,10 +52,12 @@ class FallbackView {
 					"When the carrier gives no price for a whole order, the rules are not used: the zone's choice below sets what customers pay. Tick “The carrier can't quote” in Try an order to see it."
 				)
 			),
+			this.unused,
 			this.list,
 			this.empty,
 			el("div", { class: "sp-zones sp-fallback-policy" }, this.policy_default.root, this.not_covered.root)
 		);
+		panel.append(this.root);
 		this.refresh();
 	}
 
@@ -64,6 +77,9 @@ class FallbackView {
 		this.empty.hidden = count > 0;
 		this.policy_default.update();
 		this.not_covered.update();
+		const by_card = this.wizard.price_source() === "rate_card";
+		this.unused.hidden = !by_card;
+		this.root.classList.toggle("is-unused", by_card);
 	}
 }
 

@@ -216,8 +216,11 @@ Object.assign(sp, {
 		return line.label ? __("{0}: {1}", [line.label, said]) : said;
 	},
 
-	// {source, zones: [{name, states: [{kind, text}], where, read, off, never, rules, no_rules, fallback}],
-	// closing}: plain sentences, the zones in the draft's order. `country_name(code)` names a country.
+	// {source, unused, zones: [{name, states: [{kind, text}], where, read, off, never, rules, no_rules,
+	// fallback}], closing}: plain sentences, the zones in the draft's order. `country_name(code)` names a country.
+	// With the rate card as the price source (ruling P89) the carrier is not asked: `source` says that the rules
+	// and the fallbacks are not used, and `unused` is true, for the step to show them quietly; they are still
+	// said, as they stand in the draft.
 	policy_summary(policy, country_name = (code) => code) {
 		const zones = (Array.isArray(policy?.zones) ? policy.zones : []).filter(sp.is_record);
 		const rules = Array.isArray(policy?.rules) ? policy.rules : [];
@@ -225,14 +228,15 @@ Object.assign(sp, {
 		const text = (value) => String(value ?? "").trim();
 		const summary = {
 			source: by_card
-				? __("Prices come from the rate card, so the rules and the fallbacks are not used.")
+				? __("Prices come from the rate card: the carrier is not asked, and the rules and fallbacks below are not used.")
 				: __("Prices start from the carrier's quote for each order."),
+			unused: by_card,
 			zones: zones.map((zone) => {
 				const name = text(zone.name);
 				const codes = Array.isArray(zone.countries) ? zone.countries.map(String) : [];
 				const line = text(zone.customer_line);
 				const message = text(zone.not_offered_message);
-				const priced = Boolean(zone.enabled) && !zone.not_shipped && !by_card;
+				const priced = Boolean(zone.enabled) && !zone.not_shipped;
 				let where = __("No country yet.");
 				if (zone.everywhere_else) where = __("Every other country.");
 				else if (codes.length) where = __("{0}.", [sp.and_list(codes.map((code) => country_name(code)))]);
@@ -274,16 +278,14 @@ Object.assign(sp, {
 			closing: [],
 		};
 		if (!zones.length) summary.closing.push(__("There is no zone yet."));
-		if (!by_card) {
-			const catches_all = zones.some((zone) => zone.enabled && zone.everywhere_else);
-			summary.closing.push(
-				catches_all
-					? sp.not_covered_sentence(policy)
-					: passes_through(policy)
-					? __("When no zone or no rule fits an order, customers pay the carrier's price.")
-					: __("When no zone or no rule fits an order, delivery is not offered.")
-			);
-		}
+		const catches_all = zones.some((zone) => zone.enabled && zone.everywhere_else);
+		summary.closing.push(
+			catches_all
+				? sp.not_covered_sentence(policy)
+				: passes_through(policy)
+				? __("When no zone or no rule fits an order, customers pay the carrier's price.")
+				: __("When no zone or no rule fits an order, delivery is not offered.")
+		);
 		return summary;
 	},
 

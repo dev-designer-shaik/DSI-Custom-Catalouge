@@ -310,17 +310,20 @@ class ReviewView {
 		);
 	}
 
-	// The whole draft in plain words, zone by zone.
+	// The whole draft in plain words, zone by zone. With the rate card as the price source the rules, the fallbacks
+	// and "Anything not covered" are said quietly: the first sentence says they are not used (ruling P89).
 	show_summary() {
 		const names = new Map(this.wizard.state.countries.map((country) => [country.code, country.name]));
 		const summary = sp.policy_summary(this.wizard.store.draft, (code) => names.get(code) || code);
 		const said = JSON.stringify(summary);
 		if (said === this.summary_said) return;
 		this.summary_said = said;
+		this.summary.classList.toggle("is-unused", summary.unused);
 		const paragraph = (...sentences) => {
 			const text = sentences.filter(Boolean).join(" ");
 			return text ? el("p", { class: "sp-summary-text" }, text) : null;
 		};
+		const pricing = (sentence) => (sentence ? el("p", { class: "sp-summary-text sp-summary-pricing" }, sentence) : null);
 		this.summary.replaceChildren(
 			el("p", { class: "sp-summary-source" }, summary.source),
 			...summary.zones.map((zone) =>
@@ -343,8 +346,8 @@ class ReviewView {
 								zone.rules.map((rule) => el("li", {}, rule))
 						  )
 						: null,
-					paragraph(zone.no_rules),
-					paragraph(zone.fallback)
+					pricing(zone.no_rules),
+					pricing(zone.fallback)
 				)
 			),
 			...summary.closing.map((line) => el("p", { class: "sp-summary-closing" }, line))

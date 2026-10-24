@@ -2068,6 +2068,50 @@ try {
 		assert(JSON.stringify(await draftNow()) === JSON.stringify(finished()), "the draft is the example again");
 	});
 
+	// Ruling P89: with the rate card as the price source the carrier is not asked, so no fallback is used.
+	await check("with the rate card as the price source, the fallbacks and the Review say they are not used", async () => {
+		const source = (value) =>
+			page.evaluate((value) => {
+				frappe.pages["shipping-policy-wizard"].wizard.change((draft) => {
+					draft.price_source = value;
+				});
+			}, value);
+		await source("rate_card");
+		try {
+			await page.click(by("step-tab-fallback"));
+			await expectText(
+				"fallback-unused",
+				"While the price source is the rate card the carrier is not asked, so none of these choices is used."
+			);
+			const colours = await page.evaluate(() => {
+				const gcc = document.querySelectorAll('[data-testid="fallback-zone"]')[1];
+				const colour = (element) => getComputedStyle(element).color;
+				return {
+					sentence: colour(gcc.querySelector('[data-testid="fallback-sentence"]')),
+					figure: colour(gcc.querySelector('[data-testid="fallback-figure"]')),
+					muted: colour(document.querySelector("#sp-panel-fallback .sp-step-intro")),
+				};
+			});
+			assert(colours.sentence === colours.muted && colours.figure === colours.muted, `quiet: ${JSON.stringify(colours)}`);
+			await page.click(by("step-tab-review"));
+			const summary = await textOf("review-summary");
+			const first = "Prices come from the rate card: the carrier is not asked, and the rules and fallbacks below are not used.";
+			assert(summary.startsWith(first), `the summary says it first: ${summary}`);
+			assert(summary.includes("Rule 3 (Gulf at the carrier price)"), "and still says the rules");
+			const quiet = await page.evaluate(() => [
+				getComputedStyle(document.querySelector('[data-testid="review-summary"] .sp-summary-rules')).color,
+				getComputedStyle(document.querySelector("#sp-panel-review .sp-step-intro")).color,
+			]);
+			assert(quiet[0] === quiet[1], `the rules read quietly: ${quiet}`);
+		} finally {
+			await source("carrier");
+		}
+		await page.click(by("step-tab-fallback"));
+		assert(await page.$eval(by("fallback-unused"), (note) => note.hidden), "no note while the carrier is the source");
+		await page.click(by("step-tab-review"));
+		assert(JSON.stringify(await draftNow()) === JSON.stringify(finished()), "the draft is the example again");
+	});
+
 	await check("the Active switch says its state in words, and Apply then says it switches the policy on", async () => {
 		assert((await textOf("tape-total-label")) === "Customer would pay", "off: the customer would pay");
 		await page.click(by("policy-active"));
