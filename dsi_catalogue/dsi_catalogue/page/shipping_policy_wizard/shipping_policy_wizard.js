@@ -17,11 +17,17 @@
 //	wizard_rule_words.js      the words of a rule (sp.rule_words, sp.rule_text...): the Rules and Review steps'
 //	wizard_policy_words.js    the words of the rest of the policy (sp.fallback_sentence, sp.change_lines,
 //	                          sp.policy_summary, sp.problem_step...): the Fallback and Review steps'
+//	wizard_rate_card.js       the rate card's builders and words (sp.card_as_kept, sp.new_card_profile...,
+//	                          sp.card_counts, sp.zone_price_words, sp.card_summary...): the Rates and Review steps'
 //	wizard_itemset_editor.js  dsi_catalogue.ItemSetEditor: an item set's name, groups and items (Rules step)
 //	wizard_rule_card.js       one rule of the Rules step as a card: its sentence of chips, price and editors
-//	step_<id>.js              the body of each tab, one file each, step_<id> = {render, refresh, priced}:
-//	                          Tasks 8, 9 and 16 replace these stubs, each task its own files (built: Zones,
-//	                          Rules, the Fallback step "If the carrier can't quote" and Review, with Apply)
+//	wizard_rates_import.js    the Rates step's import of the Shopify export: files or pasted text, the preview,
+//	                          Use these rates (the card and the zone "Not delivered" into the draft)
+//	wizard_rates_card.js      the Rates step's view of the card: how much it holds, then a card per profile
+//	wizard_rates_zone.js      a zone of the card: its countries, delivery method, days and prices (weight tiers)
+//	step_<id>.js              the body of each tab, one file each, step_<id> = {render, refresh, priced}
+//	                          (Zones, Rates, Rules, the Fallback step "If the carrier can't quote", Review with
+//	                          Apply, and Test, which checks what is live: Tasks 8, 9 and 16)
 //	this file                 the constants, the parts in order, STEPS (the six tabs) and the page's events:
 //	                          on_page_load builds the page and starts the wizard; on_page_show reloads the
 //	                          saved policy while the draft is clean
@@ -97,8 +103,12 @@ frappe.provide("dsi_catalogue");
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_chips.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_words.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_policy_words.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rate_card.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_itemset_editor.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_card.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rates_import.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rates_card.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rates_zone.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_zones.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_rates.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_rules.js" %}

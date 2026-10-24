@@ -4,7 +4,8 @@
 // carrier's price], rounded up", each bracket a chip that opens its editor under the line, and under it
 // "Only when [no limits]", the chip of its order value, weight and volume limits. Beside the sentence is what
 // the rule charges the order in the tape (try_order's previews): brass when the customer pays it, sage when
-// it is free, muted when an earlier rule comes first, and a dash with the reason when it does not apply.
+// it is free, muted when an earlier rule comes first, and a dash with the reason when it does not apply. While
+// the price source is the rate card a quiet note says that the rules are not used (the carrier is not asked).
 //
 // Rules are checked from the top, so the cards are in the order of the draft's rules: the up and down buttons
 // move a rule (the keyboard's way), its grip moves it with the mouse, and a live region says where it went. A
@@ -56,12 +57,19 @@ class RulesView {
 		);
 		this.add_hint = el("p", { class: "sp-hint", id: "sp-rule-add-hint" });
 		this.live = new Announcer("rules-live");
+		// with the rate card as the price source the carrier is not asked, so no rule is used (shown in refresh)
+		this.not_used = el(
+			"p",
+			{ class: "sp-mode-note", "data-testid": "rules-not-used-note", hidden: true },
+			__("Rules are not used while the price source is the rate card.")
+		);
 		panel.append(
 			el(
 				"p",
 				{ class: "sp-step-intro" },
 				__("Rules are checked from the top. The first one that fits an order sets what the customer pays.")
 			),
+			this.not_used,
 			this.list,
 			this.empty,
 			el("div", { class: "sp-add" }, this.add_button, this.add_hint),
@@ -118,6 +126,7 @@ class RulesView {
 			: __("No rules yet.");
 		this.add_button.setAttribute("aria-disabled", String(!zone));
 		this.add_hint.textContent = zone ? "" : __("Add a zone first, in the Zones step: a rule is always for a zone.");
+		this.not_used.hidden = this.wizard.price_source() !== "rate_card";
 	}
 
 	// What each rule charges the order in the tape: the previews of the latest answer, by the rule's place.

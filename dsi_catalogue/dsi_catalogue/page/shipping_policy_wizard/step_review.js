@@ -371,8 +371,9 @@ class ReviewView {
 		this.diff.replaceChildren(...parts);
 	}
 
-	// The whole draft in plain words, zone by zone. With the rate card as the price source the rules, the fallbacks
-	// and "Anything not covered" are said quietly: the first sentence says they are not used (ruling P89).
+	// The whole draft in plain words, zone by zone. With the rate card as the price source the card's own lines come
+	// first, and the rules, the fallbacks and "Anything not covered" are said quietly: the first sentence says they
+	// are not used (ruling P89).
 	show_summary() {
 		const names = new Map(this.wizard.state.countries.map((country) => [country.code, country.name]));
 		const summary = sp.policy_summary(this.wizard.store.draft, (code) => names.get(code) || code);
@@ -387,6 +388,8 @@ class ReviewView {
 		const pricing = (sentence) => (sentence ? el("p", { class: "sp-summary-text sp-summary-pricing" }, sentence) : null);
 		this.summary.replaceChildren(
 			el("p", { class: "sp-summary-source" }, summary.source),
+			// only nodes: replaceChildren would print a null as the text "null"
+			...[this.card_lines(summary.card)].filter(Boolean),
 			...summary.zones.map((zone) =>
 				el(
 					"article",
@@ -412,6 +415,39 @@ class ReviewView {
 				)
 			),
 			...summary.closing.map((line) => el("p", { class: "sp-summary-closing" }, line))
+		);
+	}
+
+	// The rate card's own lines (sp.card_summary), with the rate card as the price source: a numbered profile at a
+	// time (the first whose product codes fit an item takes it), its zones a line each, then the countries not
+	// delivered to. Null when the card is not the price source.
+	card_lines(card) {
+		if (!card) return null;
+		return el(
+			"section",
+			{ class: "sp-summary-card", "aria-label": __("The rate card"), "data-testid": "review-card" },
+			el("p", { class: "sp-summary-text" }, card.none || card.intro),
+			card.profiles.map((profile, index) =>
+				el(
+					"article",
+					{ class: "sp-summary-zone", "data-testid": "review-card-profile" },
+					el(
+						"h4",
+						{ class: "sp-summary-name" },
+						el("span", { class: "sp-summary-number" }, String(index + 1)),
+						el("span", {}, profile.name)
+					),
+					el("p", { class: "sp-summary-text" }, profile.codes),
+					profile.zones.length
+						? el(
+								"ul",
+								{ class: "sp-summary-card-zones", "aria-label": __("Zones of this profile") },
+								profile.zones.map((zone) => el("li", {}, zone))
+						  )
+						: el("p", { class: "sp-summary-text" }, __("No zone yet, so it delivers nowhere."))
+				)
+			),
+			card.not_delivered ? el("p", { class: "sp-summary-text" }, card.not_delivered) : null
 		);
 	}
 

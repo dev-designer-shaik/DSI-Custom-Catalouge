@@ -3,8 +3,10 @@
 // The sample order, as typed, lives in tape.sample; the answer of the last try_order in wizard.priced.
 // The controls are drawn once (build); render_controls() updates what they show and allow, and
 // render_receipt() prints an answer. The carrier's controls (city, order value, weight, volume, the quote,
-// asking the carrier, "the carrier can't quote") are one block, this.carrier_block, so that the rate-card
-// mode can hide them with one change (Task 16): the country and the items stay.
+// asking the carrier, "the carrier can't quote") are one block, this.carrier_block, which render_controls() hides
+// while the draft's price source is the rate card (the server does not read them then): the country and the
+// items stay, with a quiet line that says the card prices from the items' product codes and weights. The
+// receipt prints the card's lines as the engine words them, "(weight estimated)" included.
 dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	constructor(wizard, root) {
 		this.wizard = wizard;
@@ -229,6 +231,12 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		);
 		this.after_total = el("p", { class: "sp-after-total sp-printed", hidden: true });
 		this.more = el("div", { class: "sp-more sp-printed", hidden: true });
+		// in rate-card mode, in place of the carrier's controls
+		this.card_note = el(
+			"p",
+			{ class: "sp-hint", "data-testid": "tape-card-note", hidden: true },
+			__("The rate card prices from the items' product codes and weights.")
+		);
 
 		this.root.append(
 			head,
@@ -236,7 +244,8 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 				"div",
 				{ class: "sp-tape-order" },
 				field(__("Ship to"), "sp-tape-country", this.country.root),
-				field(__("Items"), "sp-tape-item", picker, this.items_list)
+				field(__("Items"), "sp-tape-item", picker, this.items_list),
+				this.card_note
 			),
 			this.carrier_block,
 			this.receipt,
@@ -355,6 +364,9 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	// What the controls show and allow, from the sample, the last answer and the draft.
 	render_controls() {
 		const sample = this.sample;
+		const by_card = this.wizard.price_source() === "rate_card";
+		this.carrier_block.hidden = by_card;
+		this.card_note.hidden = !by_card;
 		const typed = (text) => String(text ?? "").trim() !== "";
 		const has_items = sample.items.length > 0;
 		this.value_hint.textContent =

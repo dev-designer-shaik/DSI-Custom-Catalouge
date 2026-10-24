@@ -15,7 +15,8 @@
 //	sp.rule_statement(rule)            a rule as the Review says it: the words of its card in the Rules step
 //	                                    (sp.rule_words, wizard_rule_words.js) with commas, and a rule for an item
 //	                                    set says what the Rules step's asterisk says (ruling P90)
-//	sp.policy_summary(policy, country_name)  the whole policy in plain words, zone by zone
+//	sp.policy_summary(policy, country_name)  the whole policy in plain words, zone by zone (and, with the rate
+//	                                    card as the price source, the card's own lines first)
 //	sp.problem_step(sentence)          the step that owns a problem preview_changes found, or null when unsure
 
 const FALLBACK_CHOICES = [
@@ -216,11 +217,12 @@ Object.assign(sp, {
 		return line.label ? __("{0}: {1}", [line.label, said]) : said;
 	},
 
-	// {source, unused, zones: [{name, states: [{kind, text}], where, read, off, never, rules, no_rules,
+	// {source, unused, card, zones: [{name, states: [{kind, text}], where, read, off, never, rules, no_rules,
 	// fallback}], closing}: plain sentences, the zones in the draft's order. `country_name(code)` names a country.
 	// With the rate card as the price source (ruling P89) the carrier is not asked: `source` says that the rules
 	// and the fallbacks are not used, and `unused` is true, for the step to show them quietly; they are still
-	// said, as they stand in the draft.
+	// said, as they stand in the draft. `card` is then the card's own lines (sp.card_summary, wizard_rate_card.js:
+	// its profiles, their zones and the prices of each in words, and the countries not delivered to), else null.
 	policy_summary(policy, country_name = (code) => code) {
 		const zones = (Array.isArray(policy?.zones) ? policy.zones : []).filter(sp.is_record);
 		const rules = Array.isArray(policy?.rules) ? policy.rules : [];
@@ -231,6 +233,7 @@ Object.assign(sp, {
 				? __("Prices come from the rate card: the carrier is not asked, and the rules and fallbacks below are not used.")
 				: __("Prices start from the carrier's quote for each order."),
 			unused: by_card,
+			card: by_card ? sp.card_summary(policy, country_name) : null,
 			zones: zones.map((zone) => {
 				const name = text(zone.name);
 				const codes = Array.isArray(zone.countries) ? zone.countries.map(String) : [];

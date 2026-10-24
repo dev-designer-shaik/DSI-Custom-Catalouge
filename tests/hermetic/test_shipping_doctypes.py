@@ -17,13 +17,15 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from dsi_catalogue import shipping_integration_check
 from dsi_catalogue.shipping_engine import LABELS, _fallback_choice, resolve, validate_policy
 from dsi_catalogue.shipping_policy_data import diff_policy, policy_from_rows, rows_from_policy
-from dsi_catalogue.shipping_rate_card import validate_card
+from dsi_catalogue.shipping_rate_card import card_summary, lb_text, parse_shopify_export, validate_card
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCTYPE_DIR = ROOT / "dsi_catalogue" / "dsi_catalogue" / "doctype"
@@ -517,6 +519,9 @@ ALLOWED_HTML_WRITERS = {
 		'zone?")'
 	): "a fixed question",
 	'frappe.confirm(__("Discard your draft and load the policy as it is saved now?")': "a fixed question",
+	'frappe.confirm(__("Replace the rate card in your draft with these rates?")': "a fixed question",
+	'frappe.confirm(__("Delete this profile, with its zones and prices?")': "a fixed question",
+	'frappe.confirm(__("Delete this zone, with its countries and prices?")': "a fixed question",
 }
 # The pattern of an include directive in Frappe's render_include (frappe/model/utils/__init__.py), which the
 # desk runs on a page's script when it loads the page (Page.load_assets).
@@ -1327,6 +1332,197 @@ def test_a_refusal_is_read_a_sentence_a_line_as_plain_text(tmp_path):
 		[],
 		[],
 		["One sentence.", "Another one.", "A <b>third</b>."],
+	]
+
+
+# ---------------------------------------------------------------- the Rates step and the Test tab
+RATES_SAMPLE = Path(__file__).parent / "fixtures" / "shopify_shipping_config_sample.csv"
+RATES_SAMPLE_CLOSED = Path(__file__).parent / "fixtures" / "shopify_countries_not_delivered_sample.csv"
+
+
+def sample_card():
+	"""The repository's trimmed sample of the Shopify export, read as import_rate_card reads it."""
+	config = RATES_SAMPLE.read_bytes().decode("utf-8")
+	closed = RATES_SAMPLE_CLOSED.read_bytes().decode("utf-8")
+	return parse_shopify_export(config, closed)["card"]
+
+
+def key_orders(value, path="card"):
+	"""[(where, [keys in order])] of every dict in a value: what a JSON compare sees beyond the values."""
+	if isinstance(value, dict):
+		found = [(path, list(value))]
+		for key, entry in value.items():
+			found += key_orders(entry, f"{path}.{key}")
+		return found
+	if isinstance(value, list):
+		return [order for index, entry in enumerate(value) for order in key_orders(entry, f"{path}[{index}]")]
+	return []
+
+
+@needs_node
+def test_a_rate_card_the_wizard_takes_or_adds_to_has_its_keys_in_the_order_the_erp_keeps(tmp_path):
+	"""dirty is a JSON compare, key order included, and the ERP keeps a rate card as JSON text with its keys sorted
+	(shipping_policy_data._card_text), which is how wizard_state hands a saved card back. So the Rates step takes an
+	imported card in that order (sp.card_as_kept), and the profile, zone and tier it adds have their keys in it too:
+	the same card imported again, or an entry added and taken back, leaves the draft clean."""
+	card = sample_card()
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		return {{
+			card: sp.card_as_kept({json.dumps(card)}),
+			profile: sp.new_card_profile("Pens"),
+			zone: sp.new_card_zone("Gulf"),
+			tier: sp.new_card_tier(0.01, 2, 40),
+		}};
+		""",
+	)
+	kept = policy_from_rows(rows_from_policy({"rate_card": card}, {})["policy"], [], [], {})["rate_card"]
+	assert got["card"] == kept, "the same card"
+	assert key_orders(got["card"]) == key_orders(kept), "with its keys in the order the ERP keeps them"
+	assert key_orders(card) != key_orders(kept), "which is not the order the import gives"
+	assert list(got["profile"]) == list(kept["profiles"][0]) == ["match", "name", "zones"]
+	assert (
+		list(got["zone"])
+		== list(kept["profiles"][0]["zones"][0])
+		== ["countries", "days", "method", "name", "tiers"]
+	)
+	assert list(got["tier"]) == list(kept["profiles"][0]["zones"][0]["tiers"][0]) == ["from", "price", "to"]
+	# a new zone has one price at any weight, not typed yet: the card says so until it is typed
+	assert got["zone"]["tiers"] == [{"from": None, "price": None, "to": None}]
+	added = {**card, "profiles": [*card["profiles"], {**got["profile"], "zones": [got["zone"]]}]}
+	assert any("has a price that has to be a number" in problem for problem in validate_card(added))
+
+
+@needs_node
+def test_the_rate_card_is_said_in_plain_words(tmp_path, wizard_module):
+	"""The words of the card (wizard_rate_card.js): how much it holds, as card_summary counts it; a weight as the
+	card's own sentences write it (lb_text); what a zone charges; the Review's lines of the card; whether anything
+	uses the card, as shipping_policy.fallback_may_use_the_card answers for an enabled zone or the policy default;
+	and a text's length as the server counts it."""
+	card = sample_card()
+	weights = [0.7, 2.0, 18.01, 1.984, 0.772, 4.1, 0.01, 10000.0]
+	usa = card["profiles"][2]["zones"][0]
+	flat = {"tiers": [{"from": None, "price": 35.0, "to": None}]}
+	free = {"tiers": [{"from": None, "price": 0.0, "to": None}]}
+	blank = {"tiers": [{"from": None, "price": None, "to": None}]}
+	missing = {"tiers": [{"from": 0.01, "price": 40.0, "to": 2.0}, {"from": 2.01, "price": None, "to": 4.0}]}
+	closed = {"name": "Not delivered", "enabled": True, "not_shipped": True, "countries": ["AF", "RU"]}
+	policy = {"price_source": "rate_card", "rate_card": card, "zones": [closed]}
+	names = {
+		"AE": "United Arab Emirates",
+		"US": "United States",
+		"AF": "Afghanistan",
+		"RU": "Russian Federation",
+	}
+	fallbacks = [
+		{"default_fallback": {"method": "rate_card"}, "zones": []},
+		{
+			"default_fallback": {"method": "no_delivery"},
+			"zones": [{"enabled": True, "fallback": {"method": "rate_card"}}],
+		},
+		{
+			"default_fallback": {"method": "no_delivery"},
+			"zones": [{"enabled": False, "fallback": {"method": "rate_card"}}],
+		},
+		{
+			"default_fallback": {"method": "fixed"},
+			"zones": [{"enabled": True, "fallback": {"method": "policy_default"}}],
+		},
+	]
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		const names = {json.dumps(names)};
+		return {{
+			counts: sp.card_counts({json.dumps(card)}),
+			words: sp.counts_words(sp.card_counts({json.dumps(card)})),
+			one: sp.counts_words({{ profiles: 1, zones: 1, tiers: 1, countries: 1 }}),
+			pounds: {json.dumps(weights)}.map((weight) => sp.pounds(weight)),
+			prices: [{json.dumps([usa, flat, free, blank, missing, {"tiers": []}])}].flat().map((zone) => sp.zone_price_words(zone)),
+			summary: sp.card_summary({json.dumps(policy)}, (code) => names[code] || code),
+			none: sp.card_summary({{ zones: [] }}),
+			review: sp.policy_summary({json.dumps(policy)}, (code) => names[code] || code).card,
+			carrier: sp.policy_summary({{ ...{json.dumps(policy)}, price_source: "carrier" }}).card,
+			uses: {json.dumps(fallbacks)}.map((policy) => sp.uses_the_card(policy)),
+			source: sp.uses_the_card({{ price_source: "rate_card", zones: [] }}),
+			length: sp.text_length("a\\ud83d\\ude00b"),
+		}};
+		""",
+	)
+	assert got["counts"] == card_summary(card)
+	assert got["words"] == "4 profiles, 10 zones, 20 weight tiers and 18 countries"
+	assert got["one"] == "1 profile, 1 zone, 1 weight tier and 1 country"
+	assert got["pounds"] == [lb_text(weight) for weight in weights]
+	assert got["prices"] == [
+		"5 weight tiers from 0.1 to 20 lb, $35.00 to $400.00",
+		"$35.00 at any weight",
+		"Free at any weight",
+		"One price at any weight, not typed yet",
+		"2 weight tiers from 0.01 to 4 lb, $40.00, a price not typed yet",
+		"No prices yet",
+	]
+	summary = got["summary"]
+	assert summary["intro"].startswith("The rate card, with weights in pounds and prices in US dollars.")
+	assert [profile["name"] for profile in summary["profiles"]] == [
+		profile["name"] for profile in card["profiles"]
+	]
+	assert summary["profiles"][0]["codes"] == "Product codes F-*-PT and F-CR-PC-*."
+	assert summary["profiles"][2]["zones"][0] == (
+		"USA: United States. 5 weight tiers from 0.1 to 20 lb, $35.00 to $400.00, International Express (4-7 days)."
+	)
+	assert (
+		summary["profiles"][2]["zones"][3]
+		== "Bahrain (Local): BH. Free at any weight, Free Shipping (1-2 days)."
+	)
+	assert summary["not_delivered"] == (
+		"Delivery is not offered to Afghanistan and Russian Federation: their zone is not shipped to."
+	)
+	assert got["none"]["none"] == "There is no rate card yet." and got["none"]["profiles"] == []
+	assert got["review"] == summary, "the Review says the card with the same words, in rate-card mode only"
+	assert got["carrier"] is None
+	may_use = sys.modules["dsi_catalogue.shipping_policy"].fallback_may_use_the_card
+	assert got["uses"] == [may_use(policy) for policy in fallbacks] == [True, True, False, False]
+	assert got["source"] is True
+	assert got["length"] == len("a\U0001f600b") == 3
+
+
+@needs_node
+def test_a_check_of_the_test_tab_says_its_status_in_words(tmp_path):
+	"""sp.check_status (step_test.js) on the checks shipping_integration_check really makes: a check that passed, one
+	that did not, a website that was not asked and one that limits the route (HTTP 429: neutral, not a failure)."""
+	answer = {
+		"message": {
+			"policy_active": True,
+			"price_source": "rate_card",
+			"offered": True,
+			"offers": [{"amount": 100.0}],
+		}
+	}
+	checks = [
+		shipping_integration_check.summarize_policy_response(200, 300, answer, 100.0),
+		shipping_integration_check.summarize_carrier_response(ImportError("no dsi_shipping"), ms=5),
+		shipping_integration_check.website_not_asked("The address is not usable."),
+		shipping_integration_check.summarize_website_response(429, 120, {}, 100.0),
+		shipping_integration_check.summarize_website_response(500, 120, {"error": "down"}, None),
+		None,
+	]
+	got = run_page_helpers(tmp_path, f"return {json.dumps(checks)}.map((check) => sp.check_status(check));")
+	assert [status["text"] for status in got] == [
+		"Passed",
+		"Did not pass",
+		"Not asked",
+		"Rate limited",
+		"Did not pass",
+		"Not run",
+	]
+	assert [status["kind"] for status in got] == [
+		"passed",
+		"failed",
+		"not_asked",
+		"limited",
+		"failed",
+		"missing",
 	]
 
 
