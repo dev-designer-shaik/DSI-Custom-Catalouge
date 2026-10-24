@@ -667,8 +667,9 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	// the draft as if it were switched on, so that it can be tried before it goes live; whether it is on is
 	// read from the draft. While it is off, the receipt says so first, and its total is what customers would
 	// pay once it is on. The website prices from the policy only while it is on with the rate card as the price
-	// source (ruling P100): with the carrier, on or off, the receipt says that the website still charges the
-	// carrier's own prices, and its total is what the policy would charge.
+	// source (ruling P100): with the carrier, on or off, the receipt says that with this draft the website charges
+	// the carrier's own prices, and its total is what the policy would charge. The tape knows only the draft, not
+	// what customers pay now, so its note says nothing is "still" so (ruling P105).
 	render_receipt({ answer = null, blocked = null, problem = null } = {}) {
 		const note = (text, kind) => el("p", { class: `sp-${kind}` }, text);
 		const off = !this.wizard.store.draft.active;
@@ -698,10 +699,10 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 				  );
 			this.lines.append(note(today, "note"));
 		} else if (!by_card) {
-			const still = __(
-				"The website still charges the carrier's own prices: it applies the policy only with the rate card as the price source. This receipt shows what the policy would charge."
+			const carrier = __(
+				"With this draft the website charges the carrier's own prices: it applies the policy only with the rate card as the price source. This receipt shows what the policy would charge."
 			);
-			this.lines.append(note(still, "note"));
+			this.lines.append(note(carrier, "note"));
 		}
 		const offers = (Array.isArray(result.offers) ? result.offers : [])
 			.filter(sp.is_record)

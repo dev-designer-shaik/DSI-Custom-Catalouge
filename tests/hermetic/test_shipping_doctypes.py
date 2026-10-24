@@ -1730,8 +1730,28 @@ CARRIER_MODE_SENTENCES = {
 	"wizard_tape.js": [
 		"The policy is switched off, so today customers pay the carrier's price. This receipt shows what the "
 		"policy would charge, but the website applies it only with the rate card as the price source.",
-		"The website still charges the carrier's own prices: it applies the policy only with the rate card as the "
-		"price source. This receipt shows what the policy would charge.",
+		# the tape knows only the draft, not what customers pay now, so its note says nothing is "still" so
+		# (ruling P105)
+		"With this draft the website charges the carrier's own prices: it applies the policy only with the rate "
+		"card as the price source. This receipt shows what the policy would charge.",
+	],
+}
+# What the Review step says when the change itself is what customers notice (ruling P105): from a saved policy on
+# with the rate card to a draft on with the carrier, customers move to the carrier's own prices, so nothing is
+# "still" so; and a policy switched off after one on with the carrier leaves the carrier's price as it was, so
+# nothing comes back "again". "Still" and "again" stay where they are true (the pins above and below).
+TRANSITION_SENTENCES = {
+	"step_review.js": [
+		"Customers will pay the carrier's own prices instead of the rate card: the website applies the policy "
+		"only with the rate card as the price source.",
+		"Switched on: customers will pay the carrier's own prices instead of the rate card",
+		"Applied. Customers now pay the carrier's own prices instead of the rate card: the website applies the "
+		"policy only with the rate card as the price source.",
+		"Customers now pay the carrier's own prices instead of the rate card: the website applies the policy only "
+		"with the rate card as the price source.",
+		"The policy goes off: customers keep paying the carrier's price.",
+		"Applied and switched off. Customers keep paying the carrier's price.",
+		"It is switched off: customers keep paying the carrier's price.",
 	],
 }
 # What the page says with the rate card as the price source, or of a policy that is off: as it was.
@@ -1776,6 +1796,25 @@ def test_with_the_carrier_as_the_price_source_the_page_never_says_the_website_ap
 	served = served_page_script()
 	assert "shaped by the rules" not in served
 	assert "The rate card is used only where a fallback says Use the rate card." not in served
+
+
+def test_a_switch_from_the_rate_card_to_the_carrier_is_said_as_a_change():
+	"""Ruling P105 (the re-review's Minor and its "again" observation): the Review reads what customers pay now
+	from the saved policy (the line beside Apply and the switch read store.original, an Apply's sentences read
+	outcome.before). From the rate card, on, to the carrier, on, customers will pay, then now pay, the carrier's own
+	prices instead of the rate card; "still" stays only where they already paid the carrier's own prices. Switched
+	off, "again" stays only after a policy that was on with the rate card. The tape knows only the draft: its note
+	says what the draft does. Each sentence is read from its part, word for word."""
+	for part, said in TRANSITION_SENTENCES.items():
+		source = (PAGE_DIR / part).read_text(encoding="utf-8")
+		for sentence in said:
+			assert f'"{sentence}"' in source, f"{part} says: {sentence}"
+	review = (PAGE_DIR / "step_review.js").read_text(encoding="utf-8")
+	assert 'return Boolean(policy?.active) && policy?.price_source === "rate_card";' in review
+	assert review.count("pays_by_card(outcome.before)") == 2, "applied_sentence and late_sentence"
+	assert review.count("pays_by_card(store.original)") == 3, "the line beside Apply (on, off) and the switch"
+	tape = (PAGE_DIR / "wizard_tape.js").read_text(encoding="utf-8")
+	assert "The website still charges" not in tape
 
 
 # What the Review step says when an Apply's answer is lost and the saved policy still has the version the page
