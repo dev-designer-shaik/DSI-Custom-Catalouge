@@ -181,11 +181,16 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 			});
 		}
 		const tape = el("section", { class: "sp-tape", "aria-labelledby": "sp-tape-title" });
+		// The layout is one element inside the root, so that the style can lay it out by the root's own width.
 		this.root.replaceChildren(
-			this.banner,
-			this.tabs,
-			el("div", { class: "sp-step" }, Object.values(this.panels)),
-			tape
+			el(
+				"div",
+				{ class: "sp-layout" },
+				this.banner,
+				this.tabs,
+				el("div", { class: "sp-step" }, Object.values(this.panels)),
+				tape
+			)
 		);
 		this.tape = new dsi_catalogue.ShippingPolicyTape(this, tape);
 	}

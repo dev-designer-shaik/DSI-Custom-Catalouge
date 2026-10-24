@@ -13,22 +13,33 @@
 	--sp-brick: #A8473A;
 	--sp-rule: var(--outline-gray-3, var(--dark-border-color));
 	--sp-rule-strong: var(--outline-gray-4, var(--text-light));
+	--sp-edge: var(--border-color);
 	--sp-tape-width: 360px;
+	--sp-head: var(--page-head-height, 48px);
 
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) var(--sp-tape-width);
-	grid-template-areas:
-		"banner banner"
-		"tabs tabs"
-		"step tape";
-	column-gap: 32px;
-	align-items: start;
+	/* the layout follows the room the wizard has, not the window: the desk's sidebar takes some of it */
+	container: sp-wizard / inline-size;
 	/* the bottom leaves room to scroll the tape's last line clear of the desk's floating buttons */
 	padding: 8px 16px 96px;
 	color: var(--text-color);
 }
 
+/* Narrow first: the steps, then the tape under them. */
+.sp-wizard .sp-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-areas:
+		"banner"
+		"tabs"
+		"step"
+		"tape";
+	column-gap: 32px;
+	align-items: start;
+}
+
 [data-theme="dark"] .sp-wizard {
+	/* the desk's own border is nearly the colour of its dark surface: the tape's edge needs a lighter rule */
+	--sp-edge: var(--outline-gray-3, var(--dark-border-color));
 	--sp-brass: #D8B259;
 	--sp-sage: #74C9A0;
 	--sp-brick: #E5907F;
@@ -44,7 +55,6 @@
 
 .sp-wizard .sp-loading,
 .sp-wizard > .sp-problem {
-	grid-column: 1 / -1;
 	padding: 16px 0;
 	color: var(--text-muted);
 }
@@ -170,10 +180,9 @@
 /* ---------------------------------------------------------------- the tape */
 .sp-wizard .sp-tape {
 	grid-area: tape;
-	position: sticky;
-	top: calc(var(--page-head-height, 48px) + 17px);
+	margin-top: 32px;
 	padding: 16px 16px 18px;
-	border: 1px solid var(--border-color);
+	border: 1px solid var(--sp-edge);
 	border-radius: var(--border-radius-md, 10px);
 	background: var(--fg-color);
 }
@@ -398,10 +407,14 @@
 	margin-top: 16px;
 	padding-top: 14px;
 	border-top: 1px dashed var(--sp-rule);
+}
+
+/* the printed part (lines, total, what follows) dims while a price is on its way */
+.sp-wizard .sp-printed {
 	transition: opacity 120ms ease-out;
 }
 
-.sp-wizard .sp-receipt[aria-busy="true"] {
+.sp-wizard .sp-tape.is-pricing .sp-printed {
 	opacity: 0.55;
 }
 
@@ -560,23 +573,80 @@
 	color: var(--sp-sage);
 }
 
-/* ---------------------------------------------------------------- narrow screens, and less motion */
-@media (max-width: 899.98px) {
-	.sp-wizard {
-		grid-template-columns: minmax(0, 1fr);
+/* ---------------------------------------------------------------- the tape beside the steps */
+/* Once the wizard leaves the steps about 460 px beside the tape, the tape stands on the right and stays in
+ * view as the page scrolls. It is never taller than the window below it (it scrolls inside; the tape
+ * measures that room, --sp-tape-room, in wizard_tape.js), and its total stays at its foot. Browsers without
+ * container queries go by the window's width, the desk's sidebar counted in. */
+@container sp-wizard (min-width: 860px) {
+	.sp-wizard .sp-layout {
+		grid-template-columns: minmax(0, 1fr) var(--sp-tape-width);
 		grid-template-areas:
-			"banner"
-			"tabs"
-			"step"
-			"tape";
+			"banner banner"
+			"tabs tabs"
+			"step tape";
 	}
 
 	.sp-wizard .sp-tape {
-		position: static;
-		margin-top: 32px;
+		position: sticky;
+		top: calc(var(--sp-head) + 17px);
+		max-height: var(--sp-tape-room, calc(100vh - var(--sp-head) - 105px));
+		margin-top: 0;
+		padding-bottom: 0; /* the space below is a spacer that scrolls: nothing shows under the total */
+		overflow-y: auto;
+	}
+
+	.sp-wizard .sp-tape::after {
+		content: "";
+		display: block;
+		height: 18px;
+	}
+
+	.sp-wizard .sp-total {
+		position: sticky;
+		z-index: 1;
+		bottom: 0;
+		padding-bottom: 12px;
+		background: var(--fg-color);
 	}
 }
 
+@supports not (container-type: inline-size) {
+	@media (min-width: 1140px) {
+		.sp-wizard .sp-layout {
+			grid-template-columns: minmax(0, 1fr) var(--sp-tape-width);
+			grid-template-areas:
+				"banner banner"
+				"tabs tabs"
+				"step tape";
+		}
+
+		.sp-wizard .sp-tape {
+			position: sticky;
+			top: calc(var(--sp-head) + 17px);
+			max-height: var(--sp-tape-room, calc(100vh - var(--sp-head) - 105px));
+			margin-top: 0;
+			padding-bottom: 0; /* the space below is a spacer that scrolls: nothing shows under the total */
+			overflow-y: auto;
+		}
+
+		.sp-wizard .sp-tape::after {
+			content: "";
+			display: block;
+			height: 18px;
+		}
+
+		.sp-wizard .sp-total {
+			position: sticky;
+			z-index: 1;
+			bottom: 0;
+			padding-bottom: 12px;
+			background: var(--fg-color);
+		}
+	}
+}
+
+/* ---------------------------------------------------------------- less motion */
 @media (prefers-reduced-motion: reduce) {
 	.sp-wizard,
 	.sp-wizard *,

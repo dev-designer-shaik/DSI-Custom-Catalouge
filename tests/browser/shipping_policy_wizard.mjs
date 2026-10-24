@@ -398,9 +398,19 @@ await check("the three accents are the spec's, switched by the desk's dark theme
 	assert(dark.join() === "#D8B259,#74C9A0,#E5907F", `dark: ${dark}`);
 });
 
+await check("in the dark theme the tape's edge stays visible", async () => {
+	const edge = async () => page.$eval(".sp-tape", (tape) => getComputedStyle(tape).borderTopColor);
+	const light = await edge();
+	await theme("dark");
+	const dark = await edge();
+	await theme("light");
+	assert(light === "rgb(237, 237, 237)", `light: the desk's own border, ${light}`);
+	assert(dark === "rgb(66, 66, 66)", `dark: a rule lighter than the desk's #232323, ${dark}`);
+});
+
 await check("prefers-reduced-motion removes the receipt's transition", async () => {
 	const duration = async () =>
-		page.$eval(".sp-receipt", (receipt) => getComputedStyle(receipt).transitionDuration);
+		page.$eval(".sp-total", (total) => getComputedStyle(total).transitionDuration);
 	assert((await duration()) !== "0s", "the receipt fades while it prices");
 	await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }]);
 	const reduced = await duration();
@@ -538,6 +548,25 @@ await check("asking the carrier fills the quote and lists what it said", async (
 	assert(!(await textOf("tape-more")).includes("pay"), "no second Customer pays line");
 	const file = await shot("wizard-asked-the-carrier");
 	return `the carrier said "${services}", the quote field holds ${quote}, the total reads ${await textOf("tape-total")}; ${file}`;
+});
+
+await check("at 1400 x 768 the tape scrolls inside and keeps its total in view (screenshot)", async () => {
+	await viewport(1400, 768);
+	const seen = await page.evaluate(() => {
+		const tape = document.querySelector(".sp-tape");
+		const edge = tape.getBoundingClientRect();
+		const total = document.querySelector(".sp-total").getBoundingClientRect();
+		return {
+			fits: edge.bottom <= window.innerHeight - 72, // clear of the desk's floating buttons in that corner
+			scrolls: tape.scrollHeight > tape.clientHeight,
+			total: total.top >= 0 && total.bottom <= window.innerHeight,
+			pinned: Math.abs(edge.bottom - 1 - total.bottom) <= 2, // at the foot: nothing shows under it
+		};
+	});
+	const file = await shot("wizard-1400x768-asked");
+	await viewport(1400);
+	assert(Object.values(seen).every(Boolean), JSON.stringify(seen));
+	return file;
 });
 
 await check("a quote typed while the carrier is asked wins over its late answer", async () => {
@@ -779,6 +808,29 @@ await check("the Shipping Policy form opens the wizard from a primary button, un
 	await page.waitForFunction(() => location.pathname === "/desk/shipping-policy-wizard", { timeout: 15000 });
 	await page.waitForSelector(by("tape-total"), { timeout: 20000 });
 	return file;
+});
+
+await check("the tape stands beside the steps only while the steps keep 460 px", async () => {
+	const seen = [];
+	for (const width of [900, 1000, 1100, 1200, 1400]) {
+		await viewport(width);
+		seen.push(
+			await page.evaluate((width) => {
+				const step = document.querySelector(".sp-step").getBoundingClientRect();
+				const tape = document.querySelector(".sp-tape").getBoundingClientRect();
+				const root = document.documentElement;
+				const beside = tape.left >= step.right;
+				return { width, beside, step: Math.round(step.width), sideways: root.scrollWidth > root.clientWidth };
+			}, width)
+		);
+	}
+	await viewport(1400);
+	for (const at of seen) {
+		assert(!at.beside || at.step >= 460, `at ${at.width} px the steps have ${at.step} px beside the tape`);
+		assert(!at.sideways, `at ${at.width} px the page scrolls sideways`);
+	}
+	assert(seen.at(-1).beside, "at 1400 px the tape is beside the steps");
+	return seen.map((at) => `${at.width}: ${at.beside ? `beside, steps ${at.step} px` : "stacked"}`).join("; ");
 });
 
 // Last, because the desk remembers the narrow layout's closed sidebar for the pages loaded after it.

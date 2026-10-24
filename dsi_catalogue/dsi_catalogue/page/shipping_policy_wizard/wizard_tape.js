@@ -31,6 +31,29 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		this.build();
 		this.render_controls();
 		this.render_receipt({ blocked: this.request().blocked });
+		this.keep_in_view();
+	}
+
+	// Beside the steps the tape is never taller than the window below where it starts, and its total is pinned
+	// at its foot (the style does both). The style knows the window's height but not where the tape starts
+	// (under the page head, the tabs and, at times, the draft banner; higher once the page scrolls), so the
+	// room is measured here, as --sp-tape-room, whenever the page scrolls or something above the tape changes.
+	// It stops 88 px above the window's foot: the desk's floating buttons sit in that corner, over the total.
+	keep_in_view() {
+		let frame = null;
+		const measure = () => {
+			frame = null;
+			if (!this.root.isConnected || !this.root.offsetParent) return; // the page is not shown
+			const top = Math.max(this.root.getBoundingClientRect().top, 0);
+			this.root.style.setProperty("--sp-tape-room", `${Math.max(window.innerHeight - top - 88, 240)}px`);
+		};
+		const soon = () => {
+			frame = frame || requestAnimationFrame(measure);
+		};
+		window.addEventListener("scroll", soon, { passive: true });
+		window.addEventListener("resize", soon);
+		new ResizeObserver(soon).observe(this.root.parentElement || this.root);
+		soon();
 	}
 
 	// ---------------------------------------------------------- the controls
@@ -174,25 +197,22 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			)
 		);
 
+		// The receipt: the lines under a tear line, then the total, then what follows it. They are children of
+		// the tape itself (not of one receipt box), so that the total can stay pinned at the tape's foot wherever
+		// the tape is scrolled to (a pinned element cannot leave the box it is in).
 		this.lines = el("div", { class: "sp-receipt-lines", "data-testid": "tape-lines" });
+		this.receipt = el("div", { class: "sp-receipt sp-printed" }, this.lines);
 		this.total_label = el("span", { class: "sp-total-label", "data-testid": "tape-total-label" });
 		this.total = el("span", { class: "sp-total-amount", "data-testid": "tape-total" });
-		this.after_total = el("p", { class: "sp-after-total", hidden: true });
-		this.more = el("div", { class: "sp-more", hidden: true });
-		this.receipt = el(
-			"div",
-			{ class: "sp-receipt" },
-			this.lines,
-			// the total, with its label, is the polite live region: a new price is read out as one sentence
-			el(
-				"p",
-				{ class: "sp-total", "aria-live": "polite", "aria-atomic": "true" },
-				this.total_label,
-				this.total
-			),
-			this.after_total,
-			this.more
+		// the total, with its label, is the polite live region: a new price is read out as one sentence
+		this.total_row = el(
+			"p",
+			{ class: "sp-total sp-printed", "aria-live": "polite", "aria-atomic": "true" },
+			this.total_label,
+			this.total
 		);
+		this.after_total = el("p", { class: "sp-after-total sp-printed", hidden: true });
+		this.more = el("div", { class: "sp-more sp-printed", hidden: true });
 
 		this.root.append(
 			head,
@@ -203,7 +223,10 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 				field(__("Items"), "sp-tape-item", picker, this.items_list)
 			),
 			this.carrier_block,
-			this.receipt
+			this.receipt,
+			this.total_row,
+			this.after_total,
+			this.more
 		);
 	}
 
@@ -594,9 +617,12 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		this.render_receipt({ answer });
 	}
 
+	// While a price is on its way the printed part dims, and the total waits to be read out until it is there.
 	set_busy(busy) {
 		this.status.hidden = !busy;
+		this.root.classList.toggle("is-pricing", busy);
 		this.receipt.setAttribute("aria-busy", String(busy));
+		this.total_row.setAttribute("aria-busy", String(busy));
 	}
 
 	// ---------------------------------------------------------- the receipt
