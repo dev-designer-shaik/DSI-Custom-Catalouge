@@ -13,11 +13,15 @@
 // test restoring it and showing hostile names. The Zones and Rules checks build the example policy
 // (tests/hermetic/fixtures/shipping_policy_example.json) through the page as a draft and price orders with it;
 // the Fallback and Review checks finish it and APPLY it on erp2, change it from a second tab to see a stale
-// Apply refused, and then empty it again through the page's own Apply. Whatever happens, the run ends with
-// erp2's policy empty and switched off again, as it started (ensureEmptyPolicy, in a finally), and the
-// browser's storage empty.
+// Apply refused, and then empty it again through the page's own Apply. The Rates checks import the real Shopify
+// export (from RATES_DIR, default ~/shipping-interim-rates, outside this public repository: the files are handed
+// to the page's file choosers and never copied anywhere; without them the repository's trimmed sample is imported
+// instead, and the run says so), edit the card, APPLY it as the price source, switched on, and run the Test tab
+// against it. Whatever happens, the run ends with erp2's policy empty and switched off again, as it started
+// (ensureEmptyPolicy, in a finally), and the browser's storage empty.
 
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 const BASE = (process.env.ERP_URL || "https://erp2.shaik.net").replace(/\/+$/, "");
@@ -60,6 +64,49 @@ const EMPTY = {
 	item_sets: [],
 	rules: [],
 };
+
+// The Shopify export the Rates checks import, and what the server reads from it: the real one, from RATES_DIR
+// (outside this public repository: the files are handed to the page's file choosers and never copied), or, when
+// it is not there, the repository's trimmed sample (tests/hermetic/fixtures), which prices the USA order alike.
+const RATES_DIR = process.env.RATES_DIR || path.join(os.homedir(), "shipping-interim-rates");
+const RATES_REAL = {
+	what: "the real Shopify export",
+	config: path.join(RATES_DIR, "shopify_shipping_config.csv"),
+	closed: path.join(RATES_DIR, "shopify_countries_not_delivered.csv"),
+	read: "The shipping rates hold 4 profiles, 14 zones, 49 weight tiers and 232 countries.",
+	notes: 3,
+	closed_count: 12,
+	missing: ["AC", "AN", "TA"],
+	unknown: "XK", // in the Worldwide zone of the catch-all profile: no country of the ERP
+	petite: "1 Dangerous Goods Petite Product codes F-*-PT and F-CR-PC-*. 3 zones with 6 weight tiers.",
+	usa: "USA 1 country. 15 weight tiers from 0.1 to 20 lb, $35.00 to $400.00, International Express (4-7 days). $35.00 to $400.00",
+	usa_review: "USA: United States. 15 weight tiers from 0.1 to 20 lb, $35.00 to $400.00, International Express (4-7 days).",
+	usa_tiers: 15,
+	worldwide: 225, // the countries of the Worldwide zone that the ERP knows
+	after: "It holds 4 profiles, 14 zones, 49 weight tiers and 231 countries.", // once XK is taken out
+};
+const RATES_SAMPLE = {
+	what: "the repository's trimmed sample (RATES_DIR has no export)",
+	config: new URL("../hermetic/fixtures/shopify_shipping_config_sample.csv", import.meta.url).pathname,
+	closed: new URL("../hermetic/fixtures/shopify_countries_not_delivered_sample.csv", import.meta.url).pathname,
+	read: "The shipping rates hold 4 profiles, 10 zones, 20 weight tiers and 18 countries.",
+	notes: 5,
+	closed_count: 3,
+	missing: [],
+	unknown: null,
+	petite: "1 Dangerous Goods Petite Product codes F-*-PT and F-CR-PC-*. 2 zones with 3 weight tiers.",
+	usa: "USA 1 country. 5 weight tiers from 0.1 to 20 lb, $35.00 to $400.00, International Express (4-7 days). $35.00 to $400.00",
+	usa_review: "USA: United States. 5 weight tiers from 0.1 to 20 lb, $35.00 to $400.00, International Express (4-7 days).",
+	usa_tiers: 5,
+	worldwide: 5,
+	after: "It holds 4 profiles, 10 zones, 20 weight tiers and 18 countries.",
+};
+const RATES = await access(RATES_REAL.config)
+	.then(() => access(RATES_REAL.closed))
+	.then(
+		() => RATES_REAL,
+		() => RATES_SAMPLE
+	);
 
 // What erp2 shows on every desk page, with or without the wizard: the dsi_plm app asks for a script it does
 // not ship. Seen on /desk/shipping-policy and /desk/shipping-dashboard before the wizard existed.
@@ -136,18 +183,22 @@ page.on("dialog", async (dialog) => {
 	await dialog.dismiss();
 });
 
-// The try_order, check_formula and apply_policy requests the page sends, a way to hold the next one back for a
-// while, and a way to answer the next request of a wizard method in the server's place (fakeNext[method]:
-// {status, body} (JSON) or {status, raw} (text as it is), or "abort" for a request that never reaches the server).
+// The try_order, check_formula, apply_policy, import_rate_card and test_integration requests the page sends, a way
+// to hold the next one back for a while, and a way to answer the next request of a wizard method in the server's
+// place (fakeNext[method]: {status, body} (JSON) or {status, raw} (text as it is), or "abort" for a request that
+// never reaches the server).
 let priced = 0;
 let checked = 0;
 let applied = 0;
+let imported = 0;
+let tested = 0;
 let intercepting = false;
 let holdNext = 0; // ms to hold the next try_order request before it goes out
 let holdCheck = 0; // ms to hold the next check_formula request before it goes out
 let holdGroups = 0; // ms to hold the next read of the Item Group list before it goes out
 let holdApply = 0; // ms to hold the next apply_policy request before it goes out
 let holdPreview = 0; // ms to hold the next preview_changes request before it goes out
+let holdTest = 0; // ms to hold the next test_integration request before it goes out
 const fakeNext = {};
 page.on("request", (request) => {
 	const isTry = request.url().includes("shipping_policy_wizard.try_order");
@@ -156,9 +207,12 @@ page.on("request", (request) => {
 		request.url().includes("frappe.client.get_list") && (request.postData() || "").includes("doctype=Item+Group");
 	const isApply = request.url().includes("shipping_policy_wizard.apply_policy");
 	const isPreview = request.url().includes("shipping_policy_wizard.preview_changes");
+	const isTest = request.url().includes("shipping_policy_wizard.test_integration");
 	if (isTry) priced += 1;
 	if (isCheck) checked += 1;
 	if (isApply) applied += 1;
+	if (request.url().includes("shipping_policy_wizard.import_rate_card")) imported += 1;
+	if (isTest) tested += 1;
 	if (!intercepting) return;
 	const fake = Object.keys(fakeNext).find((method) => request.url().includes(`shipping_policy_wizard.${method}`));
 	if (fake) {
@@ -177,12 +231,14 @@ page.on("request", (request) => {
 		(isGroups && holdGroups) ||
 		(isApply && holdApply) ||
 		(isPreview && holdPreview) ||
+		(isTest && holdTest) ||
 		0;
 	if (wait) {
 		if (isTry) holdNext = 0;
 		else if (isCheck) holdCheck = 0;
 		else if (isApply) holdApply = 0;
 		else if (isPreview) holdPreview = 0;
+		else if (isTest) holdTest = 0;
 		else holdGroups = 0;
 		setTimeout(() => request.continue().catch(() => {}), wait);
 	} else {
@@ -246,6 +302,8 @@ async function shot(name) {
 // window back: the whole step is in the picture.
 async function tallShot(name) {
 	const size = page.viewport();
+	// the pointer out of the way: once the window grows, it would rest on whatever is under it, hovered
+	await page.mouse.move(size.width - 2, 2);
 	const height = await page.evaluate(() => {
 		const main = document.querySelector(".main-section");
 		return Math.ceil(Math.max(main ? main.scrollHeight : 0, document.documentElement.scrollHeight));
@@ -696,9 +754,16 @@ await check("the tabs are one tablist in order, Zones selected, Test set apart w
 	assert(tabs[5].left - tabs[4].right > 48, "Test sits apart from Review");
 });
 
-await check("each step not built yet shows a plain placeholder line; Zones, Rules, the fallbacks and Review show their bodies", async () => {
+await check("every step shows its body, and none the placeholder line", async () => {
 	// a control each built body has
-	const BUILT = { zones: "zone-add", rules: "rule-add", fallback: "not-covered", review: "apply-button" };
+	const BUILT = {
+		zones: "zone-add",
+		rates: "price-source",
+		rules: "rule-add",
+		fallback: "not-covered",
+		review: "apply-button",
+		test: "test-run",
+	};
 	for (const step of STEPS) {
 		await page.click(by(`step-tab-${step}`));
 		const panel = await page.$eval(`#sp-panel-${step}`, (element) => ({
@@ -1572,6 +1637,56 @@ await check("a renamed zone takes its rules along, and a zone that rules use is 
 	assert(rules[0].zone === "Bahrain", "rule 1 is still Bahrain's");
 	await page.click(by("step-tab-rules"));
 	assert((await textIn("rule-card", 2, "chip-zone")) === "GCC", "the chip says so");
+});
+
+// Ruling P92: the ERP keeps a zone's and an item set's name without the spaces around it, and the engine matches
+// names exactly, so a name is trimmed once it is committed (the field left, or Enter), and its rules follow.
+await check("a zone or item set name typed with spaces around it is kept without them once it is left, and its rules follow", async () => {
+	try {
+		await page.click(by("step-tab-zones"));
+		await typeIn("zone-card", 1, "zone-name", "GCC ");
+		let draft = await draftNow();
+		assert(draft.zones[1].name === "GCC " && draft.rules[1].zone === "GCC ", "while it is typed, a space at its end stays");
+		await page.evaluate(() => document.activeElement?.blur());
+		draft = await draftNow();
+		assert(draft.zones[1].name === "GCC", `once left, the zone is "${draft.zones[1].name}"`);
+		assert(draft.rules[1].zone === "GCC" && draft.rules[2].zone === "GCC", `and its rules: "${draft.rules[1].zone}", "${draft.rules[2].zone}"`);
+		assert((await valueIn("zone-card", 1, "zone-name")) === "GCC", "and so does the field");
+		await expectIn("zone-card", 1, "zone-usage", "Rules 2 and 3 use this zone.");
+		// Enter commits a name as well, and the field keeps the focus
+		await typeIn("zone-card", 1, "zone-name", " GCC");
+		await page.keyboard.press("Enter");
+		draft = await draftNow();
+		assert(draft.zones[1].name === "GCC" && draft.rules[2].zone === "GCC", `Enter trims it: "${draft.zones[1].name}"`);
+		assert((await focusedTestid()) === "zone-name", `the field keeps the focus: ${await focusedTestid()}`);
+		await page.evaluate(() => document.activeElement?.blur());
+		// an item set's name in its editor, which Save writes trimmed too
+		await page.click(by("step-tab-rules"));
+		await clickIn("rule-card", 1, "chip-items");
+		await clickIn("rule-card", 1, "itemset-edit");
+		await typeIn("rule-card", 1, "itemset-name", "  Watches  ");
+		await page.keyboard.press("Tab");
+		assert((await valueIn("rule-card", 1, "itemset-name")) === "Watches", "a set's name is kept without its spaces");
+		await clickIn("rule-card", 1, "itemset-cancel");
+		await clickIn("rule-card", 1, "rule-done");
+		draft = await draftNow();
+		assert(draft.zones[1].name === "GCC" && draft.item_sets[0].name === "Watches", "the zone and the set as they were");
+		assert(JSON.stringify(draft.rules) === JSON.stringify(EXAMPLE.rules), "the rules are the example's");
+	} finally {
+		// the checks after this one start on the Rules step, with no editor open and GCC named as it was
+		await page.evaluate(() => document.activeElement?.blur());
+		await page.evaluate(() => {
+			const wizard = frappe.pages["shipping-policy-wizard"].wizard;
+			wizard.ui.rules.set_editor = null;
+			wizard.ui.rules.open = null;
+			wizard.change((draft) => {
+				const rules = draft.rules.filter((rule) => rule.zone.trim() === "GCC");
+				draft.zones[1].name = "GCC";
+				for (const rule of rules) rule.zone = "GCC";
+			});
+		});
+		await page.click(by("step-tab-rules"));
+	}
 });
 
 await check("a formula is checked 300 ms after the last key, and an older answer never replaces a newer one", async () => {
@@ -2590,6 +2705,677 @@ try {
 	});
 }
 
+// ---------------------------------------------------------------- Task 16: the Rates step and the Test tab
+// These checks import the Shopify export into a draft through the Rates step, edit its card, make it the price
+// source, APPLY it on erp2 switched on, and run the Test tab against it. The last of them empties the policy again
+// through the page's own Apply; the finally makes sure of it whatever happened. The checks after the block write
+// nothing.
+
+// Words joined as a sentence lists them, as the page does: "AC, AN and TA".
+const and = (words) => (words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`);
+
+// A value with the keys of every object in it sorted: the order the ERP keeps a rate card's keys in.
+const sorted = (value) =>
+	Array.isArray(value)
+		? value.map(sorted)
+		: value && typeof value === "object"
+		? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])]))
+		: value;
+
+// The zone of the n-th profile of the card with this name (the profile is open).
+async function zoneOfProfile(n, name) {
+	for (const zone of await (await nth("rates-profile", n)).$$(by("rates-zone"))) {
+		if ((await zone.$eval(".sp-czone-title", (title) => title.textContent)) === name) return zone;
+	}
+	throw new Error(`profile ${n + 1} has no zone ${name}`);
+}
+
+// Opens the n-th profile of the card, and a zone of it, when they are closed.
+async function openProfile(n) {
+	const toggle = await inCard("rates-profile", n, "rates-profile-toggle");
+	if ((await toggle.evaluate((button) => button.getAttribute("aria-expanded"))) !== "true") await toggle.click();
+}
+
+async function openZone(n, name) {
+	await openProfile(n);
+	const toggle = await (await zoneOfProfile(n, name)).$(by("rates-zone-toggle"));
+	if ((await toggle.evaluate((button) => button.getAttribute("aria-expanded"))) !== "true") await toggle.click();
+	return zoneOfProfile(n, name);
+}
+
+// Types into the n-th field with a test id inside an element, as a person would.
+async function typeInto(element, testid, text, n = 0) {
+	const field = (await element.$$(by(testid)))[n];
+	assert(field, `there is no ${testid} number ${n + 1} there`);
+	await field.evaluate((input) => {
+		input.focus();
+		input.select();
+	});
+	await page.keyboard.press("Backspace");
+	if (text) await field.type(text);
+	return field;
+}
+
+// Types over what the n-th field holds, as a person does who selects it and types (no blank on the way).
+async function typeOver(element, testid, text, n = 0) {
+	const field = (await element.$$(by(testid)))[n];
+	assert(field, `there is no ${testid} number ${n + 1} there`);
+	await field.evaluate((input) => {
+		input.focus();
+		input.select();
+	});
+	await field.type(text);
+}
+
+// Puts text into a box at once, as a paste does (one input event).
+async function paste(testid, text) {
+	await page.$eval(
+		by(testid),
+		(box, text) => {
+			box.value = text;
+			box.dispatchEvent(new Event("input", { bubbles: true }));
+		},
+		text
+	);
+}
+
+const expanded = (testid) => page.$eval(by(testid), (button) => button.getAttribute("aria-expanded"));
+
+let ratesCard = null; // the card as Use these rates put it into the draft (the 760 px check draws it again)
+let appliedCard = null; // the card's JSON as Apply sent it
+let liveRun = null; // the answer of the Test tab's run against the policy live on erp2
+
+try {
+	await check("Rates: the price source says what each choice means, and the rate card with no card says there is none yet", async () => {
+		await go(NEUTRAL);
+		await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+		await open();
+		await page.click(by("step-tab-rates"));
+		const options = await page.$$eval("#sp-panel-rates .sp-source-option", (labels) =>
+			labels.map((label) => label.innerText.replace(/\s+/g, " ").trim())
+		);
+		const want = [
+			"Carrier Customers pay the carrier's price, shaped by the rules. The rate card is used only where a fallback says Use the rate card.",
+			"Rate card Customers pay from the rate card below; the carrier is not asked.",
+		];
+		assert(JSON.stringify(options) === JSON.stringify(want), `the two choices: ${JSON.stringify(options)}`);
+		const chosen = () => page.$$eval(by("price-source"), (radios) => radios.find((radio) => radio.checked)?.value);
+		assert((await chosen()) === "carrier", "the carrier, as saved");
+		assert(await page.$eval(by("rates-no-card"), (note) => note.hidden), "nothing to say while the carrier is the source");
+		assert(await page.$eval(by("rates-card"), (sheet) => sheet.hidden), "there is no card to show");
+		assert((await expanded("rates-import-toggle")) === "true", "while there is no card, the import is open");
+		await page.click(`${by("price-source")}[value="rate_card"]`);
+		await expectText("rates-no-card", "There is no rate card yet. Import one below.");
+		assert((await draftNow()).price_source === "rate_card", "the draft's price source");
+		// the tape: in rate-card mode the carrier's controls give way to one quiet line
+		const tape = await page.evaluate(() => ({
+			carrier: document.querySelector('[data-block="carrier"]').hidden,
+			note: document.querySelector('[data-testid="tape-card-note"]').innerText,
+		}));
+		assert(tape.carrier && tape.note === "The rate card prices from the items' product codes and weights.", `the tape: ${JSON.stringify(tape)}`);
+		await page.click(`${by("price-source")}[value="carrier"]`);
+		assert(!(await store()).dirty, "back to the carrier, the draft is the saved policy again");
+		assert(await page.$eval('[data-block="carrier"]', (block) => !block.hidden), "and the carrier's controls are back");
+	});
+
+	await check("a rates file of more than 1,000,000 characters is refused in plain words before the server is asked", async () => {
+		const folder = await mkdtemp(path.join(os.tmpdir(), "sp-rates-"));
+		const big = path.join(folder, "too-long.csv");
+		const said = "The shipping rates are longer than 1,000,000 characters, more than the import reads.";
+		try {
+			await writeFile(big, "x".repeat(1000001));
+			imported = 0;
+			await (await page.$(by("rates-file-config"))).uploadFile(big);
+			await expectText("rates-import", said); // the file's own line says so at once
+			await page.click(by("rates-preview"));
+			await expectText("rates-import-problem", said);
+			await paste("rates-paste-config", "y".repeat(1000001)); // pasted text is measured too
+			await page.click(by("rates-preview"));
+			await expectText("rates-import-problem", said);
+			await pause(300);
+			assert(imported === 0, `${imported} requests reached the server`);
+			await paste("rates-paste-config", "");
+			assert((await textOf("rates-import-problem")) === "", "a change of the texts takes the sentence away");
+		} finally {
+			await rm(folder, { recursive: true, force: true });
+		}
+	});
+
+	await check("the Shopify export is read through the Rates step: what the card holds, its notes, what stops it, the countries not delivered by name", async () => {
+		await (await page.$(by("rates-file-config"))).uploadFile(RATES.config);
+		await (await page.$(by("rates-file-notdelivered"))).uploadFile(RATES.closed);
+		await page.waitForFunction(
+			() =>
+				[...document.querySelectorAll('[data-testid="rates-import"] .sp-file-note')].every((note) =>
+					/characters read\.$/.test(note.textContent)
+				),
+			{ timeout: 10000 }
+		);
+		imported = 0;
+		await page.click(by("rates-preview"));
+		await expectText("rates-import-read", RATES.read, 30000);
+		assert(imported === 1, `${imported} requests`);
+		assert((await focusedTestid()) === "rates-import-read", `the focus goes to what was read: ${await focusedTestid()}`);
+		const notes = await page.$eval(by("rates-import-notes"), (details) => ({
+			open: details.open,
+			said: details.querySelector("summary").textContent,
+		}));
+		assert(!notes.open && notes.said === `${RATES.notes} notes on the files`, `the notes, folded: ${JSON.stringify(notes)}`);
+		const problems = (await page.$(by("rates-import-problems"))) ? await textOf("rates-import-problems") : "";
+		const sentences = [
+			...(RATES.unknown
+				? [`Country code ${RATES.unknown} in zone Worldwide (Allowed Items) (Rest of the World Allowed Items) is not a country in the ERP.`]
+				: []),
+			...RATES.missing.map((code) => `Country code ${code} in the not-delivered list is not a country in the ERP.`),
+		];
+		for (const sentence of sentences) assert(problems.includes(sentence), `the problems say "${sentence}": ${problems}`);
+		if (!sentences.length) assert(problems === "", `no problem: ${problems}`);
+		const closed = await textOf("rates-import-not-delivered");
+		assert(
+			closed.startsWith(`Not delivered ${RATES.closed_count} countries:`) && closed.includes("Afghanistan") && closed.includes("Russian Federation"),
+			`by name: ${closed}`
+		);
+		if (RATES.missing.length) {
+			const missing = `Left out of the Not shipped zone, because the ERP does not know them: ${and(RATES.missing)}.`;
+			assert((await textOf("rates-import-missing")) === missing, await textOf("rates-import-missing"));
+		}
+		assert((await textOf("rates-import-apply")) === "Use these rates", "the rates can be used");
+		await expectText("rates-import-preview", "They go into your draft. Nothing is live until you apply it.");
+		await page.evaluate(() => document.activeElement?.blur());
+		const file = await tallShot("wizard-rates-import-preview");
+		return `${RATES.what}; ${file}`;
+	});
+
+	await check("Use these rates puts the card into the draft as the ERP keeps it, and the countries not delivered into a new Not shipped zone", async () => {
+		await page.click(by("rates-import-apply")); // the draft has no card: nothing to ask
+		await expectText("rates-import-taken", "These rates are in your draft now. Nothing is live until you apply it in the Review step.");
+		assert((await focusedTestid()) === "rates-import-taken-title", `the focus goes to what was done: ${await focusedTestid()}`);
+		const draft = await draftNow();
+		const card = draft.rate_card;
+		assert(JSON.stringify(card) === JSON.stringify(sorted(card)), "the card's keys are in the order the ERP keeps them");
+		assert(Object.keys(card).join() === "currency,profiles,unit,version", Object.keys(card).join());
+		const names = card.profiles.map((profile) => profile.name).join("|");
+		assert(names === "Dangerous Goods Petite|Refill Service|Dangerous Goods|Rest of the World Allowed Items", names);
+		const zone = draft.zones.find((entry) => entry.name === "Not delivered");
+		const kept = RATES.closed_count - RATES.missing.length;
+		assert(
+			zone?.enabled && zone.not_shipped && zone.not_offered_message === "We do not deliver to this country." && zone.customer_line === "",
+			`the zone: ${JSON.stringify(zone)}`
+		);
+		assert(zone.countries.length === kept && !RATES.missing.some((code) => zone.countries.includes(code)), `its countries: ${zone.countries}`);
+		assert(JSON.stringify(Object.keys(zone)) === JSON.stringify(Object.keys(zoneOf("x", []))), "in the server's key order");
+		await expectText("rates-import-taken", `The new Not shipped zone Not delivered lists ${kept} countries not delivered to.`);
+		assert(draft.price_source === "carrier", "the price source is not switched by itself");
+		assert((await textOf("rates-switch-source")) === "Switch the price source to Rate card", "switching it is offered");
+		await expectText(
+			"rates-not-used-note",
+			"Nothing uses the rate card now: the price source is the carrier, and no fallback says Use the rate card."
+		);
+		ratesCard = card;
+	});
+
+	await check("the card reads back lazily: a line per profile, a zone once its profile opens, then its countries, method, days and tiers", async () => {
+		await expectText("rates-summary", `It holds ${RATES.read.replace("The shipping rates hold ", "")}`);
+		const toggles = await page.$$eval(by("rates-profile-toggle"), (found) =>
+			found.map((button) => [button.getAttribute("aria-expanded"), button.innerText.replace(/\s+/g, " ").trim()])
+		);
+		assert(toggles.length === 4 && toggles.every(([open]) => open === "false"), `four profiles, closed: ${JSON.stringify(toggles)}`);
+		assert(toggles[0][1] === RATES.petite, `profile 1 reads: ${toggles[0][1]}`);
+		assert((await page.$$(by("rates-zone"))).length === 0, "no zone is drawn until its profile opens");
+		await openProfile(2);
+		const zones = await (await nth("rates-profile", 2)).$$eval(by("rates-zone-toggle"), (found) =>
+			found.map((button) => button.innerText.replace(/\s+/g, " ").trim())
+		);
+		assert(zones.length === 6 && zones[0] === RATES.usa, `Dangerous Goods' zones: ${JSON.stringify(zones)}`);
+		assert((await page.$$(by("rates-country-chip"))).length === 0, "no country is drawn until its zone opens");
+		const usa = await openZone(2, "USA");
+		const seen = await usa.evaluate((zone) => ({
+			chips: [...zone.querySelectorAll('[data-testid="rates-country-chip"] .sp-token-text')].map((chip) => chip.textContent),
+			method: zone.querySelector('[data-testid="rates-zone-method"]').value,
+			days: zone.querySelector('[data-testid="rates-zone-days"]').value,
+			heads: [...zone.querySelectorAll(".sp-tiers th")].map((head) => head.textContent),
+			kind: [...zone.querySelectorAll('[data-testid="rates-zone-prices"]')].find((radio) => radio.checked)?.value,
+			tiers: [...zone.querySelectorAll('[data-testid="rates-tier"]')].map((row) =>
+				[...row.querySelectorAll("input")].map((input) => input.value)
+			),
+		}));
+		assert(seen.chips.join() === "United States", `its countries: ${seen.chips}`);
+		assert(seen.method === "International Express (4-7 days)" && seen.days === "7", `its method and days: ${seen.method}, ${seen.days}`);
+		assert(seen.heads.join("|") === "Weight, in pounds|Price, in US dollars|Remove", `the ledger's heads: ${seen.heads}`);
+		assert(seen.kind === "weight" && seen.tiers.length === RATES.usa_tiers, `${seen.kind}: ${seen.tiers.length} tiers`);
+		const first = JSON.stringify(seen.tiers.slice(0, 2));
+		assert(first === JSON.stringify([["0.1", "0.6", "35.00"], ["0.7", "2", "60.00"]]), `the first tiers: ${first}`);
+		const count = await page.$eval("#sp-panel-rates", (panel) => panel.querySelectorAll("*").length);
+		assert(count < 1500, `${count} elements on the Rates step`);
+		await page.evaluate(() => document.activeElement?.blur());
+		const file = await tallShot("wizard-rates-card");
+		return `${count} elements with one zone open; ${file}`;
+	});
+
+	await check("a tier's price is edited where it stands: kept in cents, never below zero, never left blank", async () => {
+		const usa = await zoneOfProfile(2, "USA");
+		const price = async () => (await draftNow()).rate_card.profiles[2].zones[0].tiers[1].price;
+		const problem = () =>
+			usa.$$eval(by("rates-tier"), (rows) => rows[1].querySelector(".sp-tier-price .sp-problem").textContent);
+		await typeInto(usa, "rates-tier-price", "61.5", 1);
+		assert((await price()) === 61.5, `61.5: ${await price()}`);
+		await typeOver(usa, "rates-tier-price", "-1", 1); // over the selected price: never blank on the way
+		assert((await problem()) === "Type a price of 0 or more, such as 35.", await problem());
+		assert((await price()) === 61.5, `a price below zero stays out of the draft: ${await price()}`);
+		await typeOver(usa, "rates-tier-price", "60,5", 1);
+		assert((await problem()) === "Use a period for decimals.", await problem());
+		assert((await price()) === 60, `what was a number on the way is kept, 60: ${await price()}`);
+		await typeInto(usa, "rates-tier-price", "60.126", 1);
+		assert((await price()) === 60.13, `kept in cents: ${await price()}`);
+		assert((await problem()) === "The ERP keeps cents, so this is $60.13.", await problem());
+		await typeInto(usa, "rates-tier-price", "", 1);
+		assert((await price()) === null, "blank is a missing price");
+		assert((await problem()) === "Type the price, such as 35.", await problem());
+		const missing = 'Tier 2 of zone 1 ("USA") of profile 3 ("Dangerous Goods") has a price that has to be a number from 0 to 1000000.';
+		await expectText("rates-problems", missing, 15000);
+		assert(!(await textOf("rates-problems")).includes("Rate card:"), "said without the words before it");
+		await typeInto(usa, "rates-tier-price", "60", 1);
+		assert((await price()) === 60 && (await problem()) === "", "60 again");
+		await page.evaluate(() => document.activeElement?.blur());
+		await page.waitForFunction(
+			(missing) => !(document.querySelector('[data-testid="rates-problems"]')?.innerText || "").includes(missing),
+			{ timeout: 15000 },
+			missing
+		);
+		assert(JSON.stringify((await draftNow()).rate_card) === JSON.stringify(ratesCard), "the card is as it was imported");
+	});
+
+	await check("a country is in one zone of a profile only, and a code the ERP does not know is shown first and taken out", async () => {
+		const zone = await openZone(3, "Worldwide (Allowed Items)");
+		const seen = () =>
+			zone.evaluate((li) => ({
+				unknown: li.querySelector('[data-testid="rates-unknown-countries"]').innerText.replace(/\s+/g, " ").trim(),
+				chips: li.querySelectorAll('.sp-token-box [data-testid="rates-country-chip"]').length,
+				more: (({ hidden, textContent }) => (hidden ? "" : textContent))(li.querySelector('[data-testid="rates-countries-all"]')),
+			}));
+		let shown = await seen();
+		if (RATES.unknown) {
+			assert(
+				shown.unknown === `Not a country in the ERP, so the card cannot be applied with it: ${RATES.unknown} ×`,
+				`first, what the ERP does not know: ${shown.unknown}`
+			);
+		}
+		if (RATES.worldwide > 30) {
+			assert(shown.chips === 30 && shown.more === `Show all ${RATES.worldwide} countries`, `the first 30: ${JSON.stringify(shown)}`);
+			await (await zone.$(by("rates-countries-all"))).click();
+			shown = await seen();
+			assert(shown.chips === RATES.worldwide && shown.more === "Show the first 30 countries only", `all of them: ${JSON.stringify(shown)}`);
+			await (await zone.$(by("rates-countries-all"))).click();
+		}
+		// Bahrain is in the profile's GCC zone already: refused, naming that zone
+		const before = JSON.stringify((await draftNow()).rate_card);
+		await typeInto(zone, "rates-country-add", "Bahrain");
+		await page.keyboard.press("Enter");
+		const refused = await zone.$eval(by("rates-country-problem"), (line) => line.textContent);
+		assert(refused === "Bahrain is already in the zone GCC – all 6 (incl. BH & QA) of this profile.", refused);
+		assert(JSON.stringify((await draftNow()).rate_card) === before, "and it is not added");
+		if (!RATES.unknown) return "the sample has no code the ERP does not know";
+		await expectText("rates-problems", `Country code ${RATES.unknown} in zone Worldwide (Allowed Items)`, 15000);
+		await (await zone.$(`${by("rates-unknown-countries")} ${by("rates-country-remove")}`)).click();
+		const countries = (await draftNow()).rate_card.profiles[3].zones[0].countries;
+		assert(countries.length === RATES.worldwide && !countries.includes(RATES.unknown), `${countries.length} countries left`);
+		assert((await seen()).unknown === "", "nothing the ERP does not know is left");
+		await page.waitForFunction(() => document.querySelector('[data-testid="rates-problems"]')?.hidden, { timeout: 15000 });
+		await expectText("rates-summary", RATES.after);
+		return `${RATES.unknown} taken out: no problem left with the card`;
+	});
+
+	await check("product codes are chips, one with a brace is refused, and a new profile goes before the one that takes every item", async () => {
+		const before = JSON.stringify((await draftNow()).rate_card);
+		const names = async () => (await draftNow()).rate_card.profiles.map((profile) => profile.name).join("|");
+		await openProfile(0);
+		const profile = await nth("rates-profile", 0);
+		const chips = () => profile.$$eval(`${by("rates-pattern-chip")} .sp-token-text`, (found) => found.map((chip) => chip.textContent).join("|"));
+		assert((await chips()) === "F-*-PT|F-CR-PC-*", `the patterns: ${await chips()}`);
+		await typeInto(profile, "rates-pattern-input", "{F-CR-XYZ-*}");
+		await page.keyboard.press("Enter");
+		const refused = await profile.$eval(by("rates-pattern-problem"), (line) => line.textContent);
+		assert(refused === "Write the product code without braces, such as F-CR-XYZ-*.", refused);
+		assert(JSON.stringify((await draftNow()).rate_card) === before, "it is not added");
+		await typeInto(profile, "rates-pattern-input", "F-TEST-*");
+		await page.keyboard.press("Enter");
+		assert((await chips()) === "F-*-PT|F-CR-PC-*|F-TEST-*", `added: ${await chips()}`);
+		assert((await profile.$eval(by("rates-pattern-problem"), (line) => line.textContent)) === "", "the refusal is gone");
+		await (await profile.$$(by("rates-pattern-remove")))[2].click();
+		assert((await chips()) === "F-*-PT|F-CR-PC-*", `and removed: ${await chips()}`);
+		// a new profile goes before the one that takes every item, which has to stay last
+		await page.click(by("rates-profile-add"));
+		assert(
+			(await names()) === "Dangerous Goods Petite|Refill Service|Dangerous Goods|New profile|Rest of the World Allowed Items",
+			await names()
+		);
+		assert((await focusedTestid()) === "rates-profile-name", `its name has the focus: ${await focusedTestid()}`);
+		await clickIn("rates-profile", 3, "rates-profile-delete"); // it has no zone: nothing to ask
+		assert((await names()) === "Dangerous Goods Petite|Refill Service|Dangerous Goods|Rest of the World Allowed Items", await names());
+		// moved with the keyboard, and the move is said
+		await (await inCard("rates-profile", 1, "rates-profile-down")).focus();
+		await page.keyboard.press("Enter");
+		assert((await names()) === "Dangerous Goods Petite|Dangerous Goods|Refill Service|Rest of the World Allowed Items", await names());
+		await expectText("rates-live", "Profile 2 is now profile 3 of 4.");
+		assert((await focusedTestid()) === "rates-profile-down", "the focus moves with the profile");
+		await (await inCard("rates-profile", 2, "rates-profile-up")).focus();
+		await page.keyboard.press("Enter");
+		assert(JSON.stringify((await draftNow()).rate_card) === before, "the card is as it was");
+	});
+
+	await check("with the rate card as the price source the tape prices a USA order from the card, and the carrier's controls give way", async () => {
+		await page.click(by("rates-switch-source"));
+		assert((await draftNow()).price_source === "rate_card", "the price source is the rate card");
+		await expectText("rates-import-taken", "The price source is the rate card.");
+		assert((await focusedTestid()) === "price-source", `the focus is on the switch: ${await focusedTestid()}`);
+		assert(await page.$eval(by("rates-not-used-note"), (note) => note.hidden), "the card is used now: no note");
+		assert(await page.$eval('[data-block="carrier"]', (block) => block.hidden && !block.offsetParent), "the carrier's controls are hidden");
+		await pickCountry("United States");
+		await addTapeItem(ITEM);
+		await addTapeItem(WATCH);
+		await expectText("tape-total", "$100.00", 15000);
+		const lines = await page.$$eval(`${by("tape-lines")} .sp-line`, (found) =>
+			found.map((line) => line.innerText.replace(/\s+/g, " ").trim())
+		);
+		const want = [
+			"Dangerous Goods, USA: 0.772 lb -> $60.00 (weight estimated) $60.00",
+			"Rest of the World Allowed Items, Worldwide (Allowed Items): 0.772 lb -> $40.00 (weight estimated) $40.00",
+		];
+		assert(JSON.stringify(lines) === JSON.stringify(want), `the card's lines: ${JSON.stringify(lines)}`);
+		await expectText("tape-lines", "International Express (4-7 days)");
+		assert((await textOf("tape-total-label")) === "Customer would pay", "the draft is still off");
+		return "$100.00: Dangerous Goods $60.00 and the catch-all $40.00, each unit 0.35 kg (0.772 lb): erp2 has no item weights";
+	});
+
+	await check("the Rules step says that rules are not used while the price source is the rate card", async () => {
+		await page.click(by("step-tab-rules"));
+		await expectText("rules-not-used-note", "Rules are not used while the price source is the rate card.");
+		await page.click(by("step-tab-rates"));
+	});
+
+	await check("screenshots of the Rates step with the card, light and dark", async () => {
+		await openZone(2, "USA");
+		await page.evaluate(() => document.activeElement?.blur());
+		const files = [await tallShot("wizard-rates-light")];
+		await theme("dark");
+		files.push(await tallShot("wizard-rates-dark"));
+		const figure = await (await zoneOfProfile(2, "USA")).$eval(".sp-czone-figure", (found) => getComputedStyle(found).color);
+		const free = await (await zoneOfProfile(2, "Bahrain (Local)")).$eval(".sp-czone-figure", (found) => getComputedStyle(found).color);
+		await theme("light");
+		assert(figure === "rgb(216, 178, 89)" && free === "rgb(116, 201, 160)", `brass and sage in the dark: ${figure}, ${free}`);
+		return files.join(", ");
+	});
+
+	await check("Review: the card's own lines, then Apply writes the card, the price source and the Not delivered zone, switched on", async () => {
+		await page.click(by("step-tab-review"));
+		await applyReady();
+		const summary = await textOf("review-summary");
+		const first = "Prices come from the rate card: the carrier is not asked, and the rules and fallbacks below are not used.";
+		assert(summary.startsWith(first), `the summary: ${summary.slice(0, 160)}`);
+		const profiles = await textsOf("review-card-profile");
+		assert(profiles.length === 4 && profiles[2].startsWith("3 Dangerous Goods Product codes F-*."), `the card's profiles: ${profiles[2]}`);
+		assert(profiles[2].includes(RATES.usa_review), `a zone in words: ${profiles[2]}`);
+		const card = await textOf("review-card");
+		assert(
+			card.includes("Delivery is not offered to Afghanistan") && card.includes("Russian Federation") && card.endsWith("their zone is not shipped to."),
+			`the countries not delivered to: ${card.slice(-240)}`
+		);
+		const diff = await textOf("review-diff");
+		for (const said of [
+			"Zones added: Not delivered",
+			"Rate card profiles added: Dangerous Goods, Dangerous Goods Petite, Refill Service and Rest of the World Allowed Items",
+			"Price source: carrier → rate card",
+		]) {
+			assert(diff.includes(said), `what will change says "${said}": ${diff}`);
+		}
+		await page.click(by("policy-active"));
+		await expectText("apply-button", "Apply and switch on");
+		await applyReady();
+		appliedCard = JSON.stringify((await draftNow()).rate_card);
+		await page.click(by("apply-button"));
+		await expectText("apply-done", "Applied and switched on. Customers see the new prices now.", 30000);
+		const state = await wizardCall("wizard_state");
+		assert(state.policy.active && state.policy.price_source === "rate_card", "the server agrees: on, from the rate card");
+		assert(JSON.stringify(state.policy.rate_card) === appliedCard, "the saved card is the draft's, key order and all");
+		assert(state.policy.zones.map((zone) => zone.name).join() === "Not delivered", "with the zone Not delivered");
+	});
+
+	await check("after a reload the card is the one applied, the draft is clean, and the import is one line", async () => {
+		await open();
+		await page.click(by("step-tab-rates"));
+		const saved = await store();
+		assert(!saved.dirty, "nothing to apply");
+		assert(JSON.stringify(saved.original.rate_card) === appliedCard, "the card as it was applied");
+		assert(saved.original.price_source === "rate_card" && saved.original.active, "the price source, on");
+		await expectText("rates-summary", RATES.after);
+		assert((await expanded("rates-import-toggle")) === "false", "with a card, the import is one line");
+		assert(await page.$eval(by("rates-not-used-note"), (note) => note.hidden), "the card is the price source");
+		await pause(1500); // the server's word on the card
+		assert(await page.$eval(by("rates-problems"), (box) => box.hidden), "and it has no problem");
+	});
+
+	await check("Test: three checks in their order, each with its status in words, and the verdict on the policy live on erp2", async () => {
+		await page.click(by("step-tab-test"));
+		const intro = await page.$eval("#sp-panel-test .sp-step-intro", (line) => line.textContent);
+		assert(intro === "These checks use the saved policy and the live site, not your draft.", intro);
+		tested = 0;
+		await intercept(true);
+		try {
+			holdTest = 2500; // a run takes a while: the spinner shows, and a second press sends nothing
+			await page.click(by("test-run"));
+			await pause(400);
+			const running = await page.evaluate(() => ({
+				disabled: document.querySelector('[data-testid="test-run"]').getAttribute("aria-disabled"),
+				spinner: !document.querySelector(".sp-spinner").hidden,
+				label: document.querySelector(".sp-spinner").getAttribute("aria-label"),
+				turning: getComputedStyle(document.querySelector(".sp-spinner")).animationName,
+				status: document.querySelector(".sp-test-status").textContent,
+			}));
+			assert(running.disabled === "true" && running.spinner && running.label === "Running the checks", JSON.stringify(running));
+			assert(running.turning !== "none", `the desk's spinner turns: ${running.turning}`);
+			assert(running.status === "Running the checks. A run takes 15 to 45 seconds, sometimes more.", running.status);
+			await page.click(by("test-run"));
+			await page.waitForFunction(() => document.querySelector('[data-testid="test-verdict"]')?.textContent.trim(), { timeout: 90000 });
+		} finally {
+			await intercept(false);
+		}
+		assert(tested === 1, `${tested} requests for two presses`);
+		const cards = await page.$$eval(".sp-checks > li", (found) =>
+			found.map((card) => ({
+				testid: card.dataset.testid,
+				status: card.querySelector('[data-testid="test-check-status"]').textContent,
+				name: card.querySelector(".sp-check-name").textContent,
+				time: card.querySelector(".sp-check-time")?.textContent || "",
+				summary: card.querySelector('[data-testid="test-check-summary"]').textContent,
+				folded: card.querySelector("details")?.open === false,
+			}))
+		);
+		assert(cards.map((card) => card.testid).join() === "test-check-erp-api,test-check-carrier,test-check-website", "in their order");
+		assert(cards.map((card) => card.name).join("|") === "ERP price API|Carrier API|Website", "with their names");
+		const [erp, carrier, website] = cards;
+		assert(erp.status === "Passed" && erp.summary.includes("policy ON, price source rate card, 1 offer, $100.00."), JSON.stringify(erp));
+		assert(/^\d[\d,]* ms$/.test(erp.time), `its time: ${erp.time}`);
+		assert(carrier.status === "Passed" && carrier.summary.startsWith("The carrier returned"), JSON.stringify(carrier));
+		assert(website.status === "Not asked" && website.summary.startsWith("The website was not asked."), JSON.stringify(website));
+		assert(cards.every((card) => card.folded), "each check's details are folded");
+		const verdict = await textOf("test-verdict");
+		const want =
+			"The ERP price API charges $100.00 from the rate card; the website was not asked because its address is not usable (see the third check).";
+		assert(verdict === want, `the verdict: ${verdict}`);
+		assert((await page.$eval(by("test-verdict"), (found) => found.getAttribute("aria-live"))) === "polite", "read out when it comes");
+		// a check's details: the cleaned answer, as text
+		await page.click(`${by("test-check-erp-api")} summary`);
+		const detail = await page.$eval(`${by("test-check-erp-api")} pre`, (pre) => pre.textContent);
+		assert(detail.includes('"policy_active": true') && detail.includes('"price_source": "rate_card"'), detail.slice(0, 200));
+		// the details' toggle event comes a moment after the click
+		await page.waitForFunction(
+			() => document.querySelector('[data-testid="test-check-erp-api"] summary')?.textContent === "Hide details",
+			{ timeout: 5000 }
+		);
+		// the sample the server used is there to be changed
+		const sample = await page.evaluate(() => ({
+			country: document.querySelector('[data-testid="test-country"]').value,
+			city: document.querySelector('[data-testid="test-city"]').value,
+			items: [...document.querySelectorAll('[data-testid="test-item"]')].map((line) => line.querySelector(".sp-item-name").title),
+		}));
+		assert(sample.country === "United States" && sample.city === "New York" && sample.items.join() === "10005020,10000097", JSON.stringify(sample));
+		assert(!(await store()).dirty, "the run never touches the draft");
+		liveRun = await page.evaluate(() => frappe.pages["shipping-policy-wizard"].wizard.ui.test.result);
+		const files = [await tallShot("wizard-test-result")];
+		await page.click(`${by("test-check-erp-api")} summary`);
+		await page.evaluate(() => document.activeElement?.blur());
+		files.push(await tallShot("wizard-test-light"));
+		await theme("dark");
+		files.push(await tallShot("wizard-test-dark"));
+		await theme("light");
+		return files.join(", ");
+	});
+
+	await check("a refused sample order is said in plain words, and a website that limits the route reads Rate limited, not as a failure", async () => {
+		const refusal = JSON.stringify({ message: "The sample order can hold at most 10 items.", title: "Message", indicator: "red", raise_exception: 1 });
+		await page.click(by("step-tab-test"));
+		await intercept(true);
+		try {
+			fakeNext.test_integration = { status: 417, body: { exc_type: "ValidationError", _server_messages: JSON.stringify([refusal]) } };
+			await page.click(by("test-run"));
+			await expectText("test-error", "The checks could not run: The sample order can hold at most 10 items.");
+			await pause(300); // the browser's own lines about the refused request
+			expected(
+				/^HTTP 417: POST .*shipping_policy_wizard\.test_integration/,
+				/^console error: Failed to load resource: .*417.*shipping_policy_wizard\.test_integration/
+			);
+			assert((await page.$eval(by("test-error"), (box) => box.getAttribute("role"))) === "alert", "an alert");
+			assert(await page.$eval(".sp-test-results", (box) => box.hidden), "a run clears the result before it");
+			// the website check of a run, answered in the server's place: the site limits its route
+			const check = (name, ok, status, summary, detail = {}) => ({ name, ok, status, ms: 120, summary, detail });
+			const checks = [
+				check("erp_price_api", true, 200, "The ERP answered in 120 ms: policy ON, price source rate card, 1 offer, $100.00."),
+				check("carrier", true, null, "The carrier returned 1 rate: Aramex BH International PPX $3.68."),
+				check(
+					"website",
+					false,
+					429,
+					"The website answered HTTP 429: it allows this route 10 requests a minute and is limiting this one. That is not a failure of the integration. Run the check again in a minute."
+				),
+			];
+			const verdict =
+				"The ERP price API charges $100.00 from the rate card, but the website limits this check to 10 requests a minute, so run it again in a minute.";
+			const order = liveRun?.order || { country_code: "US", country: "United States", city: "New York", items: [], note: "" };
+			fakeNext.test_integration = { status: 200, body: { message: { checks, verdict, order } } };
+			await page.click(by("test-run"));
+			await expectText("test-check-website", "Rate limited");
+		} finally {
+			await intercept(false);
+		}
+		assert((await textOf("test-error")) === "", "the refusal is gone");
+		const look = await page.evaluate(() => {
+			const card = document.querySelector('[data-testid="test-check-website"]');
+			const status = card.querySelector('[data-testid="test-check-status"]');
+			return {
+				status: status.textContent,
+				colour: getComputedStyle(status).color,
+				quiet: getComputedStyle(document.querySelector("#sp-panel-test .sp-step-intro")).color,
+				edge: getComputedStyle(card).borderLeftColor,
+				said: card.innerText.replace(/\s+/g, " "),
+			};
+		});
+		assert(look.status === "Rate limited" && look.colour === look.quiet, `neutral, in words: ${JSON.stringify(look)}`);
+		assert(look.edge !== "rgb(168, 71, 58)", `not marked as a failure: ${look.edge}`);
+		assert(look.said.includes("Rate limited: the site allows 10 asks a minute."), look.said);
+		await expectText("test-verdict", "so run it again in a minute.");
+	});
+
+	await check("the policy is emptied and switched off again through the page's own Apply", async () => {
+		await go(NEUTRAL);
+		await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+		await open();
+		await page.evaluate((empty) => {
+			frappe.pages["shipping-policy-wizard"].wizard.change((draft) => {
+				for (const key of Object.keys(draft)) delete draft[key];
+				Object.assign(draft, JSON.parse(JSON.stringify(empty)));
+			});
+		}, EMPTY);
+		await page.click(by("step-tab-review"));
+		await applyReady();
+		const diff = await textOf("review-diff");
+		for (const said of ["Zones removed: Not delivered", "Rate card profiles removed:", "Price source: rate card → carrier", "Active: on → off"]) {
+			assert(diff.includes(said), `what will change says "${said}": ${diff}`);
+		}
+		await page.click(by("apply-button"));
+		await expectText("apply-done", "Applied and switched off. Customers pay the carrier's price again.", 30000);
+		const state = await wizardCall("wizard_state");
+		assert(JSON.stringify(state.policy) === JSON.stringify(EMPTY), `erp2's policy: ${JSON.stringify(state.policy)}`);
+		assert(state.version === version, `the version the run started from: ${state.version}`);
+		await pause(500);
+		assert((await stored()) === null, "no draft is left in storage");
+	});
+} finally {
+	await check("erp2's policy is empty and switched off again after the Rates checks, whatever happened above", async () => {
+		const end = await ensureEmptyPolicy();
+		assert(end.version === version, `the version the run started from: ${end.version}`);
+		return end.applied ? "it had to be emptied here" : "";
+	});
+}
+
+// A card pasted as text, with a hostile profile name and a zone name the server's sentences quote (decision 4:
+// what import_rate_card returns is plain text, and the page shows it as text everywhere).
+const HOSTILE_RATES = [
+	"Profile,Zone (recommended),Country count,Countries (ISO-2 - Name),Shipping method,Weight from (lb),Weight to (lb),Price (USD)",
+	`${HOSTILE},${HOSTILE_ZONE},1,AE - United Arab Emirates,Express (2 days),,,25`,
+	"Rest of the World Allowed Items,Worldwide,1,US - United States,Express (5 days),,,40",
+].join("\n");
+
+await check("the countries not delivered leave out one already in another zone that is on, and say which", async () => {
+	await openWithStored({ version, draft: { ...original, zones: [zoneOf("Closed", ["RU"])] }, step: "rates" });
+	await paste("rates-paste-config", HOSTILE_RATES);
+	await paste("rates-paste-notdelivered", "ISO-2,Country\nRU,Russia\nCU,Cuba\n");
+	await page.click(by("rates-preview"));
+	await expectText("rates-import-read", "The shipping rates hold 2 profiles, 2 zones, 2 weight tiers and 2 countries.", 30000);
+	await page.click(by("rates-import-apply"));
+	await expectText("rates-import-conflict", "Russian Federation is already in the zone Closed, so it was not added to Not delivered.");
+	const zones = (await draftNow()).zones;
+	assert(zones[0].countries.join() === "RU", "it stays where it is");
+	const made = zones.find((zone) => zone.name === "Not delivered");
+	assert(made?.countries.join() === "CU" && made.not_shipped, `the zone made: ${JSON.stringify(made)}`);
+	await expectText("rates-import-taken", "The new Not shipped zone Not delivered lists 1 country not delivered to.");
+});
+
+await check("a card pasted with a hostile profile name and a zone named Gulf & <b>Co</b> reads as typed: the preview, the card and the Review", async () => {
+	// read again: the draft has a card now, so the page asks before it replaces it
+	await page.click(by("rates-preview"));
+	await expectText("rates-import-preview", "They replace the rate card in your draft, which has 2 profiles.", 30000);
+	await page.click(`${by("rates-import-notes")} summary`);
+	const preview = await textOf("rates-import-preview");
+	for (const said of [
+		`Profile "${HOSTILE}" is not one of the known profiles, so it has no product code patterns yet. It will not be used until patterns are added.`,
+		`Profile 1 ("${HOSTILE}") has no product code patterns, so it will never be used.`,
+	]) {
+		assert(preview.includes(said), `the preview says "${said}": ${preview}`);
+	}
+	await page.click(by("rates-import-apply"));
+	await answerDialog(false);
+	assert((await focusedTestid()) === "rates-import-apply", `No keeps the card, and gives the focus back: ${await focusedTestid()}`);
+	await page.click(by("rates-import-apply"));
+	await answerDialog(true);
+	await expectText("rates-import-taken", "These rates are in your draft now.");
+	await openProfile(0);
+	const profile = await nth("rates-profile", 0);
+	assert((await profile.$eval(".sp-profile-title", (title) => title.textContent)) === HOSTILE, "the profile's name, as typed");
+	assert((await profile.$eval(by("rates-profile-name"), (input) => input.value)) === HOSTILE, "in its field too");
+	assert((await profile.$eval(".sp-czone-title", (title) => title.textContent)) === HOSTILE_ZONE, "and the zone's");
+	await page.click(`${by("price-source")}[value="rate_card"]`);
+	await page.click(by("step-tab-review"));
+	await expectText("review-problems", `Rate card: Profile 1 ("${HOSTILE}") has no product code patterns, so it will never be used.`, 15000);
+	const card = await textOf("review-card");
+	assert(card.includes(`1 ${HOSTILE} No product codes yet, so it takes no item.`), `the Review's card: ${card}`);
+	assert(card.includes(`${HOSTILE_ZONE}: United Arab Emirates. $25.00 at any weight, Express (2 days).`), `the zone in words: ${card}`);
+	assert((await page.$$(".sp-wizard img, .sp-wizard b")).length === 0, "no element was made from a name");
+	assert(!trouble.some((line) => line.startsWith("dialog")), "no dialog of the browser's opened");
+	const file = await tallShot("wizard-rates-hostile");
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	return file;
+});
+
 await check("hostile zone and item set names are shown as text in Zones and Rules", async () => {
 	const draft = {
 		...original,
@@ -2739,6 +3525,39 @@ await check("at 760 px the fallbacks and the Review fit, their lines wrap and no
 	assert((await stored()) === null, "nothing is left in the browser's storage");
 	assert(Object.values(fallback).every(Boolean), `fallbacks: ${JSON.stringify(fallback)}`);
 	assert(Object.values(review).every(Boolean), `review: ${JSON.stringify(review)}`);
+	return files.join(", ");
+});
+
+await check("at 760 px the Rates step and the Test tab fit, their lines wrap and nothing scrolls sideways", async () => {
+	assert(ratesCard, "a card was imported earlier in the run");
+	const draft = { ...original, price_source: "rate_card", rate_card: ratesCard };
+	await openWithStored({ version, draft, step: "rates" });
+	await openZone(2, "USA");
+	const fits = async (selector) =>
+		page.evaluate((selector) => {
+			const root = document.documentElement;
+			const panel = document.querySelector(".sp-step").getBoundingClientRect();
+			const parts = [...document.querySelectorAll(selector)];
+			return {
+				page: root.scrollWidth <= root.clientWidth,
+				parts: parts.length > 0 && parts.every((part) => part.getBoundingClientRect().right <= panel.right + 1),
+				inside: parts.every((part) => part.scrollWidth <= part.clientWidth + 1),
+			};
+		}, selector);
+	const rates = await fits(".sp-source, .sp-import, [data-testid='rates-profile'], .sp-tiers");
+	await page.evaluate(() => document.activeElement?.blur());
+	const files = [await tallShot("wizard-rates-760")];
+	await page.click(by("step-tab-test"));
+	await page.click(by("test-run"));
+	await page.waitForFunction(() => document.querySelector('[data-testid="test-verdict"]')?.textContent.trim(), { timeout: 90000 });
+	const test = await fits(".sp-test-order, .sp-check, .sp-test-total");
+	files.push(await tallShot("wizard-test-760"));
+	// the restored draft was not changed here, so nothing writes it back: the browser's storage is left empty
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	await pause(500);
+	assert((await stored()) === null, "nothing is left in the browser's storage");
+	assert(Object.values(rates).every(Boolean), `rates: ${JSON.stringify(rates)}`);
+	assert(Object.values(test).every(Boolean), `test: ${JSON.stringify(test)}`);
 	return files.join(", ");
 });
 
