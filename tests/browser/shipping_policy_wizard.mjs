@@ -3063,6 +3063,45 @@ try {
 		assert(JSON.stringify((await draftNow()).rate_card) === before, "the card is as it was");
 	});
 
+	await check("a zone is added to a profile, priced by weight a tier at a time, and deleted after a question; days are whole numbers", async () => {
+		const before = JSON.stringify((await draftNow()).rate_card);
+		const zonesNow = async () => (await draftNow()).rate_card.profiles[1].zones;
+		await openProfile(1);
+		await (await (await nth("rates-profile", 1)).$(by("rates-zone-add"))).click();
+		assert((await focusedTestid()) === "rates-zone-name", `the new zone's name has the focus: ${await focusedTestid()}`);
+		let zones = await zonesNow();
+		const fresh = { countries: [], days: null, method: "", name: "New zone", tiers: [{ from: null, price: null, to: null }] };
+		assert(zones.length === 4 && JSON.stringify(zones[3]) === JSON.stringify(fresh), `a new zone: ${JSON.stringify(zones[3])}`);
+		const zone = await zoneOfProfile(1, "New zone");
+		const said = (selector) => zone.$eval(selector, (found) => found.textContent);
+		assert((await said(".sp-tier-price .sp-problem")) === "Type the price, such as 35.", "one price at any weight, not typed yet");
+		// by weight: the one price becomes the first tier, from 0 up to a weight still to be typed
+		await (await zone.$(`${by("rates-zone-prices")}[value="weight"]`)).click();
+		let tiers = (await zonesNow())[3].tiers;
+		assert(JSON.stringify(tiers) === JSON.stringify([{ from: 0, price: null, to: null }]), `by weight: ${JSON.stringify(tiers)}`);
+		await typeInto(zone, "rates-tier-to", "2");
+		await typeInto(zone, "rates-tier-price", "40");
+		await (await zone.$(by("rates-tier-add"))).click();
+		tiers = (await zonesNow())[3].tiers;
+		const two = [{ from: 0, price: 40, to: 2 }, { from: 2.01, price: null, to: null }];
+		assert(JSON.stringify(tiers) === JSON.stringify(two), `a tier from a hundredth of a pound on: ${JSON.stringify(tiers)}`);
+		assert((await focusedTestid()) === "rates-tier-to", `its upper weight has the focus: ${await focusedTestid()}`);
+		assert(await zone.$eval(`${by("rates-zone-prices")}[value="flat"]`, (radio) => radio.disabled), "one price waits for the other tiers to go");
+		await (await zone.$$(by("rates-tier-remove")))[1].click();
+		assert((await zonesNow())[3].tiers.length === 1, "the second tier is removed");
+		// days: a whole number from 0 to 60, or none
+		await typeInto(zone, "rates-zone-days", "abc");
+		assert((await said(".sp-czone-method .sp-problem")) === "Type a whole number of days from 0 to 60, or leave it empty.", "days refused");
+		assert((await zonesNow())[3].days === null, "and kept out of the draft");
+		await typeInto(zone, "rates-zone-days", "5");
+		assert((await zonesNow())[3].days === 5, "5 days");
+		// it has a price now: the page asks before it deletes it
+		await (await zone.$(by("rates-zone-delete"))).click();
+		await answerDialog(true);
+		assert(JSON.stringify((await draftNow()).rate_card) === before, "the card is as it was");
+		assert((await focusedTestid()) === "rates-zone-toggle", `the focus goes to the zone in its place: ${await focusedTestid()}`);
+	});
+
 	await check("with the rate card as the price source the tape prices a USA order from the card, and the carrier's controls give way", async () => {
 		await page.click(by("rates-switch-source"));
 		assert((await draftNow()).price_source === "rate_card", "the price source is the rate card");
