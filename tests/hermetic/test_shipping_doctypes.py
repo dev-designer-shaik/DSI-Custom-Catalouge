@@ -1778,7 +1778,10 @@ TRANSITION_SENTENCES = {
 }
 # What the page says with the rate card as the price source, or of a policy that is off: as it was.
 RATE_CARD_AND_OFF_SENTENCES = {
-	"step_rates.js": ["Customers pay from the rate card below; the carrier is not asked."],
+	# the rate card prices only while the policy is on (ruling P105)
+	"step_rates.js": [
+		"Customers pay from the rate card below once the policy is on; the carrier is not asked."
+	],
 	"step_review.js": [
 		"Customers pay what this policy says as soon as it is applied.",
 		"Customers pay the carrier's price again as soon as it is applied.",

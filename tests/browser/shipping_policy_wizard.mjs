@@ -2866,7 +2866,7 @@ try {
 		);
 		const want = [
 			"Carrier Customers pay the carrier's own price: for now the website applies the policy only with the rate card as the price source. The rules are kept, and Try an order shows what they would charge; there the rate card is used only where a fallback says Use the rate card.",
-			"Rate card Customers pay from the rate card below; the carrier is not asked.",
+			"Rate card Customers pay from the rate card below once the policy is on; the carrier is not asked.",
 		];
 		assert(JSON.stringify(options) === JSON.stringify(want), `the two choices: ${JSON.stringify(options)}`);
 		const chosen = () => page.$$eval(by("price-source"), (radios) => radios.find((radio) => radio.checked)?.value);

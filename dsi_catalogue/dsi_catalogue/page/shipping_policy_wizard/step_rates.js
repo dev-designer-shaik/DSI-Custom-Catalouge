@@ -29,7 +29,7 @@ const PRICE_SOURCES = [
 	{
 		value: "rate_card",
 		label: __("Rate card"),
-		sentence: __("Customers pay from the rate card below; the carrier is not asked."),
+		sentence: __("Customers pay from the rate card below once the policy is on; the carrier is not asked."),
 	},
 ];
 
