@@ -249,10 +249,12 @@ def test_policy_defaults_ship_the_policy_off():
 	fields = fields_of(POLICY)
 	assert fields["active"]["fieldtype"] == "Check"
 	assert fields["active"]["default"] == "0"
-	# On, the policy sets the price whatever its source: the rules, or the rate card.
+	# On, the policy sets the price from the rate card; with the carrier as the price source the website does not
+	# apply it yet, so customers still pay the carrier's own prices (ruling P100, final review I1).
 	assert fields["active"]["description"] == (
-		"Off: delivery costs stay exactly what the carrier quotes. On: the shipping policy sets what "
-		"customers pay, from the rules below or from the rate card, as the price source says."
+		"Off: delivery costs stay exactly what the carrier quotes. On, with the rate card as the price source: "
+		"customers pay from the rate card. On, with the carrier: the rules below are kept, but for now the "
+		"website still charges the carrier's own prices."
 	)
 	assert fields["not_covered"]["default"] == "Pass the carrier price through"
 	assert fields["default_fallback_method"]["default"] == "Don't offer delivery"
@@ -266,7 +268,8 @@ def test_policy_has_price_source_and_rate_card_fields_with_safe_defaults():
 	assert source["options"] == "Carrier\nRate card" == "\n".join(LABELS["price_source"])
 	assert source["default"] == "Carrier"
 	assert source["description"] == (
-		"Carrier: customers pay the carrier's price with the rules below. "
+		"Carrier: the carrier's price with the rules below, but for now the website applies the policy only with "
+		"the rate card, so customers still pay the carrier's own prices. "
 		"Rate card: customers pay from the interim rate card and the carrier is not asked."
 	)
 	# The rate card: JSON text that the form shows and nobody types, there is none until the wizard saves one.
@@ -1013,7 +1016,14 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 		""",
 	)
 	summary, card, empty = got
-	assert summary["source"] == "Prices start from the carrier's quote for each order."
+	# with the carrier as the price source the website does not apply the policy yet (ruling P100): said first
+	assert summary["source"] == (
+		"Prices start from the carrier's quote for each order. For now the website applies the policy only with "
+		"the rate card as the price source, so customers still pay the carrier's own prices."
+	)
+	assert empty["source"] == summary["source"], (
+		"a policy that does not name its price source prices by the carrier"
+	)
 	bahrain, gcc, rest, closed, levant = summary["zones"]
 	assert bahrain == {
 		"name": "Bahrain",
@@ -1642,6 +1652,79 @@ def test_a_check_of_the_test_tab_says_its_status_in_words(tmp_path):
 def test_the_rules_step_shows_the_asterisk_sentence_word_for_word():
 	"""The plan's Global Constraints: the sentence is on the wizard's Rules step, verbatim."""
 	assert f'"{ASTERISK}"' in (PAGE_DIR / "step_rules.js").read_text(encoding="utf-8")
+
+
+# What the page says of the live effect, by the part that says it. The website prices from the ERP's answer only
+# when the policy is on with the rate card as the price source; with the carrier it charges the carrier's own
+# prices whatever the policy says (ruling P100, final review I1).
+CARRIER_MODE_SENTENCES = {
+	"step_rates.js": [
+		"Customers pay the carrier's own price: for now the website applies the policy only with the rate card as "
+		"the price source. The rules are kept, and Try an order shows what they would charge; there the rate card "
+		"is used only where a fallback says Use the rate card.",
+	],
+	"step_review.js": [
+		"The website will still charge the carrier's own prices: it applies the policy only with the rate card as "
+		"the price source.",
+		"Switched on: customers still pay the carrier's own prices",
+		"Applied. The website still charges the carrier's own prices: it applies the policy only with the rate "
+		"card as the price source.",
+		"Applied and switched on. The website still charges the carrier's own prices: it applies the policy only "
+		"with the rate card as the price source.",
+		"The website still charges the carrier's own prices: it applies the policy only with the rate card as the "
+		"price source.",
+		"It is switched on, but the website still charges the carrier's own prices: it applies the policy only "
+		"with the rate card as the price source.",
+	],
+	"wizard_tape.js": [
+		"The policy is switched off, so today customers pay the carrier's price. This receipt shows what the "
+		"policy would charge, but the website applies it only with the rate card as the price source.",
+		"The website still charges the carrier's own prices: it applies the policy only with the rate card as the "
+		"price source. This receipt shows what the policy would charge.",
+	],
+}
+# What the page says with the rate card as the price source, or of a policy that is off: as it was.
+RATE_CARD_AND_OFF_SENTENCES = {
+	"step_rates.js": ["Customers pay from the rate card below; the carrier is not asked."],
+	"step_review.js": [
+		"Customers pay what this policy says as soon as it is applied.",
+		"Customers pay the carrier's price again as soon as it is applied.",
+		"The policy stays off: customers keep paying the carrier's price.",
+		"Switched on: customers pay what this policy says",
+		"Switched off: customers pay the carrier's price",
+		"Applied. Customers see the new prices now.",
+		"Applied and switched on. Customers see the new prices now.",
+		"Applied and switched off. Customers pay the carrier's price again.",
+		"Applied. The policy is off, so customers still pay the carrier's price.",
+		"Customers see the new prices now.",
+		"It is switched on: customers see the new prices now.",
+		"It is switched off: customers pay the carrier's price again.",
+		"The policy is off, so customers still pay the carrier's price.",
+	],
+	"wizard_tape.js": [
+		"The policy is switched off, so today customers pay the carrier's price. This receipt shows what they "
+		"would pay once you turn the policy on in the Review step.",
+		"Customer would pay",
+		"Customer pays",
+	],
+}
+
+
+def test_with_the_carrier_as_the_price_source_the_page_never_says_the_website_applies_the_policy():
+	"""Ruling P100: wherever the page speaks of what customers pay (the price source on the Rates step, the Active
+	switch, the line beside Apply and what an Apply says on the Review step, the tape's receipt), with the carrier as
+	the price source it says that the website still charges the carrier's own prices and applies the policy only with
+	the rate card. Each sentence is read from the part that says it, word for word, as one string; the sentences
+	for the rate card and for a policy that is off are still there as they were, and the one that said the carrier's
+	price is shaped by the rules is gone."""
+	for sentences in (CARRIER_MODE_SENTENCES, RATE_CARD_AND_OFF_SENTENCES):
+		for part, said in sentences.items():
+			source = (PAGE_DIR / part).read_text(encoding="utf-8")
+			for sentence in said:
+				assert f'"{sentence}"' in source, f"{part} says: {sentence}"
+	served = served_page_script()
+	assert "shaped by the rules" not in served
+	assert "The rate card is used only where a fallback says Use the rate card." not in served
 
 
 def test_the_formula_names_the_rules_step_lists_are_the_servers():

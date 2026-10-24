@@ -693,8 +693,11 @@ _VERDICT_ERP_DISAGREES = (
 )
 _VERDICT_OFF = "The shipping policy is switched off, so customers pay the carrier's own prices."
 _VERDICT_OFF_NO_RATES = "The shipping policy is switched off and the carrier returns no rates, so customers see no delivery method."
+# The website prices from the ERP's answer only while the policy is on with the rate card as the price source; with
+# the carrier it charges the carrier's own prices, whatever the policy says (ruling P100).
 _VERDICT_CARRIER = (
-	"The price source is the carrier, so customers pay the carrier's price through the policy's rules."
+	"The price source is the carrier, so customers pay the carrier's own prices: for now the website applies the "
+	"policy only with the rate card as the price source."
 )
 _VERDICT_NO_RATES = (
 	"The carrier returns no rates, so while the price source is Carrier customers see no delivery method."
@@ -719,9 +722,10 @@ def verdict_for(checks) -> str:
 	source, the verdict looks at what the website returned: its own rate-card method at the ERP's price (they
 	agree), the carrier's methods or none at all from the carrier (the website has not been switched over: the
 	packing plan it names is the carrier path's), another price (they disagree), a 429 (try again in a minute)
-	or nothing usable. With the carrier as the source, or the policy off, it is the carrier's rates that
-	matter: no rates means no delivery method for customers; with rates, it says so and, if the website check
-	did not work out (it was not asked, or gave no usable answer), that too.
+	or nothing usable. With the carrier as the source, or the policy off, the website charges the carrier's own
+	prices (it applies the policy only with the rate card), so it is the carrier's rates that matter: no rates
+	means no delivery method for customers; with rates, it says so and, if the website check did not work out (it
+	was not asked, or gave no usable answer), that too.
 	"""
 	by_name = {}
 	for check in checks if isinstance(checks, list | tuple) else []:

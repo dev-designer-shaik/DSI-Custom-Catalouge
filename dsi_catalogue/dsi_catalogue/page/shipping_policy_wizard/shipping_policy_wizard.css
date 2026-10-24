@@ -449,7 +449,8 @@
 	display: none;
 }
 
-/* a note about the whole policy (it is off), set apart from how this one order was priced */
+/* a note about the whole policy (it is off, or the website does not apply it yet), set apart from how this one
+ * order was priced */
 .sp-wizard .sp-note {
 	padding-left: 10px;
 	border-left: 2px solid var(--sp-rule-strong);

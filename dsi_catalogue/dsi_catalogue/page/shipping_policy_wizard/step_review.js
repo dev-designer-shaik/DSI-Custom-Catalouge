@@ -145,12 +145,23 @@ function written(wizard, sent, expected) {
 	);
 }
 
-// What the step says once the draft is applied, by whether the policy was and is on.
+// What the step says once the draft is applied, by whether the policy was and is on. The website prices from the
+// policy only while it is on with the rate card as the price source; with the carrier it charges the carrier's own
+// prices, whatever the policy says (ruling P100), and an Apply that leaves it so says that.
 function applied_sentence(outcome) {
 	const on = Boolean(outcome.after?.active);
 	const was = Boolean(outcome.before?.active);
-	if (on && was) return __("Applied. Customers see the new prices now.");
-	if (on) return __("Applied and switched on. Customers see the new prices now.");
+	const by_card = outcome.after?.price_source === "rate_card";
+	if (on && was) {
+		return by_card
+			? __("Applied. Customers see the new prices now.")
+			: __("Applied. The website still charges the carrier's own prices: it applies the policy only with the rate card as the price source.");
+	}
+	if (on) {
+		return by_card
+			? __("Applied and switched on. Customers see the new prices now.")
+			: __("Applied and switched on. The website still charges the carrier's own prices: it applies the policy only with the rate card as the price source.");
+	}
 	if (was) return __("Applied and switched off. Customers pay the carrier's price again.");
 	return __("Applied. The policy is off, so customers still pay the carrier's price.");
 }
@@ -159,8 +170,17 @@ function applied_sentence(outcome) {
 function late_sentence(outcome) {
 	const on = Boolean(outcome.after?.active);
 	const was = Boolean(outcome.before?.active);
-	if (on && was) return __("Customers see the new prices now.");
-	if (on) return __("It is switched on: customers see the new prices now.");
+	const by_card = outcome.after?.price_source === "rate_card";
+	if (on && was) {
+		return by_card
+			? __("Customers see the new prices now.")
+			: __("The website still charges the carrier's own prices: it applies the policy only with the rate card as the price source.");
+	}
+	if (on) {
+		return by_card
+			? __("It is switched on: customers see the new prices now.")
+			: __("It is switched on, but the website still charges the carrier's own prices: it applies the policy only with the rate card as the price source.");
+	}
 	if (was) return __("It is switched off: customers pay the carrier's price again.");
 	return __("The policy is off, so customers still pay the carrier's price.");
 }
@@ -488,7 +508,15 @@ class ReviewView {
 						: __("Fix the {0} problems at the top first.", [problems.length]),
 			};
 		}
-		if (store.draft.active) return { ready: true, why: __("Customers pay what this policy says as soon as it is applied.") };
+		if (store.draft.active) {
+			return {
+				ready: true,
+				why:
+					this.wizard.price_source() === "rate_card"
+						? __("Customers pay what this policy says as soon as it is applied.")
+						: __("The website will still charge the carrier's own prices: it applies the policy only with the rate card as the price source."),
+			};
+		}
 		return {
 			ready: true,
 			why: store.original?.active
@@ -501,9 +529,14 @@ class ReviewView {
 		const store = this.wizard.store;
 		const on = Boolean(store.draft.active);
 		this.active.checked = on;
-		this.active_state.textContent = on
-			? __("Switched on: customers pay what this policy says")
-			: __("Switched off: customers pay the carrier's price");
+		let switched = __("Switched off: customers pay the carrier's price");
+		if (on) {
+			switched =
+				this.wizard.price_source() === "rate_card"
+					? __("Switched on: customers pay what this policy says")
+					: __("Switched on: customers still pay the carrier's own prices");
+		}
+		this.active_state.textContent = switched;
 		let label = __("Apply");
 		if (this.ui.applying) label = __("Applying…");
 		else if (on !== Boolean(store.original?.active)) label = on ? __("Apply and switch on") : __("Apply and switch off");

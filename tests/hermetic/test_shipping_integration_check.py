@@ -1403,6 +1403,12 @@ STILL_THE_CARRIER = (
 NO_RATES_ON_THE_CARRIER = (
 	"The carrier returns no rates, so while the price source is Carrier customers see no delivery method."
 )
+# Ruling P100 (final review I1): the website prices from the ERP's answer only when the policy is on with the rate
+# card as the price source; with the carrier it charges the carrier's own prices, whatever the policy says.
+CARRIER_PRICES = (
+	"The price source is the carrier, so customers pay the carrier's own prices: for now the website applies the "
+	"policy only with the rate card as the price source."
+)
 
 
 def test_the_verdict_when_the_erp_and_the_website_agree():
@@ -1549,9 +1555,9 @@ def test_the_verdict_when_the_policy_is_off():
 
 def test_the_verdict_when_the_price_source_is_the_carrier():
 	carrier_mode = erp_check(price_source="carrier", reason="fallback_offer")
-	assert verdict_for([carrier_mode, carrier_check(), website_check(None, erp_amount=None)]) == (
-		"The price source is the carrier, so customers pay the carrier's price through the policy's rules."
-	)
+	verdict = verdict_for([carrier_mode, carrier_check(), website_check(None, erp_amount=None)])
+	assert verdict == CARRIER_PRICES
+	assert "rules" not in verdict, "it never says customers pay through the policy's rules"
 	none = summarize_carrier_response({"success": True, "rates": []})
 	assert verdict_for([carrier_mode, none, website_check(None, erp_amount=None)]) == NO_RATES_ON_THE_CARRIER
 	blocked = summarize_carrier_response(RuntimeError("Account is blocked"))
@@ -1584,10 +1590,7 @@ def carrier_mode_checks():
 	carrier_source = erp_check(price_source="carrier", reason="fallback_offer")
 	return {
 		"off": (off, "The shipping policy is switched off, so customers pay the carrier's own prices."),
-		"carrier": (
-			carrier_source,
-			"The price source is the carrier, so customers pay the carrier's price through the policy's rules.",
-		),
+		"carrier": (carrier_source, CARRIER_PRICES),
 	}
 
 

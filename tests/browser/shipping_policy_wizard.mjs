@@ -34,7 +34,16 @@ const STEPS = ["zones", "rates", "rules", "fallback", "review", "test"];
 const LABELS = ["Zones", "Rates", "Rules", "If the carrier can't quote", "Review", "Test"];
 const HOSTILE = "<img src=x onerror=alert(1)>";
 const HOSTILE_MESSAGE = "<img src=x onerror=alert(2)>";
+// The website prices from the policy only while it is on with the rate card as the price source; with the carrier
+// it charges the carrier's own prices, whatever the policy says (ruling P100), and the page says so.
+const STILL_THE_CARRIER =
+	"The website still charges the carrier's own prices: it applies the policy only with the rate card as the price source.";
+// The receipt's note while the draft is off: with the carrier as the price source (as erp2's empty policy has it),
+// and with the rate card.
 const OFF =
+	"The policy is switched off, so today customers pay the carrier's price. This receipt shows what the policy " +
+	"would charge, but the website applies it only with the rate card as the price source.";
+const OFF_BY_CARD =
 	"The policy is switched off, so today customers pay the carrier's price. This receipt shows what they " +
 	"would pay once you turn the policy on in the Review step.";
 const ITEM = "10005020"; // a priced fragrance on erp2 (229.00 in USD - Online)
@@ -1254,7 +1263,10 @@ await check("the receipt says how a draft that is on priced the order, in plain 
 	await expectText("tape-lines", "Rule 2 applies: Gulf, every item, charges the carrier's price, rounded up.");
 	await expectText("tape-lines", "Rounded up to the next whole dollar, which adds 0.80. +$0.80");
 	assert(!(await textOf("tape-lines")).includes("switched off"), "the draft is on: no note that it is off");
-	assert((await textOf("tape-total-label")) === "Customer pays", "the draft is on: the customer pays");
+	// on, with the carrier as the price source: what the policy would charge, which the website does not apply yet
+	await expectText("tape-lines", `${STILL_THE_CARRIER} This receipt shows what the policy would charge.`);
+	const label = await textOf("tape-total-label");
+	assert(label === "Customer would pay", `on, with the carrier as the price source, the total reads "${label}"`);
 	await page.click(by("tape-unavailable"));
 	await expectText("tape-lines", "The carrier could not quote, so the fallback applies.");
 	await expectText("tape-lines", "Standard delivery");
@@ -2194,7 +2206,9 @@ try {
 			frappe.pages["shipping-policy-wizard"].wizard.store.draft.rules.map((rule) => dsi_catalogue.sp.rule_statement(rule))
 		);
 		sentences.forEach((text, n) => assert(summary.includes(`: ${text}.`), `rule ${n + 1} in its card's words: ${text}`));
-		assert(summary.startsWith("Prices start from the carrier's quote for each order."), "where prices start, first");
+		const source =
+			"Prices start from the carrier's quote for each order. For now the website applies the policy only with the rate card as the price source, so customers still pay the carrier's own prices.";
+		assert(summary.startsWith(source), `where prices start, and that the website does not apply them yet, first: ${summary.slice(0, 220)}`);
 		assert(summary.endsWith("When no rule fits an order, customers pay the carrier's price."), "Anything not covered, last");
 		assert(!(await page.$eval(by("policy-active"), (box) => box.checked)), "the switch is off");
 		// its pale track has a ring in the muted text colour, so the control is seen on the desk's surface
@@ -2282,26 +2296,31 @@ try {
 		assert(JSON.stringify(await draftNow()) === JSON.stringify(finished()), "the draft is the example again");
 	});
 
+	// The example policy has the carrier as its price source: switched on, it is still the carrier's own prices that
+	// customers pay on the website (ruling P100), and the switch, the line beside Apply and the tape say so.
 	await check("the Active switch says its state in words, and Apply then says it switches the policy on", async () => {
 		assert((await textOf("tape-total-label")) === "Customer would pay", "off: the customer would pay");
 		await page.click(by("policy-active"));
-		await expectText("policy-active-state", "Switched on: customers pay what this policy says");
+		await expectText("policy-active-state", "Switched on: customers still pay the carrier's own prices");
 		assert((await textOf("apply-button")) === "Apply and switch on", `the button: ${await textOf("apply-button")}`);
 		await applyReady();
 		await expectText("review-diff", "Active: off → on");
 		const arrow = await page.$eval(`${by("review-diff")} .sp-change-arrow`, (found) => found.getAttribute("aria-label"));
 		assert(arrow === "becomes", `the arrow is said as a word: ${arrow}`);
-		await expectText("tape-total-label", "Customer pays"); // the receipt once the draft is on
+		// the receipt once the draft is on: what the policy would charge, which the website does not apply yet
+		await expectText("tape-lines", STILL_THE_CARRIER);
+		assert((await textOf("tape-total-label")) === "Customer would pay", "on, with the carrier: the customer would pay");
 		await expectText("tape-total", "$39.00");
 		// from the keyboard: Space switches it off and on again
 		await page.focus(by("policy-active"));
 		await page.keyboard.press("Space");
 		await expectText("policy-active-state", "Switched off: customers pay the carrier's price");
 		await page.keyboard.press("Space");
-		await expectText("policy-active-state", "Switched on: customers pay what this policy says");
+		await expectText("policy-active-state", "Switched on: customers still pay the carrier's own prices");
 		await applyReady();
 		const why = await textOf("apply-hint");
-		assert(why === "Customers pay what this policy says as soon as it is applied.", `beside Apply: ${why}`);
+		const still = "The website will still charge the carrier's own prices: it applies the policy only with the rate card as the price source.";
+		assert(why === still, `beside Apply: ${why}`);
 		assert((await draftNow()).active === true, "the draft is on");
 	});
 
@@ -2331,7 +2350,7 @@ try {
 			});
 			assert(meanwhile.active === true && meanwhile.switched === true, `the draft stays: ${JSON.stringify(meanwhile)}`);
 			assert(meanwhile.step === "review" && meanwhile.busy === "true", `the step stays: ${JSON.stringify(meanwhile)}`);
-			await expectText("apply-done", "Applied and switched on. Customers see the new prices now.", 30000);
+			await expectText("apply-done", `Applied and switched on. ${STILL_THE_CARRIER}`, 30000);
 		} finally {
 			await intercept(false);
 		}
@@ -2358,7 +2377,7 @@ try {
 		assert((await ariaDisabled()) === "true", "Apply waits for a change");
 		assert(await page.$eval(by("draft-banner"), (banner) => banner.hidden), "no banner: nothing is edited");
 		await expectText("tape-total", "$39.00");
-		assert((await textOf("tape-total-label")) === "Customer pays", "the policy is on: the customer pays");
+		assert((await textOf("tape-total-label")) === "Customer would pay", "on, with the carrier: the customer would pay");
 		const state = await wizardCall("wizard_state");
 		assert(state.version === saved.version && state.policy.active && state.policy.zones.length === 4, "the server agrees");
 		return tallShot("wizard-applied");
@@ -2378,8 +2397,9 @@ try {
 		await pickCountry("United Arab Emirates");
 		await fill("tape-quote", "38.20");
 		await expectText("tape-total", "$39.00");
-		assert((await textOf("tape-total-label")) === "Customer pays", "the customer pays");
+		assert((await textOf("tape-total-label")) === "Customer would pay", "on, with the carrier: the customer would pay");
 		assert(!(await textOf("tape-lines")).includes("switched off"), "no note that the policy is off");
+		await expectText("tape-lines", STILL_THE_CARRIER);
 	});
 
 	await check("an edit while the policy is on: the banner says that edits go live when they are applied", async () => {
@@ -2678,7 +2698,7 @@ try {
 		assert(after.original.rules[2].label === "Gulf at the carrier price, again", "with the edit");
 		// said as a prompt answer is said (B1): whether the policy is on, and what the last check of the draft found
 		const done = await textOf("apply-done");
-		assert(done.includes("Customers see the new prices now."), `whether it is on: ${done}`);
+		assert(done.includes(STILL_THE_CARRIER), `whether it is on, with the carrier as the price source: ${done}`);
 		assert(done.includes("Rules changed: Rule 3 (Gulf at the carrier price, again)"), `what changed: ${done}`);
 		await pause(500);
 		assert((await stored()) === null, "no draft is left in storage");
@@ -2808,7 +2828,7 @@ try {
 			labels.map((label) => label.innerText.replace(/\s+/g, " ").trim())
 		);
 		const want = [
-			"Carrier Customers pay the carrier's price, shaped by the rules. The rate card is used only where a fallback says Use the rate card.",
+			"Carrier Customers pay the carrier's own price: for now the website applies the policy only with the rate card as the price source. The rules are kept, and Try an order shows what they would charge; there the rate card is used only where a fallback says Use the rate card.",
 			"Rate card Customers pay from the rate card below; the carrier is not asked.",
 		];
 		assert(JSON.stringify(options) === JSON.stringify(want), `the two choices: ${JSON.stringify(options)}`);
@@ -3243,6 +3263,7 @@ try {
 		assert(JSON.stringify(lines) === JSON.stringify(want), `the card's lines: ${JSON.stringify(lines)}`);
 		await expectText("tape-lines", "International Express (4-7 days)");
 		assert((await textOf("tape-total-label")) === "Customer would pay", "the draft is still off");
+		await expectText("tape-lines", OFF_BY_CARD); // with the rate card, the note of a policy that is off is as it was
 		return "$100.00: Dangerous Goods $60.00 and the catch-all $40.00, each unit 0.35 kg (0.772 lb): erp2 has no item weights";
 	});
 
@@ -3290,6 +3311,12 @@ try {
 		await page.click(by("policy-active"));
 		await expectText("apply-button", "Apply and switch on");
 		await applyReady();
+		// with the rate card as the price source the website applies the policy: the words are as they were (P100)
+		await expectText("policy-active-state", "Switched on: customers pay what this policy says");
+		const why = await textOf("apply-hint");
+		assert(why === "Customers pay what this policy says as soon as it is applied.", `beside Apply: ${why}`);
+		await expectText("tape-total-label", "Customer pays");
+		assert(!(await textOf("tape-lines")).includes("The website still charges"), "no note that the website charges the carrier");
 		appliedCard = JSON.stringify((await draftNow()).rate_card);
 		await page.click(by("apply-button"));
 		await expectText("apply-done", "Applied and switched on. Customers see the new prices now.", 30000);

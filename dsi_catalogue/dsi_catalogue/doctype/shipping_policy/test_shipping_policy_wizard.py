@@ -163,6 +163,12 @@ PUBLIC_ADDRESS = "93.184.216.34"
 CHECK_NAMES = ("erp_price_api", "carrier", "website")
 CHECK_KEYS = {"name", "ok", "status", "ms", "summary", "detail"}
 UNSAVABLE = "The rate card cannot be saved as it is (it is nested too deeply or holds values that are not plain data)."
+# The verdict with the carrier as the price source: the website prices from the policy only with the rate card, so
+# customers pay the carrier's own prices (ruling P100, final review I1).
+CARRIER_PRICES = (
+	"The price source is the carrier, so customers pay the carrier's own prices: for now the website applies the "
+	"policy only with the rate card as the price source."
+)
 
 
 # ---------------------------------------------------------------- helpers
@@ -3631,10 +3637,7 @@ class TestTestIntegration(WizardTestCase):
 		self.assertNotIn(
 			"matches", website_check["summary"], "nothing to compare with when the carrier prices"
 		)
-		self.assertEqual(
-			result["verdict"],
-			"The price source is the carrier, so customers pay the carrier's price through the policy's rules.",
-		)
+		self.assertEqual(result["verdict"], CARRIER_PRICES)
 
 	def test_the_verdict_follows_what_the_three_checks_found(self):
 		seed_policy(card_policy(), active=True)
@@ -3741,15 +3744,11 @@ class TestTestIntegration(WizardTestCase):
 		frappe.get_doc(POLICY).update({"active": 1, "price_source": "Carrier"}).save()
 		own = shipping_policy.price_delivery("US", json.dumps(items), carton, "[]")
 		with the_network(Reply(200, {"message": own}), site_reply(38.2)), carrier(**good):
-			self.assertEqual(
-				wizard.test_integration()["verdict"],
-				"The price source is the carrier, so customers pay the carrier's price through the policy's rules.",
-			)
+			self.assertEqual(wizard.test_integration()["verdict"], CARRIER_PRICES)
 		with the_network(Reply(200, {"message": own}), down), carrier(**good):
 			self.assertEqual(
 				wizard.test_integration()["verdict"],
-				"The price source is the carrier, so customers pay the carrier's price through the policy's rules, "
-				"but the website did not give a usable answer (see the third check).",
+				f"{CARRIER_PRICES[:-1]}, but the website did not give a usable answer (see the third check).",
 			)
 		with the_network(Reply(200, {"message": own}), site_reply(38.2)), carrier(**no_rates) as asked:
 			result = wizard.test_integration()

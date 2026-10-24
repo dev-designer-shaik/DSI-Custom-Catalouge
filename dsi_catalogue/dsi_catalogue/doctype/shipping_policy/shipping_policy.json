@@ -20,14 +20,14 @@
  "fields": [
   {
    "default": "0",
-   "description": "Off: delivery costs stay exactly what the carrier quotes. On: the shipping policy sets what customers pay, from the rules below or from the rate card, as the price source says.",
+   "description": "Off: delivery costs stay exactly what the carrier quotes. On, with the rate card as the price source: customers pay from the rate card. On, with the carrier: the rules below are kept, but for now the website still charges the carrier's own prices.",
    "fieldname": "active",
    "fieldtype": "Check",
    "label": "Active"
   },
   {
    "default": "Carrier",
-   "description": "Carrier: customers pay the carrier's price with the rules below. Rate card: customers pay from the interim rate card and the carrier is not asked.",
+   "description": "Carrier: the carrier's price with the rules below, but for now the website applies the policy only with the rate card, so customers still pay the carrier's own prices. Rate card: customers pay from the interim rate card and the carrier is not asked.",
    "fieldname": "price_source",
    "fieldtype": "Select",
    "label": "Price source",
@@ -95,7 +95,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-24 00:00:00.000000",
+ "modified": "2026-10-24 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "dsi_catalogue",
  "name": "Shipping Policy",

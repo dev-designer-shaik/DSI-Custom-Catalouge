@@ -666,11 +666,14 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	// Prints an answer of try_order, a reason why nothing is priced yet (blocked), or a problem. The tape prices
 	// the draft as if it were switched on, so that it can be tried before it goes live; whether it is on is
 	// read from the draft. While it is off, the receipt says so first, and its total is what customers would
-	// pay once it is on.
+	// pay once it is on. The website prices from the policy only while it is on with the rate card as the price
+	// source (ruling P100): with the carrier, on or off, the receipt says that the website still charges the
+	// carrier's own prices, and its total is what the policy would charge.
 	render_receipt({ answer = null, blocked = null, problem = null } = {}) {
 		const note = (text, kind) => el("p", { class: `sp-${kind}` }, text);
 		const off = !this.wizard.store.draft.active;
-		this.total_label.textContent = off ? __("Customer would pay") : __("Customer pays");
+		const by_card = this.wizard.price_source() === "rate_card";
+		this.total_label.textContent = off || !by_card ? __("Customer would pay") : __("Customer pays");
 		this.lines.replaceChildren();
 		this.more.replaceChildren();
 		this.more.hidden = true;
@@ -686,10 +689,19 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		}
 		const result = sp.is_record(answer?.result) ? answer.result : {};
 		if (off) {
-			const today = __(
-				"The policy is switched off, so today customers pay the carrier's price. This receipt shows what they would pay once you turn the policy on in the Review step."
-			);
+			const today = by_card
+				? __(
+						"The policy is switched off, so today customers pay the carrier's price. This receipt shows what they would pay once you turn the policy on in the Review step."
+				  )
+				: __(
+						"The policy is switched off, so today customers pay the carrier's price. This receipt shows what the policy would charge, but the website applies it only with the rate card as the price source."
+				  );
 			this.lines.append(note(today, "note"));
+		} else if (!by_card) {
+			const still = __(
+				"The website still charges the carrier's own prices: it applies the policy only with the rate card as the price source. This receipt shows what the policy would charge."
+			);
+			this.lines.append(note(still, "note"));
 		}
 		const offers = (Array.isArray(result.offers) ? result.offers : [])
 			.filter(sp.is_record)

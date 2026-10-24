@@ -81,14 +81,16 @@ in the browser and writes nothing until **Apply** on Review, which writes the wh
 draft in one transaction or nothing, and refuses when someone changed the policy
 after the wizard loaded it. A Try an order tape beside every step prices a sample
 order with the draft. Rates holds the price source: Carrier (the default: the
-carrier's price, shaped by the rules) or Rate card (the interim Shopify
-weight-tier card: customers pay from it and the carrier is not asked, until the
-carrier integration is shown again). The card is imported from the Shopify CSV
-export (the rates file and the countries not delivered, chosen as files or
-pasted), shown with what it holds and what stops it, edited there, and applied
-with the rest. Test ("Test the integration") runs three read-only checks of what
-is live: the ERP's own `price_delivery` over HTTP, the carrier, and the website
-named in Storefront Settings.
+carrier's price, shaped by the rules; for now the website applies the policy only
+with the rate card as the price source, so with Carrier customers still pay the
+carrier's own prices, on or off, and the rules only show in Try an order) or Rate
+card (the interim Shopify weight-tier card: customers pay from it and the carrier
+is not asked, until the carrier integration is shown again). The card is imported
+from the Shopify CSV export (the rates file and the countries not delivered,
+chosen as files or pasted), shown with what it holds and what stops it, edited
+there, and applied with the rest. Test ("Test the integration") runs three
+read-only checks of what is live: the ERP's own `price_delivery` over HTTP, the
+carrier, and the website named in Storefront Settings.
 
 **Formulas.** A rule can charge a formula over `carrier_price`, `order_value`,
 `weight_kg`, `volume_l`, `boxes` and `item_count`, with `min`, `max`, `round`,
@@ -133,9 +135,13 @@ is unchanged. Then:
 - [ ] Before a policy goes on where rules are already stored, re-check every
   stored formula under the stricter checks (open the policy in the wizard and
   read Review). Neither erp2 nor the live ERP stores one today.
-- [ ] After the website deploy, run the Test tab once on the live ERP: its verdict
-  should say the site uses the policy (until then it says the site still asks the
-  carrier).
+- [ ] Until the website is updated to apply rules over the carrier's quotes, only
+  the Rate card price source changes what customers pay: with Carrier the website
+  charges the carrier's own prices whether the policy is on or off (the wizard's
+  Rates, Review and Test say so).
+- [ ] After the website deploy, run the Test tab once on the live ERP with the
+  rate card as the price source: its verdict should say the site uses the policy
+  (until then it says the site still asks the carrier).
 
 ## Tests
 Hermetic (no bench): `python3 -m pytest tests/hermetic -q`

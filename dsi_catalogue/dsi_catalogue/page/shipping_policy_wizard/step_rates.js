@@ -16,12 +16,14 @@
 
 const RATES_CHECK_DELAY = 250; // ms after the last change before the server checks the card again
 
+// The website prices from the ERP's answer only while the policy is on with the rate card as the price source; with
+// the carrier it charges the carrier's own prices, whatever the policy says (ruling P100).
 const PRICE_SOURCES = [
 	{
 		value: "carrier",
 		label: __("Carrier"),
 		sentence: __(
-			"Customers pay the carrier's price, shaped by the rules. The rate card is used only where a fallback says Use the rate card."
+			"Customers pay the carrier's own price: for now the website applies the policy only with the rate card as the price source. The rules are kept, and Try an order shows what they would charge; there the rate card is used only where a fallback says Use the rate card."
 		),
 	},
 	{

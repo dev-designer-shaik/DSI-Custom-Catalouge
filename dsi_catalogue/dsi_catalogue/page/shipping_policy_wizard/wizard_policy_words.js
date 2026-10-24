@@ -232,6 +232,8 @@ Object.assign(sp, {
 	// and the fallbacks are not used, and `unused` is true, for the step to show them quietly; they are still
 	// said, as they stand in the draft. `card` is then the card's own lines (sp.card_summary, wizard_rate_card.js:
 	// its profiles, their zones and the prices of each in words, and the countries not delivered to), else null.
+	// With the carrier as the price source `source` says first that the website does not apply the policy yet
+	// (ruling P100): what follows is what the policy would do.
 	policy_summary(policy, country_name = (code) => code) {
 		const zones = (Array.isArray(policy?.zones) ? policy.zones : []).filter(sp.is_record);
 		const rules = Array.isArray(policy?.rules) ? policy.rules : [];
@@ -240,7 +242,9 @@ Object.assign(sp, {
 		const summary = {
 			source: by_card
 				? __("Prices come from the rate card: the carrier is not asked, and the rules and fallbacks below are not used.")
-				: __("Prices start from the carrier's quote for each order."),
+				: __(
+						"Prices start from the carrier's quote for each order. For now the website applies the policy only with the rate card as the price source, so customers still pay the carrier's own prices."
+				  ),
 			unused: by_card,
 			card: by_card ? sp.card_summary(policy, country_name) : null,
 			zones: zones.map((zone) => {
