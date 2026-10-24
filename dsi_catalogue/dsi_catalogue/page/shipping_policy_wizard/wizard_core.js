@@ -298,13 +298,15 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 	// Draws the selected step's body into its emptied panel, then hands it the latest answer of try_order
 	// (null while nothing is priced), so a body drawn on its first show or on a tab switch is never without it.
 	// While a change is still being priced (tape.pending) that answer is for an older draft, whose rules may
-	// stand in other places: the body gets null, and the next answer when it comes.
+	// stand in other places: the body gets null, and the next answer when it comes. The tape is told which step it
+	// stands beside (its title says that it prices the draft beside the Test tab).
 	render_step() {
 		for (const step of STEPS) this.panels[step.id].hidden = step.id !== this.store.step;
 		const step = this.current_step();
 		const panel = this.panels[step.id];
 		panel.replaceChildren();
 		step.render(this, panel);
+		this.tape?.show_step(step.id);
 		step.priced?.(this, panel, this.tape?.pending ? null : this.priced);
 	}
 

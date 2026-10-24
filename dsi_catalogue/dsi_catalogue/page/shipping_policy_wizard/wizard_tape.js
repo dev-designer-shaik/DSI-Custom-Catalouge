@@ -101,12 +101,8 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		};
 
 		this.status = el("span", { class: "sp-tape-status", "aria-hidden": "true", hidden: true }, __("Pricing…"));
-		const head = el(
-			"div",
-			{ class: "sp-tape-head" },
-			el("h2", { class: "sp-tape-title", id: "sp-tape-title" }, __("Try an order")),
-			this.status
-		);
+		this.title = el("h2", { class: "sp-tape-title", id: "sp-tape-title" }, __("Try an order"));
+		const head = el("div", { class: "sp-tape-head" }, this.title, this.status);
 
 		this.country = new dsi_catalogue.CountryPicker({
 			id: "sp-tape-country",
@@ -265,6 +261,12 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		}
 		this.render_controls();
 		this.schedule();
+	}
+
+	// A step was drawn (the wizard calls this). Beside the Test tab, which checks what is live, the tape says that
+	// it prices the draft (ruling P93: it stays, under another title).
+	show_step(id) {
+		this.title.textContent = id === "test" ? __("Try an order with your draft") : __("Try an order");
 	}
 
 	// The draft changed (the wizard calls this): price the order again shortly.

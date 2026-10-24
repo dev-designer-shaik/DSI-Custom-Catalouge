@@ -10,8 +10,12 @@
 //	- "Run the tests": one request at a time (a run takes 15 to 45 seconds, sometimes more), with a spinner and the
 //	  button held while it runs; a refused order is said in plain words;
 //	- the three checks, always in the same order, each with its status in words ("Passed", "Did not pass", "Not
-//	  asked", "Rate limited", the last two neutral), its time, its summary, and its details folded away;
-//	- under a double rule, the verdict: one sentence, read out when it comes.
+//	  asked", "Rate limited", the last two neutral), its time (none for a check that was not asked), its summary,
+//	  and its details folded away;
+//	- under a double rule, the verdict: one sentence, in a live region that is there before it comes, so that it is
+//	  read out when it does.
+// While this tab is shown, the tape beside it is titled "Try an order with your draft" (ruling P93): it prices the
+// draft, where these checks ask what is live.
 // What the tab shows lives in wizard.ui.test, so that a result lasts while the page is open (a new run clears it):
 // `order` (the sample as typed), `result`, `running`, `problem`, `note` and `view` (the view drawn last).
 
@@ -112,8 +116,16 @@ class TestView {
 		this.results = el(
 			"section",
 			{ class: "sp-test-results", "aria-label": __("What the checks found"), hidden: true },
-			this.checks,
-			el("div", { class: "sp-test-total" }, el("p", { class: "sp-test-verdict-label" }, __("Verdict")), this.verdict)
+			this.checks
+		);
+		// The verdict is a live region that is always there, empty while there is nothing to say, so that its sentence
+		// is read out when it comes: a region shown and filled in the same moment is often not. Its rule and label
+		// show once it holds a verdict (the style).
+		this.total = el(
+			"div",
+			{ class: "sp-test-total" },
+			el("p", { class: "sp-test-verdict-label" }, __("Verdict")),
+			this.verdict
 		);
 
 		panel.append(
@@ -150,7 +162,8 @@ class TestView {
 			),
 			el("div", { class: "sp-test-run" }, this.run_button, this.spinner, this.status),
 			this.problem,
-			this.results
+			this.results,
+			this.total
 		);
 		this.render_items();
 		this.show();
@@ -361,7 +374,10 @@ class TestView {
 				{ class: "sp-check-head" },
 				el("span", { class: "sp-check-status", "data-testid": "test-check-status" }, status.text),
 				el("h3", { class: "sp-check-name" }, spec.label),
-				ms === null ? null : el("span", { class: "sp-check-time" }, __("{0} ms", [ms.toLocaleString("en-US")]))
+				// a check that was not asked took no time worth saying
+				ms === null || status.kind === "not_asked"
+					? null
+					: el("span", { class: "sp-check-time" }, __("{0} ms", [ms.toLocaleString("en-US")]))
 			),
 			el(
 				"p",

@@ -2607,8 +2607,10 @@
 	overflow-wrap: anywhere;
 }
 
-/* the verdict: the slip's total, under the receipt's double rule */
+/* the verdict: the slip's total, under the receipt's double rule. Its live region is always there; until it holds a
+ * sentence it has neither rule nor label, and takes no room */
 .sp-wizard .sp-test-total {
+	max-width: 80ch;
 	margin-top: 16px;
 	padding-top: 12px;
 	border-top: 3px double var(--sp-rule-strong);
