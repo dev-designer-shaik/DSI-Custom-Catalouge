@@ -167,7 +167,11 @@ UNSAVABLE = "The rate card cannot be saved as it is (it is nested too deeply or 
 
 # ---------------------------------------------------------------- helpers
 def snapshot() -> dict:
-	"""Everything the policy is stored in: compared before and after an Apply that must change nothing."""
+	"""Everything the policy is stored in: compared before and after an Apply that must change nothing.
+
+	`versions` counts Version rows, which Frappe keeps only under `recording_history()` (none while it is
+	testing): outside it that count never moves, so it means something only there. `deleted` counts the
+	Deleted Document rows that Frappe's ordinary delete writes, which it does in a test too."""
 	return {
 		"policy": load_policy(),
 		"rows": {doctype: frappe.db.count(doctype) for doctype in TABLES},
@@ -1788,7 +1792,8 @@ class TestApplyPolicy(WizardTestCase):
 		draft["item_sets"] = [{"name": "Perfume", "item_groups": [], "items": [perfume()]}]
 		zone_named(draft, "GCC")["customer_line"] = "Gulf delivery at the carrier's price."
 		draft["zones"].append(zone_of("Levant", ["JO"]))
-		with writes() as done:
+		known = set(frappe.get_all("Version", {"ref_doctype": "Shipping Zone"}, pluck="name"))
+		with writes() as done, recording_history():
 			apply(draft)
 		self.assertEqual(
 			done,
@@ -1802,6 +1807,15 @@ class TestApplyPolicy(WizardTestCase):
 				("delete", "Shipping Item Set", "Watches"),
 			],
 		)
+		# The history: a zone that changed has a new Version row (so the next line could fail), a zone that
+		# was left alone has none.
+		history = [
+			row["docname"]
+			for row in frappe.get_all("Version", {"ref_doctype": "Shipping Zone"}, ["name", "docname"])
+			if row["name"] not in known
+		]
+		self.assertIn("GCC", history)
+		self.assertNotIn("Not shipped", history)
 		self.assertFalse(frappe.db.exists("Shipping Zone", "Bahrain"))
 		self.assertFalse(frappe.db.exists("Shipping Item Set", "Watches"))
 		saved = load_policy()
@@ -1811,9 +1825,6 @@ class TestApplyPolicy(WizardTestCase):
 		)
 		self.assertEqual(
 			[zone["name"] for zone in saved["zones"]], ["GCC", "Levant", "Not shipped", "Rest of world"]
-		)
-		self.assertEqual(
-			frappe.db.count("Version", {"ref_doctype": "Shipping Zone", "docname": "Not shipped"}), 0
 		)
 		# A dropped zone or item set that a rule of the draft still uses is a problem, not a broken link.
 		still_used = copy.deepcopy(saved)
