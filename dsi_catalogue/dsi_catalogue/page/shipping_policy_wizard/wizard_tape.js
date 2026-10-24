@@ -762,10 +762,10 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	// A plain sentence for how the first offer came about, when the trace alone does not say it.
 	statement(result, offer) {
 		if (result.reason === "fallback_offer") {
-			return __("The carrier could not quote, so the fallback price applies.");
+			return __("The carrier could not quote, so the fallback applies.");
 		}
 		if (result.reason === "formula_error") {
-			return __("A rule's formula could not be worked out for this order, so the fallback price applies.");
+			return __("A rule's formula could not be worked out for this order, so the fallback applies.");
 		}
 		if (offer.source === "carrier") {
 			return result.zone === null || result.zone === undefined

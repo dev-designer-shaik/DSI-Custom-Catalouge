@@ -61,6 +61,7 @@ dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_core.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_country_picker.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_helpers.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_itemset_editor.js
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_policy_words.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_card.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_words.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_tape.js

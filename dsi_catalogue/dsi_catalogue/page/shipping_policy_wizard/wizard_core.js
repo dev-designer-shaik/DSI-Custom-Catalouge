@@ -124,6 +124,33 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 		this.notice = "restored";
 	}
 
+	// The saved policy, read again: the draft becomes it (Apply wrote the draft, or the person dropped their draft
+	// for what someone else saved). Nothing is left in storage, and the tape prices the order again.
+	reload_saved() {
+		return this.call("wizard_state", {}, { quiet: true }).then((state) => {
+			this.take_state(state);
+			this.notice = null;
+			this.save_draft(); // the draft is the saved policy: the stored draft goes
+			this.render();
+			this.tape.draft_changed();
+		});
+	}
+
+	// The saved policy, read again, becomes what the draft is compared with and applied over, and the draft
+	// stays as it is: after someone else changed the policy, the Review step then shows what the draft changes in
+	// the policy as it is saved now, and Apply writes it over that. The draft is stored again with the new version.
+	rebase_on_saved() {
+		return this.call("wizard_state", {}, { quiet: true }).then((state) => {
+			const draft = this.store.draft;
+			this.take_state(state);
+			this.store.draft = draft;
+			this.store.dirty = !sp.same(draft, this.store.original);
+			this.save_draft();
+			this.render();
+			this.tape.draft_changed();
+		});
+	}
+
 	// The page came back into view: when the draft is clean, take the saved policy again, so that a change
 	// made on the form meanwhile is what the wizard shows.
 	on_show() {
@@ -202,7 +229,8 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 		this.render_step();
 	}
 
-	// What the banner says, a line each: {text, action: {label, testid, run}}. Task 9 adds its line here.
+	// What the banner says, a line each: {text, action: {label, testid, run}}. While the saved policy is on and
+	// the draft differs from it, a line says that what is changed goes live on Apply.
 	banner_lines() {
 		const lines = [];
 		if (this.notice === "restored") {
@@ -220,11 +248,19 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 				action: { label: __("Dismiss"), testid: "draft-dismiss", run: () => this.dismiss_notice() },
 			});
 		}
+		if (this.store.original?.active && this.store.dirty) {
+			lines.push({ text: __("This policy is on: edits go live when you apply them.") });
+		}
 		return lines;
 	}
 
+	// The banner is a live region: it is drawn again only when what it says changes, so that a line is not read
+	// out again after every change of the draft.
 	render_banner() {
 		const lines = this.banner_lines();
+		const said = JSON.stringify(lines.map((line) => [line.text, line.action?.testid]));
+		if (said === this.banner_said) return;
+		this.banner_said = said;
 		this.banner.replaceChildren(
 			...lines.map((line) =>
 				el(

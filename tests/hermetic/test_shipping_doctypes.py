@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from dsi_catalogue.shipping_engine import LABELS, resolve, validate_policy
-from dsi_catalogue.shipping_policy_data import policy_from_rows, rows_from_policy
+from dsi_catalogue.shipping_engine import LABELS, _fallback_choice, resolve, validate_policy
+from dsi_catalogue.shipping_policy_data import diff_policy, policy_from_rows, rows_from_policy
 from dsi_catalogue.shipping_rate_card import validate_card
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -516,6 +516,7 @@ ALLOWED_HTML_WRITERS = {
 		"frappe.confirm(__(\"Remove this zone's countries, so that it takes every country that is in no other "
 		'zone?")'
 	): "a fixed question",
+	'frappe.confirm(__("Discard your draft and load the policy as it is saved now?")': "a fixed question",
 }
 # The pattern of an include directive in Frappe's render_include (frappe/model/utils/__init__.py), which the
 # desk runs on a page's script when it loads the page (Page.load_assets).
@@ -795,6 +796,367 @@ def test_a_rule_reads_as_one_sentence_for_any_step(tmp_path):
 		"rounded": True,
 		"limits": "order value from $100.00 up to $500.00 and weight up to 2.5 kg",
 	}
+
+
+@needs_node
+def test_the_fallback_step_offers_the_engines_choices_in_its_words(tmp_path):
+	"""A zone's fallback, the policy default and "Anything not covered" offer the engine's choices (LABELS), in
+	the order of the doctypes' Select options: the policy default has all of a zone's but the first."""
+	got = run_page_helpers(
+		tmp_path, "return {zone: sp.fallback_choices, not_covered: sp.not_covered_choices};"
+	)
+	zone = [[choice["label"], choice["method"]] for choice in got["zone"]]
+	assert zone == [list(pair) for pair in LABELS["zone_fallback"].items()]
+	assert zone[1:] == [list(pair) for pair in LABELS["default_fallback"].items()]
+	not_covered = [[choice["label"], choice["method"]] for choice in got["not_covered"]]
+	assert not_covered == [list(pair) for pair in LABELS["not_covered"].items()]
+
+
+@needs_node
+def test_a_fallback_is_said_as_the_engine_works_it_out(tmp_path):
+	"""sp.fallback_outcome mirrors the engine's _fallback_choice for every way a draft can hold a fallback, a
+	missing or broken one included, and sp.fallback_sentence says each outcome in one sentence."""
+	cases = [  # [the policy default, the zone's fallback]
+		[{"method": "no_delivery", "amount": 0}, {"method": "policy_default", "amount": 0}],
+		[{"method": "fixed", "amount": 20}, {"method": "policy_default", "amount": 0}],
+		[{"method": "free", "amount": 0}, {"method": "policy_default", "amount": 0}],
+		[{"method": "rate_card", "amount": 0}, None],
+		[{"method": "fixed", "amount": None}, {}],
+		[{"method": "bogus"}, {"method": "policy_default"}],
+		[None, {"method": "policy_default"}],
+		[{"method": "no_delivery", "amount": 0}, {"method": "fixed", "amount": 35}],
+		[{"method": "no_delivery", "amount": 0}, {"method": "fixed", "amount": 0}],
+		[{"method": "no_delivery", "amount": 0}, {"method": "fixed", "amount": None}],
+		[{"method": "no_delivery", "amount": 0}, {"method": "fixed", "amount": -1}],
+		[{"method": "no_delivery", "amount": 0}, {"method": "free", "amount": 0}],
+		[{"method": "no_delivery", "amount": 0}, {"method": "rate_card", "amount": 0}],
+		[{"method": "fixed", "amount": 20}, {"method": "no_delivery", "amount": 0}],
+		[{"method": "free", "amount": 0}, {"method": "bogus", "amount": 5}],
+	]
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		return {json.dumps(cases)}.map(([fallback_default, own]) => {{
+			const policy = {{ default_fallback: fallback_default }};
+			const zone = {{ name: "Gulf", fallback: own }};
+			return {{
+				zone: sp.fallback_outcome(policy, zone),
+				default: sp.fallback_outcome(policy, null),
+				said: sp.fallback_sentence(policy, zone),
+				default_said: sp.fallback_sentence(policy, null),
+			}};
+		}});
+		""",
+	)
+	engine = {"fixed": "fixed", "free": "free", "rate_card": "rate_card", "none": "none", "missing": "none"}
+	for (fallback_default, own), answer in zip(cases, got, strict=True):
+		policy = {"default_fallback": fallback_default}
+		for outcome, zone in ((answer["zone"], {"fallback": own}), (answer["default"], {"fallback": {}})):
+			kind, amount = _fallback_choice(policy, zone)
+			assert (engine[outcome["kind"]], outcome["amount"] or 0.0) == (kind, amount), (
+				policy,
+				zone,
+				outcome,
+			)
+	sentences = [answer["said"] for answer in got]
+	assert sentences[0] == "If the carrier cannot quote, the policy default applies: delivery is not offered."
+	assert (
+		sentences[1]
+		== "If the carrier cannot quote, the policy default applies: customers pay a fixed $20.00."
+	)
+	assert sentences[2] == "If the carrier cannot quote, the policy default applies: delivery is free."
+	assert sentences[3] == (
+		"If the carrier cannot quote, the policy default applies: customers pay what the rate card charges."
+	)
+	assert sentences[4] == (
+		"If the carrier cannot quote, the policy default applies: customers pay a fixed amount that is not typed yet."
+	)
+	assert sentences[7] == "If the carrier cannot quote, customers here pay a fixed $35.00."
+	assert (
+		sentences[9]
+		== "If the carrier cannot quote, customers here pay a fixed amount that is not typed yet."
+	)
+	assert sentences[11] == "If the carrier cannot quote, delivery here is free."
+	assert sentences[12] == "If the carrier cannot quote, customers here pay what the rate card charges."
+	assert sentences[13] == "If the carrier cannot quote, delivery is not offered here."
+	assert got[1]["default_said"] == (
+		"When a zone uses the policy default and the carrier cannot quote, customers pay a fixed $20.00."
+	)
+	assert got[0]["default_said"] == (
+		"When a zone uses the policy default and the carrier cannot quote, delivery is not offered."
+	)
+
+
+@needs_node
+def test_what_will_change_is_said_in_short_plain_lines(tmp_path):
+	"""sp.change_lines says diff_policy's answer (what preview_changes and apply_policy return) in the Review
+	step's words, a line for each list and setting that changed, and nothing when nothing did."""
+	empty = {
+		"active": False,
+		"price_source": "carrier",
+		"rate_card": None,
+		"not_covered": "pass_through",
+		"default_fallback": {"method": "no_delivery", "amount": 0.0},
+		"zones": [],
+		"item_sets": [],
+		"rules": [],
+	}
+	saved = example()
+	for number, rule in enumerate(saved["rules"], start=1):
+		rule["name"] = f"row-{number}"
+	draft = json.loads(json.dumps(saved))
+	draft["zones"] = [zone for zone in draft["zones"] if zone["name"] != "Not shipped"]
+	draft["zones"][1]["customer_line"] = "Gulf delivery, changed."
+	draft["item_sets"][0]["items"] = ["10000137"]
+	draft["rules"][2]["label"] = "Gulf at the carrier price, edited"
+	draft["rules"] = [
+		draft["rules"][1],
+		draft["rules"][0],
+		draft["rules"][2],
+		{**draft["rules"][0], "name": None},
+	]
+	draft["rules"][3]["label"] = ""
+	draft.update(
+		price_source="rate_card",
+		rate_card=TINY_CARD,
+		not_covered="no_delivery",
+		default_fallback={"method": "fixed", "amount": 20.0},
+	)
+	cases = [
+		[diff_policy(empty, {**saved, "active": True}), empty, {**saved, "active": True}],
+		[diff_policy(saved, draft), saved, draft],
+		[diff_policy(saved, saved), saved, saved],
+		[
+			diff_policy(
+				{**saved, "rate_card": TINY_CARD}, {**saved, "rate_card": {**TINY_CARD, "version": 2}}
+			),
+			saved,
+			saved,
+		],
+	]
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		return {json.dumps(cases)}.map(([changes, before, after]) =>
+			sp.change_lines(changes, before, after).map((line) => sp.change_text(line)));
+		""",
+	)
+	assert got[0] == [
+		"Zones added: Bahrain, GCC, Not shipped and Rest of world",
+		"Item sets added: Watches",
+		"Rules added: Rule 1 (Free in Bahrain), Rule 2 (Free watches in the Gulf), Rule 3 (Gulf at the carrier "
+		"price) and Rule 4 (International with a minimum)",
+		"Active: off → on",
+	]
+	assert got[1] == [
+		"Zones removed: Not shipped",
+		"Zones changed: GCC",
+		"Item sets changed: Watches",
+		"Rules added: Rule 4 (in Bahrain)",
+		"Rules removed: Rule 4 (International with a minimum)",
+		"Rules changed: Rule 3 (Gulf at the carrier price, edited)",
+		"The rules were reordered.",
+		"Rate card profiles added: Everything",
+		"The policy default: don't offer delivery → charge a fixed $20.00",
+		"Anything not covered: pass the carrier price through → don't offer delivery",
+		"Price source: carrier → rate card",
+	]
+	assert got[2] == [], "nothing changed: no line"
+	assert got[3] == ["Rate card: changed"], "a change the profile lines cannot show"
+
+
+@needs_node
+def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
+	"""sp.policy_summary says the whole draft: where prices start, then each zone (who is in it, what customers
+	read, its rules in their order in the Rules step's words, what happens when the carrier cannot quote), then
+	what happens to an order no rule fits."""
+	policy = example()
+	policy["zones"].append(
+		{
+			"name": "Levant",
+			"enabled": False,
+			"countries": ["JO"],
+			"not_shipped": False,
+			"everywhere_else": False,
+			"customer_line": "Levant delivery.",
+			"not_offered_message": "",
+			"fallback": {"method": "free", "amount": 0.0},
+		}
+	)
+	policy["rules"][3]["enabled"] = False
+	names = {
+		"BH": "Bahrain",
+		"AE": "United Arab Emirates",
+		"SA": "Saudi Arabia",
+		"KW": "Kuwait",
+		"OM": "Oman",
+	}
+	names |= {"QA": "Qatar", "RU": "Russian Federation", "BY": "Belarus", "JO": "Jordan"}
+	by_card = {**example(), "price_source": "rate_card", "zones": example()["zones"][:1]}
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		const names = {json.dumps(names)};
+		const name = (code) => names[code] || code;
+		return [sp.policy_summary({json.dumps(policy)}, name), sp.policy_summary({json.dumps(by_card)}, name),
+			sp.policy_summary({{ zones: [], rules: [] }}, name)];
+		""",
+	)
+	summary, card, empty = got
+	assert summary["source"] == "Prices start from the carrier's quote for each order."
+	bahrain, gcc, rest, closed, levant = summary["zones"]
+	assert bahrain == {
+		"name": "Bahrain",
+		"states": [],
+		"where": "Bahrain.",
+		"read": ["Customers read: “Free delivery in Bahrain.”"],
+		"off": "",
+		"never": "",
+		"rules": ["Rule 1 (Free in Bahrain): In Bahrain for every item charge nothing (free)."],
+		"no_rules": "",
+		"fallback": "If the carrier cannot quote, the policy default applies: delivery is not offered.",
+	}
+	assert gcc["where"] == "United Arab Emirates, Saudi Arabia, Kuwait, Oman and Qatar."
+	assert gcc["rules"] == [
+		"Rule 2 (Free watches in the Gulf): In GCC for Watches charge nothing (free).",
+		"Rule 3 (Gulf at the carrier price): In GCC for every item charge the carrier's price, rounded up.",
+	]
+	assert gcc["fallback"] == "If the carrier cannot quote, customers here pay a fixed $35.00."
+	assert rest["states"] == [{"kind": "everywhere_else", "text": "Everywhere else"}]
+	assert rest["where"] == "Every other country."
+	assert rest["rules"] == [
+		"Rule 4 (International with a minimum) is off: In Rest of world for every item charge "
+		"max(carrier_price * 1.1, 45), rounded up."
+	]
+	assert closed["states"] == [{"kind": "not_shipped", "text": "Not shipped"}]
+	assert closed["read"] == [
+		"Customers read: “We do not deliver to these countries.”",
+		"At checkout they read: “We don't deliver to this country.”",
+	]
+	assert (closed["never"], closed["rules"], closed["fallback"]) == (
+		"Delivery is never offered here.",
+		[],
+		"",
+	)
+	assert levant["states"] == [{"kind": "off", "text": "Off"}]
+	assert levant["off"] == "This zone is off: its countries are priced as if it were not there."
+	assert levant["read"] == [], "a zone that is off is shown to nobody"
+	assert (levant["rules"], levant["no_rules"], levant["fallback"]) == ([], "", "")
+	assert summary["closing"] == ["When no rule fits an order, customers pay the carrier's price."]
+	assert card["source"] == "Prices come from the rate card, so the rules and the fallbacks are not used."
+	assert (card["zones"][0]["rules"], card["zones"][0]["fallback"], card["closing"]) == ([], "", [])
+	assert empty["closing"] == [
+		"There is no zone yet.",
+		"When no zone or no rule fits an order, customers pay the carrier's price.",
+	]
+
+
+@needs_node
+def test_a_problem_links_to_the_step_that_owns_it(tmp_path):
+	"""The Review step's "Fix it" goes to the step that owns a problem: sp.problem_step reads the way the engine's
+	and the wizard's sentences start. Here are the engine's real sentences (validate_policy), and the wizard
+	module's own, each pinned to its source."""
+
+	def problems(**policy):
+		return validate_policy({"zones": [], "item_sets": [], "rules": [], **policy})
+
+	zone = {"name": "A", "enabled": True, "countries": ["AE"], "fallback": {"method": "policy_default"}}
+	rule = {"enabled": True, "zone": "A", "method": "carrier_price"}
+	engine = {
+		"fallback": [
+			*problems(not_covered="bogus"),
+			*problems(default_fallback={"method": "bogus"}),
+			*problems(default_fallback={"method": "rate_card"}),
+			*problems(default_fallback={"method": "fixed", "amount": "x"}),
+			*problems(default_fallback={"method": "fixed", "amount": -5}),
+			*problems(zones=[{**zone, "fallback": {"method": "bogus"}}]),
+			*problems(zones=[{**zone, "fallback": {"method": "rate_card"}}]),
+			*problems(zones=[{**zone, "fallback": {"method": "fixed", "amount": "x"}}]),
+			*problems(zones=[{**zone, "fallback": {"method": "fixed", "amount": -1}}]),
+			*problems(
+				zones=[zone, {**zone, "name": "", "countries": [], "fallback": {"method": "rate_card"}}]
+			)[1:],
+		],
+		"rates": [
+			*problems(price_source="bogus"),
+			*problems(price_source="rate_card"),
+			*problems(rate_card={"profiles": "x"}),
+		],
+		"zones": [
+			*problems(zones=[{**zone, "name": ""}]),
+			*problems(zones=[zone, {**zone, "countries": ["SA"]}]),
+			*problems(zones=[{**zone, "countries": ["XYZ"]}]),
+			*problems(zones=[{**zone, "everywhere_else": True}]),
+			*problems(zones=[zone, {**zone, "name": "B"}]),
+			*problems(
+				zones=[
+					{**zone, "countries": [], "everywhere_else": True},
+					{**zone, "name": "B", "countries": [], "everywhere_else": True},
+				]
+			),
+		],
+		"rules": [
+			*problems(item_sets=[{"name": "", "items": ["X"]}]),
+			*problems(item_sets=[{"name": "S", "items": []}]),
+			*problems(item_sets=[{"name": "S", "items": ["X"]}, {"name": "S", "items": ["Y"]}]),
+			*problems(zones=[zone], rules=[{**rule, "zone": ""}]),
+			*problems(zones=[zone], rules=[{**rule, "zone": "Z"}]),
+			*problems(zones=[zone], rules=[{**rule, "item_set": "Missing"}]),
+			*problems(zones=[zone], rules=[{**rule, "method": "bogus"}]),
+			*problems(zones=[zone], rules=[{**rule, "method": "formula", "formula": ""}]),
+			*problems(zones=[zone], rules=[{**rule, "method": "formula", "formula": "carrier_price +"}]),
+			*problems(zones=[zone], rules=[{**rule, "min_weight_kg": 5, "max_weight_kg": 2}]),
+			*problems(zones=[zone], rules=[{**rule, "min_order_value": -1}]),
+		],
+	}
+	assert all(engine.values()), "each kind of problem was made"
+	source = (ROOT / "dsi_catalogue" / "shipping_policy_wizard.py").read_text(encoding="utf-8")
+	for template in (
+		'f"Country code {code} is not a country in the ERP."',
+		'f"Country code {code} in zone {zone_name} ({profile_name}) is not a country in the ERP."',
+		'_UNSAVABLE_CARD = "The rate card cannot be saved as it is',
+		"""f'{kind}s "{earlier}" and "{name}" differ only in capital letters, which the ERP reads as one '""",
+		"""f'{kind} "{held}" is the saved {kind.lower()} "{name}" with other capital letters. The ERP '""",
+		'f"{subject} has an amount below zero for when the carrier can\'t quote. Make it 0 or more."',
+		'fallbacks = [("The policy default", policy["default_fallback"])]',
+		'SHAPE_PROBLEM = "The draft is not in the expected shape."',
+	):
+		assert template in source, template
+	wizard = {
+		"zones": [
+			"Country code ZZ is not a country in the ERP.",
+			'Zones "Gulf" and "gulf" differ only in capital letters, which the ERP reads as one name. Zone names '
+			"have to be different.",
+			'Zone "gulf" is the saved zone "Gulf" with other capital letters. The ERP reads them as one name, so keep '
+			'"Gulf" or choose another name.',
+		],
+		"rates": [
+			"Country code ZZ in zone Gulf (Everything) is not a country in the ERP.",
+			"The rate card cannot be saved as it is (it is nested too deeply or holds values that are not plain data).",
+		],
+		"rules": [
+			'Item sets "W" and "w" differ only in capital letters, which the ERP reads as one name. Item set names '
+			"have to be different.",
+			'Item set "w" is the saved item set "W" with other capital letters. The ERP reads them as one name, so '
+			'keep "W" or choose another name.',
+		],
+		"fallback": [
+			"The policy default has an amount below zero for when the carrier can't quote. Make it 0 or more.",
+			'Zone "A" has an amount below zero for when the carrier can\'t quote. Make it 0 or more.',
+		],
+		None: ["The draft is not in the expected shape."],
+	}
+	sentences = [
+		[step, sentence]
+		for found in (engine, wizard)
+		for step, listed in found.items()
+		for sentence in listed
+	]
+	got = run_page_helpers(
+		tmp_path, f"return {json.dumps(sentences)}.map(([, sentence]) => sp.problem_step(sentence));"
+	)
+	for (step, sentence), answer in zip(sentences, got, strict=True):
+		assert answer == step, f"{sentence} -> {answer}, not {step}"
 
 
 @needs_node

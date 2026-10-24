@@ -15,11 +15,13 @@
 //	wizard_chips.js           what the Zones and Rules steps share: names as the ERP compares them, removable
 //	                          tokens, a polite announcer, reading a desk list
 //	wizard_rule_words.js      the words of a rule (sp.rule_words, sp.rule_text...): the Rules and Review steps'
+//	wizard_policy_words.js    the words of the rest of the policy (sp.fallback_sentence, sp.change_lines,
+//	                          sp.policy_summary, sp.problem_step...): the Fallback and Review steps'
 //	wizard_itemset_editor.js  dsi_catalogue.ItemSetEditor: an item set's name, groups and items (Rules step)
 //	wizard_rule_card.js       one rule of the Rules step as a card: its sentence of chips, price and editors
 //	step_<id>.js              the body of each tab, one file each, step_<id> = {render, refresh, priced}:
-//	                          Tasks 8, 9 and 16 replace these stubs, each task its own files (Zones and Rules
-//	                          are built: step_zones.js, step_rules.js)
+//	                          Tasks 8, 9 and 16 replace these stubs, each task its own files (built: Zones,
+//	                          Rules, the Fallback step "If the carrier can't quote" and Review, with Apply)
 //	this file                 the constants, the parts in order, STEPS (the six tabs) and the page's events:
 //	                          on_page_load builds the page and starts the wizard; on_page_show reloads the
 //	                          saved policy while the draft is clean
@@ -34,7 +36,11 @@
 // draft, step}, written 300 ms after the last change and removed once the draft equals the saved policy
 // again. On load a stored draft is restored only while its version is still the server's; otherwise it is
 // dropped. The draft banner says which of the two happened. A draft stored by someone else signed in on
-// this browser is not there for this person: not restored, no notice, not removed (wizard_core.js).
+// this browser is not there for this person: not restored, no notice, not removed (wizard_core.js). While the
+// saved policy is on and the draft differs from it, the banner also says that edits go live when applied.
+// Two ways of reading the saved policy again, for Apply (step_review.js): wizard.reload_saved() makes the draft
+// the saved policy (after Apply, or to drop a draft); wizard.rebase_on_saved() keeps the draft and takes the
+// saved policy and its version as what it is applied over (after someone else changed the policy).
 //
 // One render function per region:
 //	wizard.render_banner()  the draft banner (draft-banner); its lines come from wizard.banner_lines()
@@ -90,6 +96,7 @@ frappe.provide("dsi_catalogue");
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_core.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_chips.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_words.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_policy_words.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_itemset_editor.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_card.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_zones.js" %}

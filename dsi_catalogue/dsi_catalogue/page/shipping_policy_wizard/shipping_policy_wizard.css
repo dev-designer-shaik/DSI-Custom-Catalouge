@@ -68,7 +68,9 @@
 .sp-wizard [role="tabpanel"]:focus-visible,
 .sp-wizard input[type="checkbox"]:focus-visible,
 .sp-wizard input[type="radio"]:focus-visible,
-.sp-wizard .sp-title-input:focus-visible {
+.sp-wizard .sp-title-input:focus-visible,
+.sp-wizard .sp-review-title:focus-visible,
+.sp-wizard .sp-apply-done:focus-visible {
 	outline: 2px solid var(--text-color);
 	outline-offset: 2px;
 	box-shadow: none;
@@ -1273,6 +1275,380 @@
 
 	.sp-wizard .sp-rule-price {
 		text-align: left;
+	}
+}
+
+/* ---------------------------------------------------------------- the Fallback and Review steps */
+/* A fallback card has a rule card's anatomy: the zone on the left and, on the right, what the fallback comes
+ * to, as a rule card shows its price (brass when customers pay it, sage when it is free, brick when delivery is
+ * not offered, quiet words otherwise). Then the choice, its chosen line marked like a filled-in chip, and one
+ * sentence of what it means for customers. */
+.sp-wizard .sp-fallback-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 4px 16px;
+}
+
+.sp-wizard .sp-fallback-title {
+	margin: 0;
+	color: var(--heading-color);
+	font-size: var(--text-lg);
+	font-weight: 600;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.sp-wizard .sp-fallback.is-off .sp-fallback-title {
+	color: var(--text-muted);
+}
+
+.sp-wizard .sp-fallback-figure {
+	margin-left: auto;
+	color: var(--text-muted);
+	font-size: var(--text-sm);
+	line-height: 28px;
+	white-space: nowrap;
+}
+
+.sp-wizard .sp-fallback-figure.is-paid,
+.sp-wizard .sp-fallback-figure.is-free {
+	font-size: var(--text-2xl, 20px);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums lining-nums;
+}
+
+.sp-wizard .sp-fallback-figure.is-paid {
+	color: var(--sp-brass);
+}
+
+.sp-wizard .sp-fallback-figure.is-free {
+	color: var(--sp-sage);
+}
+
+.sp-wizard .sp-fallback-figure.is-not-offered {
+	color: var(--sp-brick);
+	font-weight: 600;
+}
+
+.sp-wizard .sp-fallback-choices .sp-option {
+	flex: 0 1 auto;
+	padding: 3px 10px 2px 8px;
+	border-bottom: 2px solid transparent;
+	border-radius: var(--border-radius-tiny, 4px) var(--border-radius-tiny, 4px) 0 0;
+}
+
+/* the chosen line reads as a blank filled in, as a rule's chips do */
+.sp-wizard .sp-fallback-choices .sp-option:has(input:checked) {
+	border-bottom-color: var(--sp-rule-strong);
+	background: var(--control-bg);
+	color: var(--heading-color);
+}
+
+.sp-wizard .sp-amount-box {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.sp-wizard .sp-amount-sign {
+	color: var(--text-muted);
+}
+
+.sp-wizard .sp-amount {
+	width: 7.5em;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.sp-wizard .sp-fallback .sp-problem:empty {
+	display: none;
+}
+
+.sp-wizard .sp-fallback .sp-problem {
+	padding-left: 10px;
+	border-left: 2px solid var(--sp-rule-strong);
+	font-size: var(--text-sm);
+}
+
+.sp-wizard .sp-fallback-sentence {
+	max-width: 72ch;
+	color: var(--text-color);
+	font-size: var(--text-sm);
+	line-height: 1.45;
+}
+
+/* the policy default and "Anything not covered" are for the whole policy: set apart from the zones */
+.sp-wizard .sp-fallback-policy {
+	margin-top: 28px;
+}
+
+/* The Review step reads as one statement, top down, not as cards: the problems, what will change, the policy
+ * in plain words; then the receipt's double rule, and under it the decision to go live, as the tape's total
+ * stands under its own. */
+.sp-wizard .sp-review-part {
+	max-width: 80ch;
+	margin-bottom: 28px;
+}
+
+.sp-wizard .sp-review-title {
+	margin: 0 0 10px;
+	color: var(--heading-color);
+	font-size: var(--text-lg);
+	font-weight: 600;
+	line-height: 1.4;
+}
+
+.sp-wizard .sp-review-diff,
+.sp-wizard .sp-review-problems {
+	transition: opacity 120ms ease-out;
+}
+
+/* waiting for the server's word on the draft as it is, as the tape's receipt waits for its price */
+.sp-wizard .sp-review-diff.is-stale,
+.sp-wizard .sp-review-problems.is-stale {
+	opacity: 0.55;
+}
+
+.sp-wizard .sp-review-problem-list {
+	display: grid;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.sp-wizard .sp-review-problem {
+	padding-left: 10px;
+	border-left: 2px solid var(--sp-brick);
+	color: var(--sp-brick);
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+.sp-wizard .sp-fix {
+	margin-left: 10px;
+	font-size: var(--text-sm);
+	white-space: nowrap;
+}
+
+/* what will change: a ledger, its labels in one quiet column */
+.sp-wizard .sp-changes {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 4px 16px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	line-height: 1.5;
+}
+
+.sp-wizard .sp-change {
+	display: grid;
+	grid-column: 1 / -1;
+	grid-template-columns: 13em minmax(0, 1fr);
+	grid-template-columns: subgrid;
+}
+
+.sp-wizard .sp-change-label {
+	color: var(--text-muted);
+}
+
+.sp-wizard .sp-change-text {
+	color: var(--text-color);
+	overflow-wrap: anywhere;
+}
+
+.sp-wizard .sp-change-text:only-child {
+	grid-column: 1 / -1;
+}
+
+.sp-wizard .sp-change-arrow {
+	color: var(--text-muted);
+}
+
+/* the policy in plain words: a short paragraph a zone, its rules in the order they are checked */
+.sp-wizard .sp-review-summary {
+	display: grid;
+	gap: 18px;
+}
+
+.sp-wizard .sp-summary-source,
+.sp-wizard .sp-summary-closing {
+	max-width: 72ch;
+	color: var(--text-muted);
+	line-height: 1.55;
+}
+
+.sp-wizard .sp-summary-zone {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+}
+
+.sp-wizard .sp-summary-name {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	margin: 0;
+	color: var(--heading-color);
+	font-size: var(--text-base);
+	font-weight: 600;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+.sp-wizard .sp-summary-text {
+	max-width: 72ch;
+	line-height: 1.55;
+	overflow-wrap: anywhere;
+}
+
+.sp-wizard .sp-summary-rules {
+	display: grid;
+	gap: 2px;
+	max-width: 72ch;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	line-height: 1.55;
+}
+
+/* a rule that wraps hangs under its own first word, so each starts where the eye looks for it */
+.sp-wizard .sp-summary-rules li {
+	padding-left: 1.25em;
+	text-indent: -1.25em;
+	overflow-wrap: anywhere;
+}
+
+/* going live */
+.sp-wizard .sp-golive {
+	display: grid;
+	gap: 14px;
+	max-width: 80ch;
+	padding-top: 16px;
+	border-top: 3px double var(--sp-rule-strong);
+}
+
+.sp-wizard .sp-switch-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 12px;
+}
+
+.sp-wizard .sp-switch-label {
+	margin: 0;
+	color: var(--heading-color);
+	font-size: var(--text-lg);
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.sp-wizard .sp-switch-state {
+	color: var(--text-color);
+}
+
+/* The switch: the desk's own switch (its track, knob and colours: --switch-bg, --neutral, --invert-neutral),
+ * drawn on the checkbox itself so that it stays a real control to tab to and click; its state is always said
+ * in words beside it. The desk sizes every checkbox with !important, hence the two here. */
+.sp-wizard .sp-switch {
+	appearance: none;
+	position: relative;
+	flex: none;
+	width: 32px !important;
+	height: 18px;
+	margin: 0 !important;
+	border: 0;
+	border-radius: 999px;
+	background: var(--switch-bg, var(--gray-500));
+	cursor: pointer;
+	transition: background-color 120ms ease-out;
+}
+
+.sp-wizard .sp-switch::before {
+	content: "";
+	position: absolute;
+	top: 2px;
+	inset-inline-start: 2px;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: var(--neutral, #fff);
+	transition: inset-inline-start 120ms ease-out;
+}
+
+.sp-wizard .sp-switch:checked {
+	background: var(--invert-neutral, var(--heading-color));
+}
+
+.sp-wizard .sp-switch:checked::before {
+	inset-inline-start: 16px;
+}
+
+.sp-wizard .sp-apply-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+}
+
+.sp-wizard .sp-apply.disabled {
+	cursor: not-allowed;
+}
+
+.sp-wizard .sp-apply-why {
+	color: var(--text-muted);
+	font-size: var(--text-sm);
+}
+
+.sp-wizard .sp-apply-why .sp-link {
+	margin-left: 8px;
+}
+
+.sp-wizard .sp-apply-error:not(:empty),
+.sp-wizard .sp-apply-done:not(:empty) {
+	display: grid;
+	gap: 8px;
+	padding-left: 10px;
+	font-size: var(--text-sm);
+	line-height: 1.5;
+}
+
+.sp-wizard .sp-apply-error:not(:empty) {
+	border-left: 2px solid var(--sp-brick);
+	color: var(--sp-brick);
+	overflow-wrap: anywhere;
+}
+
+.sp-wizard .sp-apply-lines {
+	margin: 0;
+	padding-left: 1.2em;
+}
+
+.sp-wizard .sp-apply-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.sp-wizard .sp-apply-done:not(:empty) {
+	border-left: 2px solid var(--sp-rule-strong);
+}
+
+.sp-wizard .sp-apply-done-title {
+	color: var(--heading-color);
+	font-size: var(--text-base);
+	font-weight: 600;
+}
+
+/* a narrow wizard: the ledger's labels go above what they say */
+@container sp-wizard (max-width: 560px) {
+	.sp-wizard .sp-changes,
+	.sp-wizard .sp-change {
+		grid-template-columns: minmax(0, 1fr);
 	}
 }
 
