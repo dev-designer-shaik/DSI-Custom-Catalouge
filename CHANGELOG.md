@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-10-24 — Shipping Policy (branch `shipping-policy`, not yet promoted)
+- Delivery pricing set in the ERP: doctypes Shipping Zone (+ Country), Shipping
+  Item Set (+ Group, Item) and the single Shipping Policy (+ Rule), and the
+  wizard page `shipping-policy-wizard` (six tabs; Apply writes the whole draft or
+  nothing). System Manager only.
+- Price source Carrier (rules over the carrier's quotes: carrier price, free or a
+  formula, rounded up if asked; fallbacks when the carrier can't quote) or Rate
+  card (the interim Shopify weight-tier card, imported from the Shopify CSV export).
+- Guest, read-only, never cached: `shipping_policy.price_delivery` and
+  `shipping_policy.public_summary`.
+- Ships OFF: while off, `price_delivery` returns the posted quotes unchanged (the
+  promotion proof, `test_policy_off_returns_the_quotes_unchanged`).
+- No new `site_config` keys, roles, Custom DocPerm, Custom Field, Property Setter
+  or scripts; `hooks.py` unchanged.
+- Verified end to end on erp2: hermetic 2235, native 14 / 5 / 50 / 27 / 91,
+  browser 103 of 103 with the real export, the guest and role permission matrix,
+  and `price_delivery` equal to `try_order` on 37 orders.
+- Carries the live host's `6a39d3e` (review approval publishes only what the
+  draft changes) and `702a036` (review workspace renamed): push them before
+  promoting (README, Promotion).
+
 ## 2026-09-12 — erp1-live capture + Phase 1 hygiene
 - Tag `erp1-live-2026-09-12` = repo state + the erp1-live hotfixes adopted.
 - Adopted from erp1's backend container (docker-cp'd, never committed): the
