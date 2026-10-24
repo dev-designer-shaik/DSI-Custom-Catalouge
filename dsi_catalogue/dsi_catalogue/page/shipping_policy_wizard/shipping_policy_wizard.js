@@ -24,10 +24,11 @@
 //	version   wizard_state().version; Apply sends it back, so that a change someone made meanwhile is noticed
 //	step      "zones" | "rates" | "rules" | "fallback" | "review" | "test"
 //	dirty     whether the draft differs from the saved policy; worked out after every change, never set
-// While the draft is dirty it is kept in localStorage under "dsi_catalogue.sp_draft" as {version, draft,
-// step}, written 300 ms after the last change and removed once the draft equals the saved policy again. On
-// load a stored draft is restored only while its version is still the server's; otherwise it is dropped.
-// The draft banner says which of the two happened.
+// While the draft is dirty it is kept in localStorage under "dsi_catalogue.sp_draft" as {user, version,
+// draft, step}, written 300 ms after the last change and removed once the draft equals the saved policy
+// again. On load a stored draft is restored only while its version is still the server's; otherwise it is
+// dropped. The draft banner says which of the two happened. A draft stored by someone else signed in on
+// this browser is not there for this person: not restored, no notice, not removed (wizard_core.js).
 //
 // One render function per region:
 //	wizard.render_banner()  the draft banner (draft-banner); its lines come from wizard.banner_lines()

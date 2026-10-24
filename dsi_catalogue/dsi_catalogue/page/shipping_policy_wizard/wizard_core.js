@@ -2,13 +2,17 @@
 //
 // The wizard: the store and the draft kept in this browser, the regions of the page, the server calls.
 
-// The stored draft, or null. Storage can be switched off or full: the draft then lives in this tab only.
+// The browser keeps one draft, {user, version, draft, step}, and it belongs to the person who made it: for
+// anyone else signed in on this browser it is not there (not restored, no notice, not removed), until their own
+// draft takes its place. Storage can be switched off or full: the draft then lives in this tab only.
+
+// The stored draft of the person signed in, or null.
 function read_stored() {
 	try {
 		const text = window.localStorage.getItem(DRAFT_KEY);
 		if (!text) return null;
 		const stored = JSON.parse(text);
-		if (sp.is_record(stored)) return stored;
+		if (sp.is_record(stored)) return stored.user === frappe.session.user ? stored : null;
 	} catch (error) {
 		// not readable: dropped below
 	}
@@ -16,8 +20,16 @@ function read_stored() {
 	return null;
 }
 
+// Removes the stored draft, unless it is someone else's.
 function forget_stored() {
 	try {
+		let owner = null;
+		try {
+			owner = JSON.parse(window.localStorage.getItem(DRAFT_KEY))?.user || null;
+		} catch (error) {
+			owner = null; // not readable: nobody's
+		}
+		if (owner && owner !== frappe.session.user) return;
 		window.localStorage.removeItem(DRAFT_KEY);
 	} catch (error) {
 		// nothing to do: storage is not available
@@ -313,13 +325,14 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 		clearTimeout(this.save_timer);
 		this.save_timer = null;
 		if (!this.store.draft) return;
+		if (!this.store.dirty) {
+			forget_stored(); // a draft equal to the saved policy is not kept (someone else's stays)
+			return;
+		}
 		try {
-			if (this.store.dirty) {
-				const { version, draft, step } = this.store;
-				window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ version, draft, step }));
-			} else {
-				window.localStorage.removeItem(DRAFT_KEY);
-			}
+			const { version, draft, step } = this.store;
+			const stored = { user: frappe.session.user, version, draft, step };
+			window.localStorage.setItem(DRAFT_KEY, JSON.stringify(stored));
 		} catch (error) {
 			// storage is full or switched off: the draft then lives in this tab only
 		}

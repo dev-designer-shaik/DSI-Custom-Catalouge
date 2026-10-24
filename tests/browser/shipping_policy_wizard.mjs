@@ -233,10 +233,12 @@ async function stored() {
 }
 
 // Puts a draft into the browser's storage from a page of the site that runs no desk script (so no wizard is
-// open there to tidy the storage as it unloads), then opens the wizard.
+// open there to tidy the storage as it unloads), then opens the wizard. The draft is the test user's unless
+// `value` names another user.
 async function openWithStored(value) {
+	const stored = { user: process.env.ERP_USER, ...value };
 	await go(NEUTRAL);
-	await page.evaluate((key, value) => window.localStorage.setItem(key, JSON.stringify(value)), DRAFT_KEY, value);
+	await page.evaluate((key, value) => window.localStorage.setItem(key, JSON.stringify(value)), DRAFT_KEY, stored);
 	await open();
 }
 
@@ -578,6 +580,18 @@ await check("a stored draft of this version is restored with its step, and can b
 	return file;
 });
 
+await check("a draft someone else stored on this browser is not there for this user, and stays", async () => {
+	const theirs = { user: "someone-else@dsi.local", version, draft: { ...original, not_covered: "no_delivery" } };
+	await openWithStored({ ...theirs, step: "rules" });
+	await pause(500);
+	assert(await page.$eval(by("draft-banner"), (banner) => banner.hidden), "no banner about it");
+	assert((await selectedTab()) === "step-tab-zones", "not restored: the steps start at Zones");
+	assert((await store()).dirty === false, "the draft is the saved policy");
+	const kept = JSON.parse(await stored());
+	assert(kept?.user === theirs.user && kept?.draft?.not_covered === "no_delivery", "their draft is left as it was");
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+});
+
 await check("a stored draft of another version is dropped, and the banner says so", async () => {
 	const draft = { ...original, not_covered: "no_delivery" };
 	await openWithStored({ version: "an-older-version", draft, step: "review" });
@@ -602,6 +616,7 @@ await check("a changed draft is stored 300 ms later, and removed once it equals 
 	await pause(450);
 	const kept = JSON.parse(await stored());
 	assert(kept?.version === version && kept?.draft?.not_covered === "no_delivery" && kept?.step === "zones", "stored");
+	assert(kept?.user === process.env.ERP_USER, "with the user it belongs to");
 	await change("pass_through");
 	await pause(550);
 	assert((await stored()) === null, "removed when the draft is the saved policy again");
