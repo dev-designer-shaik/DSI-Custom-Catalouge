@@ -2292,9 +2292,70 @@ class TestApplyPolicy(WizardTestCase):
 		enqueue.assert_called_once_with(
 			"website-revalidate",
 			{"tags": ["shipping-policy"]},
-			dedup_key=f"shipping-policy|{result['version']}",
+			dedup_key=mock.ANY,
 			source=("Shipping Policy", "Shipping Policy"),
 		)
+		# The key names the version and the moment of this Apply (see the next test).
+		self.assertRegex(
+			enqueue.call_args.kwargs["dedup_key"],
+			rf"^shipping-policy\|{result['version']}\|\d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{{6}}$",
+		)
+
+	def test_every_apply_asks_for_a_refresh_of_its_own_even_back_to_an_earlier_policy(self):
+		# dsi_core's outbox queues nothing for a key it has seen. The version names the policy's content, so a
+		# policy that goes back to an earlier content (A, B, A) has A's version again: with the version alone as
+		# the key, the third Apply would queue no refresh (final review M3).
+		seed_policy(load_example())
+		enqueue = mock.Mock()
+		versions = []
+		with fake_outbox(enqueue):
+			for active in (True, False, True):
+				draft = wizard.wizard_state()["policy"]
+				draft["active"] = active
+				versions.append(apply(draft)["version"])
+		self.assertEqual(versions[0], versions[2], "the third Apply puts back the content of the first")
+		self.assertNotEqual(versions[0], versions[1])
+		keys = [call.kwargs["dedup_key"] for call in enqueue.call_args_list]
+		self.assertEqual(len(keys), 3)
+		self.assertEqual(len(set(keys)), 3, f"three Applies, three refreshes: {keys}")
+		for key, version in zip(keys, versions, strict=True):
+			self.assertTrue(key.startswith(f"shipping-policy|{version}|"), key)
+			self.assertLessEqual(len(key), 140, "the outbox keeps 140 characters of a key")
+
+	def test_a_deadlock_or_a_lock_timeout_on_the_way_to_the_outbox_fails_the_apply(self):
+		# A deadlock ends the transaction: the database has rolled back every zone, set and rule the Apply wrote,
+		# so the Apply must not say it was applied (final review M3). A lock wait timeout is taken the same way
+		# (with innodb_rollback_on_timeout it ends the transaction too). Frappe raises both as these two classes;
+		# a driver error that reached the wizard as it was is read the way Frappe reads it (1020 is a snapshot
+		# isolation conflict, which Frappe counts as a deadlock). Any other failure is logged and the Apply stands
+		# (the test above, and ruling P19).
+		seed_policy(load_example())
+		draft = wizard.wizard_state()["policy"]
+		draft["active"] = True
+		failures = {
+			"Frappe's deadlock": frappe.QueryDeadlockError(
+				"(1213, 'Deadlock found when trying to get lock')"
+			),
+			"Frappe's lock wait timeout": frappe.QueryTimeoutError("(1205, 'Lock wait timeout exceeded')"),
+			"the driver's deadlock": frappe.db.OperationalError(
+				1213, "Deadlock found when trying to get lock"
+			),
+			"the driver's snapshot conflict": frappe.db.OperationalError(
+				1020, "Record has changed since last read"
+			),
+			"the driver's lock wait timeout": frappe.db.OperationalError(1205, "Lock wait timeout exceeded"),
+		}
+		for what, failure in failures.items():
+			with (
+				self.subTest(what),
+				fake_outbox(mock.Mock(side_effect=failure)),
+				mock.patch.object(frappe, "log_error") as logged,
+			):
+				# raised as it came, so the request fails (Frappe rolls it back) and no answer says "Applied"
+				with self.assertRaises(type(failure)) as caught:
+					apply(draft)
+				self.assertIs(caught.exception, failure)
+				logged.assert_not_called()
 
 	def test_an_outbox_that_fails_never_fails_the_apply(self):
 		seed_policy(load_example())
@@ -2308,6 +2369,23 @@ class TestApplyPolicy(WizardTestCase):
 		logged.assert_called_once()
 		self.assertEqual(logged.call_args.kwargs["title"], "shipping policy revalidate failed")
 		self.assertIn("outbox table locked", logged.call_args.kwargs["message"])
+		# An error with nothing in it, and a database error that does not end the transaction (a duplicate key
+		# rolls back that one statement), are logged the same way: only a deadlock or a lock wait timeout fails it.
+		for failure in (
+			RuntimeError(),
+			frappe.db.OperationalError(1062, "Duplicate entry for key 'dedup_key'"),
+		):
+			draft["active"] = not draft["active"]
+			with (
+				self.subTest(failure=repr(failure)),
+				fake_outbox(mock.Mock(side_effect=failure)),
+				mock.patch.object(frappe, "log_error") as logged,
+			):
+				result = apply(draft)
+				self.assertEqual(load_policy()["active"], draft["active"], "the apply stands")
+				self.assertEqual(result["version"], wizard.wizard_state()["version"])
+				logged.assert_called_once()
+				self.assertEqual(logged.call_args.kwargs["title"], "shipping policy revalidate failed")
 
 	def test_a_dsi_core_that_fails_as_it_is_imported_never_fails_the_apply(self):
 		# Only a site without dsi_core skips the refresh in silence. Any other error on the way to the outbox, such
