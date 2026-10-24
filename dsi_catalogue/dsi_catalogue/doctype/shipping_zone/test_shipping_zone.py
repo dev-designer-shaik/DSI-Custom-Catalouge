@@ -5,6 +5,8 @@
 The helpers and the clean-site guard are in the Shipping Policy's test module.
 """
 
+import math
+
 import frappe
 from frappe.utils import escape_html
 
@@ -210,3 +212,18 @@ class TestShippingZone(ShippingPolicyTestCase):
 		gulf = zone("Gulf", ["BH"], fallback_method="Charge a fixed amount", fallback_amount=12.3456).insert()
 		self.assertEqual(gulf.fallback_amount, 12.35)
 		self.assertEqual(frappe.db.get_value("Shipping Zone", "Gulf", "fallback_amount"), 12.35)
+
+	def test_a_fallback_amount_that_is_not_a_finite_number_is_refused_not_kept_as_zero(self):
+		# Rounded to its two decimals, NaN or an infinity would become 0 without a word (Frappe's `flt` reads
+		# a number it cannot round as 0), and a fixed amount of 0.00 is free delivery: it is refused first, in
+		# a zone that is on or off, as is a number too big to be held at all.
+		amounts = (math.nan, math.inf, -math.inf, "NaN", "-Infinity", 10**400)
+		for number, amount in enumerate(amounts, start=1):
+			for enabled in (1, 0):
+				with self.subTest(amount=amount, enabled=enabled):
+					fallback = {"fallback_method": "Charge a fixed amount", "fallback_amount": amount}
+					gulf = zone(f"Gulf {number} {enabled}", ["BH"], enabled=enabled, **fallback)
+					with self.assertRaises(frappe.ValidationError) as caught:
+						gulf.insert()
+					self.assertEqual(str(caught.exception), f"{bold('Fixed amount (USD)')} is not a number.")
+		self.assertEqual(frappe.db.count("Shipping Zone"), 0, "nothing was saved")

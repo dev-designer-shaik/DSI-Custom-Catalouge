@@ -2408,6 +2408,22 @@ def test_stored_card_text_holding_a_number_json_has_no_words_for_reads_as_no_car
 	)
 
 
+def test_a_number_frappe_would_round_to_zero_without_a_word_is_not_finite():
+	"""Frappe rounds a Float field with `flt`, which reads NaN, an infinity or an integer too big for a float
+	as 0, whether it comes as a number or as text (commas aside). Those are what `is_not_finite` finds, so
+	that the doctypes refuse them before they round. A finite number, and what Frappe does not read as a
+	number at all, are not."""
+	not_finite = shipping_policy_data.is_not_finite
+	for value in (math.nan, math.inf, -math.inf, "NaN", " nan ", "-Infinity", "1e400", "1,000e400"):
+		assert not_finite(value), value
+	for value in (Decimal("NaN"), Decimal("-Infinity"), 10**400, -(10**400)):
+		assert not_finite(value), value
+	for value in (0, 0.0, -1.5, 1e308, 10**300, Decimal("1.5"), "12.5", "1,234.5", True):
+		assert not not_finite(value), value
+	for value in (None, "", "abc", [], {}, object()):
+		assert not not_finite(value), value
+
+
 def test_a_card_of_numbers_json_can_hold_is_written_as_it_always_was():
 	"""Only NaN and the infinities changed: any other card is written byte for byte as before, odd values kept
 	as text (a set, a Decimal), the smallest and the biggest floats as they are."""

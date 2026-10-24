@@ -37,6 +37,7 @@ Four jobs:
 import copy
 import hashlib
 import json
+import math
 from decimal import Decimal
 
 from dsi_catalogue.shipping_engine import LABELS
@@ -282,6 +283,21 @@ def _float(value):
 		return value
 
 
+def is_not_finite(value) -> bool:
+	"""Is `value` what Frappe reads as a number (a number, or text holding one, commas aside) that is NaN, an
+	infinity or too big for a float? Rounded to the decimals of its field such a number becomes 0 without a
+	word (Frappe's `flt` reads a number it cannot round as 0), so the doctypes refuse it before they round.
+	What Frappe does not read as a number at all (None, other text) is not one of these."""
+	if isinstance(value, str):
+		value = value.replace(",", "")
+	try:
+		return not math.isfinite(float(value))
+	except OverflowError:  # an integer too big for a float
+		return True
+	except (TypeError, ValueError):
+		return False
+
+
 def _to_code(kind, label):
 	"""The engine's code for a Select label. A label that is not one of the doctype's passes through."""
 	label = _text(label)
@@ -332,7 +348,8 @@ def _card_from(value):
 			return None
 		card = read_json(value)
 	except (ValueError, RecursionError, TypeError):
-		# not JSON (NaN included), an integer of over 4300 digits, nesting too deep, or a dict that cannot be copied
+		# not JSON (NaN included), an integer of over 4300 digits, nesting too deep, or a dict that cannot be
+		# copied
 		return None
 	return card if isinstance(card, dict) else None
 

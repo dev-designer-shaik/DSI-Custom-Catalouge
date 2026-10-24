@@ -24,6 +24,7 @@ on a site with a real policy. The hermetic fixture reaches erp2 with tools/erp2_
 import ast
 import inspect
 import json
+import math
 import types
 import unittest
 import warnings
@@ -427,6 +428,42 @@ class TestShippingPolicy(ShippingPolicyTestCase):
 		self.assertEqual(
 			(stored["rules"][4]["min_order_value"], stored["rules"][4]["max_weight_kg"]), (100.0, 2.002)
 		)
+
+	def test_a_number_that_is_not_finite_is_refused_not_kept_as_zero(self):
+		# Rounded to the decimals of its field, NaN or an infinity would become 0 without a word (Frappe's
+		# `flt` reads a number it cannot round as 0): a fixed amount of 0.00 is free delivery, a limit of 0 is
+		# no limit. The policy refuses one before anything is rounded, on or off, and names the field.
+		seed_policy(load_example(), active=True)
+		before = load_policy()
+		fixed = {"default_fallback_method": "Charge a fixed amount"}
+		cases = {
+			"the default fixed amount": (
+				{**fixed, "default_fallback_amount": math.inf},
+				None,
+				'"Fixed amount (USD)" is not a number.',
+			),
+			"the default fixed amount, as text": (
+				{**fixed, "default_fallback_amount": "-Infinity"},
+				None,
+				'"Fixed amount (USD)" is not a number.',
+			),
+			"a rule's weight limit": (
+				{},
+				{"max_weight_kg": math.nan},
+				'Rule 5: "Weight up to (kg)" is not a number.',
+			),
+		}
+		for active in (1, 0):
+			for what, (fields, rule, sentence) in cases.items():
+				with self.subTest(what, active=active):
+					policy = frappe.get_doc(POLICY)
+					policy.update({"active": active, **fields})
+					if rule:
+						policy.append("rules", {"zone": "GCC", "method": "Free", **rule})
+					with self.assertRaises(frappe.ValidationError) as caught:
+						policy.save()
+					self.assertEqual(self.messages_of(caught.exception), [escape_html(sentence)])
+					self.assertEqual(load_policy(), before, "nothing was saved")
 
 	def test_messages_escape_what_people_typed_and_what_the_checker_says(self):
 		seed_policy(load_example(), active=True)
