@@ -1705,7 +1705,7 @@
  * Everything is a line until it is opened. The Test tab is an inspection slip: the sample order, the three checks
  * in their order, and the verdict under the receipt's double rule. Words carry every state. */
 .sp-wizard summary:focus-visible,
-.sp-wizard input[type="file"]:focus-visible,
+.sp-wizard .sp-file:focus-visible + .sp-file-button,
 .sp-wizard .sp-import-read:focus-visible,
 .sp-wizard .sp-import-taken-title:focus-visible {
 	outline: 2px solid var(--text-color);
@@ -1939,10 +1939,27 @@
 	font-weight: 600;
 }
 
-.sp-wizard .sp-file {
-	max-width: 100%;
-	color: var(--text-color);
+/* a file field: the panel's own button and the file it holds (the browser's field is there for the keyboard only) */
+.sp-wizard .sp-file-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 4px 10px;
+	margin-bottom: 6px;
+}
+
+.sp-wizard .sp-file-button {
+	flex: none;
+	margin: 0;
+	font-weight: 400;
+	cursor: pointer;
+}
+
+.sp-wizard .sp-file-note {
+	min-width: 0;
+	color: var(--text-muted);
 	font-size: var(--text-sm);
+	overflow-wrap: anywhere;
 }
 
 .sp-wizard .sp-file-note.is-problem {

@@ -11,14 +11,17 @@
 // already (the line beside the button says how many profiles it replaces). The countries not delivered, less
 // those the ERP does not know, go to the zone "Not delivered": its countries are replaced when it is there, and
 // it is made as a Not shipped zone when it is not. A country that is already in another zone that is on is said,
-// and stays where it is. Then the panel offers to switch the price source to the rate card. Nothing is written
-// to the server. A rates file that cannot be read gives no card, and the draft keeps the one it has.
+// and stays where it is. Then the panel folds to its title line, and under it says what was done and offers to
+// switch the price source to the rate card, for as long as the draft holds that very card (Apply, a reload or a
+// discarded draft puts another in its place, and the lines go). Nothing is written to the server. A rates file
+// that cannot be read gives no card, and the draft keeps the one it has.
 //
 // What the panel shows that is not the draft lives in wizard.ui.rates.import, since the panel is drawn again on
-// every tab switch (and a file input cannot be given its file back, so the file's name and text are kept):
-// `files` (key -> {name, text, length, problem, reading}), `pasted` (key -> text), `open`, `preview` ({answer, key}:
-// the server's answer and the texts it was for), `previewing`, `problem`, `taken` (what Use these rates did) and
-// `panel` (the panel drawn last: an answer that arrives later goes to it).
+// every tab switch (and a file input cannot be given its file back, so the file's name and text are kept, and the
+// panel shows them as the field's state): `files` (key -> {name, text, length, problem, reading}), `pasted` (key ->
+// text), `open`, `preview` ({answer, key}: the server's answer and the texts it was for), `previewing`, `problem`,
+// `taken` (what Use these rates did, and the card it put into the draft) and `panel` (the panel drawn last: an
+// answer that arrives later goes to it).
 
 const RATES_IMPORT_FILES = [
 	{
@@ -97,31 +100,35 @@ class RatesImport {
 			),
 			el("div", { class: "sp-import-actions" }, this.preview_button, this.status),
 			this.problem,
-			this.result,
-			this.taken
+			this.result
 		);
+		// what Use these rates did stays in view under the title line once the panel has folded
 		this.root = el(
 			"section",
 			{ class: "sp-import", "aria-labelledby": `${uid}-title`, "data-testid": "rates-import" },
 			el("h3", { class: "sp-import-head" }, this.toggle),
+			this.taken,
 			this.body
 		);
 		this.show();
 	}
 
-	// One file: its chooser, and a box to paste its text instead.
+	// One file: its chooser, and a box to paste its text instead. The browser's own file field cannot show a file
+	// the panel kept from before a tab switch, so it is hidden from the eye (it stays to tab to, with its name for
+	// assistive technology), and the button beside it and the line after it say which file the panel holds.
 	file_field(spec) {
 		const id = `${this.uid}-${spec.key}`;
 		const input = el("input", {
 			type: "file",
 			id: `${id}-file`,
-			class: "sp-file",
+			class: "sp-file sp-sr-only",
 			accept: ".csv,text/csv,text/plain",
 			"aria-describedby": `${id}-file-note`,
 			"data-testid": spec.file_testid,
 		});
 		input.addEventListener("change", () => this.read_file(spec, input));
-		const file_note = el("p", { class: "sp-hint sp-file-note", id: `${id}-file-note`, "aria-live": "polite" });
+		const choose = el("label", { class: "btn btn-default btn-xs sp-file-button", for: `${id}-file` });
+		const file_note = el("span", { class: "sp-hint sp-file-note", id: `${id}-file-note`, "aria-live": "polite" });
 		const paste = el("textarea", {
 			id: `${id}-paste`,
 			class: "form-control sp-paste",
@@ -138,14 +145,12 @@ class RatesImport {
 			this.inputs_changed();
 		});
 		const paste_note = el("p", { class: "sp-hint", id: `${id}-paste-note` });
-		this.fields[spec.key] = { file_note, paste_note };
+		this.fields[spec.key] = { choose, file_note, paste_note };
 		return el(
 			"fieldset",
 			{ class: "sp-import-file" },
 			el("legend", { class: "sp-import-legend" }, spec.title),
-			el("label", { class: "sp-label", for: `${id}-file` }, __("Choose the file")),
-			input,
-			file_note,
+			el("div", { class: "sp-file-row" }, input, choose, file_note),
 			el("label", { class: "sp-label", for: `${id}-paste` }, __("Or paste its text")),
 			paste,
 			paste_note
@@ -243,10 +248,12 @@ class RatesImport {
 		this.wizard.call("import_rate_card", args, { quiet: true }).then(
 			(answer) => {
 				ui.previewing = false;
-				// the texts changed while the server read them: this answer is for texts that are gone
 				if (key === ui.panel?.inputs_key()) {
 					ui.preview = { answer: sp.is_record(answer) ? answer : {}, key };
 					ui.taken = null;
+				} else {
+					// the texts changed while the server read them: this answer is for texts that are gone
+					ui.problem = __("The files changed while they were read. Preview again.");
 				}
 				ui.panel?.show();
 				ui.panel?.result.querySelector('[data-testid="rates-import-read"]')?.focus();
@@ -305,8 +312,9 @@ class RatesImport {
 		}
 		// no list of countries not delivered, or none of them left to add: the zones stay as they are
 		const made = !existing && kept.length > 0;
+		const card = sp.card_as_kept(answer.card);
 		const changed = this.wizard.change((draft) => {
-			draft.rate_card = sp.card_as_kept(answer.card);
+			draft.rate_card = card;
 			if (existing && codes.length) existing.countries = kept;
 			else if (made) {
 				const zone = sp.new_zone(NOT_DELIVERED_ZONE);
@@ -318,14 +326,18 @@ class RatesImport {
 			}
 		});
 		if (!changed) return false;
+		// what was done is said while the draft holds this very card (see show_taken)
 		this.ui.taken = {
+			card,
 			zone: existing && codes.length ? "updated" : made ? "made" : "",
 			name: existing ? String(existing.name ?? "") : NOT_DELIVERED_ZONE,
 			countries: kept.length,
 			off: Boolean(existing && !existing.enabled),
+			not_shipped: !existing || Boolean(existing.not_shipped),
 			conflicts,
 		};
 		this.ui.preview = null;
+		this.ui.open = false; // the work of the panel is done: it folds to its title line, with what was done under it
 		this.ui.panel?.show();
 		return true;
 	}
@@ -338,6 +350,12 @@ class RatesImport {
 	show() {
 		const ui = this.ui;
 		ui.panel = this;
+		// What Use these rates did is about a card the draft no longer holds (it was applied, discarded or replaced):
+		// it goes, and when no card is left the panel opens again, as it is for a draft without one.
+		if (ui.taken && this.wizard.store.draft.rate_card !== ui.taken.card) {
+			ui.taken = null;
+			if (!sp.is_record(this.wizard.store.draft.rate_card)) ui.open = true;
+		}
 		this.toggle.setAttribute("aria-expanded", String(Boolean(ui.open)));
 		this.body.hidden = !ui.open;
 		for (const spec of RATES_IMPORT_FILES) this.show_field(spec);
@@ -349,13 +367,16 @@ class RatesImport {
 		this.show_taken();
 	}
 
+	// A file field's state: the file the panel holds (or why it holds none), whatever the browser's own field says.
 	show_field(spec) {
-		const { file_note, paste_note } = this.fields[spec.key];
+		const { choose, file_note, paste_note } = this.fields[spec.key];
 		const file = this.ui.files[spec.key];
-		let note = "";
-		if (file?.reading) note = __("Reading {0}…", [file.name]);
+		const name = sp.clip(file?.name);
+		let note = __("No file chosen yet.");
+		if (file?.reading) note = __("Reading {0}…", [name]);
 		else if (file?.problem) note = file.problem;
-		else if (file) note = __("{0}: {1} characters read.", [file.name, file.length.toLocaleString("en-US")]);
+		else if (file) note = __("{0}: {1} characters read.", [name, file.length.toLocaleString("en-US")]);
+		choose.textContent = file ? __("Choose another file") : __("Choose a file");
 		file_note.textContent = note;
 		file_note.classList.toggle("is-problem", Boolean(file?.problem));
 		const pasted = (this.ui.pasted[spec.key] || "").trim() !== "";
@@ -428,7 +449,7 @@ class RatesImport {
 		const codes = list(answer.not_delivered);
 		const missing = list(answer.not_delivered_missing);
 		if (codes.length) {
-			const names = sp.and_list(codes.map((code) => this.view.country_name(code)));
+			const names = sp.country_list(codes.map((code) => this.view.country_name(code)));
 			parts.push(
 				el(
 					"p",
@@ -475,14 +496,18 @@ class RatesImport {
 		this.result.replaceChildren(...parts);
 	}
 
-	// What Use these rates did, and the offer to switch the price source to the rate card.
+	// What Use these rates did, and the offer to switch the price source to the rate card: said while the draft
+	// holds the very card it put there. Apply and a reload read the saved policy into a new draft, a discarded draft
+	// is the saved policy again, and a new import puts another card: then these lines go.
 	show_taken() {
-		const taken = this.ui.taken;
+		const shown = this.ui.taken; // show() has dropped it when the draft holds another card
 		const by_card = this.wizard.price_source() === "rate_card";
-		const said = JSON.stringify(taken ? [taken, by_card] : null);
+		const said = JSON.stringify(
+			shown ? [shown.zone, shown.name, shown.countries, shown.off, shown.not_shipped, shown.conflicts, by_card] : null
+		);
 		if (said === this.taken_said) return;
 		this.taken_said = said;
-		if (!taken) {
+		if (!shown) {
 			this.taken.replaceChildren();
 			return;
 		}
@@ -494,22 +519,34 @@ class RatesImport {
 				__("These rates are in your draft now. Nothing is live until you apply it in the Review step.")
 			),
 		];
-		const countries = taken.countries === 1 ? __("1 country") : __("{0} countries", [taken.countries]);
-		if (taken.zone === "made") {
-			parts.push(el("p", {}, __("The new Not shipped zone {0} lists {1} not delivered to.", [taken.name, countries])));
-		} else if (taken.zone === "updated") {
-			parts.push(el("p", {}, __("The zone {0} now lists {1} not delivered to.", [taken.name, countries])));
-			if (taken.off) parts.push(el("p", {}, __("It is off: turn it on in the Zones step.")));
+		const name = sp.clip(shown.name);
+		const countries = shown.countries === 1 ? __("1 country") : __("{0} countries", [shown.countries]);
+		if (shown.zone === "made") {
+			parts.push(el("p", {}, __("The new Not shipped zone “{0}” lists {1} not delivered to.", [name, countries])));
+		} else if (shown.zone === "updated") {
+			parts.push(el("p", {}, __("The zone “{0}” now lists {1} not delivered to.", [name, countries])));
+			if (!shown.not_shipped) {
+				parts.push(
+					el(
+						"p",
+						{ "data-testid": "rates-import-priced" },
+						__(
+							"It is not marked Not shipped, so customers there are priced as in any other zone: turn on Not shipped in the Zones step."
+						)
+					)
+				);
+			}
+			if (shown.off) parts.push(el("p", {}, __("It is off: turn it on in the Zones step.")));
 		}
-		for (const conflict of taken.conflicts) {
+		for (const conflict of shown.conflicts) {
 			parts.push(
 				el(
 					"p",
 					{ class: "sp-import-conflict", "data-testid": "rates-import-conflict" },
-					__("{0} is already in the zone {1}, so it was not added to {2}.", [
+					__("{0} is already in the zone “{1}”, so it was not added to “{2}”.", [
 						this.view.country_name(conflict.code),
-						conflict.zone,
-						taken.name,
+						sp.clip(conflict.zone),
+						name,
 					])
 				)
 			);
