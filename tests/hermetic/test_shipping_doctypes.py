@@ -14,6 +14,7 @@ dependency order. It is run here against stand-ins for ssh and rsync, so nothing
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -484,13 +485,41 @@ def test_the_data_module_reads_the_new_fields():
 
 # ---------------------------------------------------------------- the wizard page
 PAGE_DIR = ROOT / "dsi_catalogue" / "dsi_catalogue" / "page" / "shipping_policy_wizard"
+PAGE_SCRIPT = PAGE_DIR / "shipping_policy_wizard.js"
 FORM_SCRIPT = DOCTYPE_DIR / "shipping_policy" / "shipping_policy.js"
 # Ways a script could put text on the page as HTML. The wizard builds its elements from text instead.
 HTML_WRITERS = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", ".html(", ".append(`")
+# The pattern of an include directive in Frappe's render_include (frappe/model/utils/__init__.py), which the
+# desk runs on a page's script when it loads the page (Page.load_assets).
+INCLUDE_DIRECTIVE = re.compile(r"""{% include\s['"](.*)['"]\s%}""")
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed here")
 
 
 def page_file(suffix):
 	return (PAGE_DIR / f"shipping_policy_wizard{suffix}").read_text(encoding="utf-8")
+
+
+def page_parts():
+	"""The part files of the page script: every .js file of the page's folder but the entry file."""
+	return sorted(path for path in PAGE_DIR.glob("*.js") if path != PAGE_SCRIPT)
+
+
+def served_page_script():
+	"""The page script as the desk serves it: render_include done the same way, at most five rounds, each
+	directive replaced by the file it names (the path is read from the app's folder)."""
+	content = PAGE_SCRIPT.read_text(encoding="utf-8")
+	for _ in range(5):
+		if "{% include" not in content:
+			break
+		paths = INCLUDE_DIRECTIVE.findall(content)
+		assert paths, "text that starts a directive but is not one: render_include refuses the page"
+		for path in paths:
+			app, app_path = path.split("/", 1)
+			included = (ROOT / app / app_path).resolve()
+			assert app == "dsi_catalogue" and included.parent == PAGE_DIR, f"{path} is not in the page folder"
+			text = included.read_text(encoding="utf-8").replace("\\", "\\\\")
+			content = re.sub(rf"""{{% include\s['"]{path}['"]\s%}}""", text, content)
+	return content
 
 
 def css_selectors(css):
@@ -522,11 +551,42 @@ def test_the_wizard_page_is_a_standard_page_for_system_managers_only():
 	assert "def " not in page_file(".py")
 
 
+def test_the_page_script_is_its_parts_stitched_in_by_the_desk():
+	entry = PAGE_SCRIPT.read_text(encoding="utf-8")
+	directives = [line.strip() for line in entry.splitlines() if "{% include" in line]
+	named = []
+	for line in directives:
+		found = INCLUDE_DIRECTIVE.fullmatch(line)
+		assert found, f"one directive per line, and nothing else on it: {line}"
+		named.append(found.group(1))
+	assert len(named) == len(set(named)), "each part is stitched in once"
+	assert sorted(Path(path).name for path in named) == [path.name for path in page_parts()], (
+		"every .js file of the folder is a part, and every part is stitched in"
+	)
+	served = served_page_script()
+	assert "{% include" not in served
+	for part in page_parts():
+		assert part.read_text(encoding="utf-8") in served, part.name
+	css = page_file(".css")
+	assert "{% include" not in css and "@import" not in css, "the desk reads the style as it is: one file"
+
+
+@needs_node
+def test_the_page_script_as_served_is_valid_javascript(tmp_path):
+	served = tmp_path / "shipping_policy_wizard.served.js"
+	served.write_text(served_page_script(), encoding="utf-8")
+	result = subprocess.run(["node", "--check", str(served)], capture_output=True, text=True, timeout=60)
+	assert result.returncode == 0, result.stderr
+
+
 def test_the_wizard_page_puts_text_on_the_page_only_as_text():
-	script = page_file(".js")
-	assert 'frappe.pages["shipping-policy-wizard"].on_page_load' in script
-	for writer in HTML_WRITERS:
-		assert writer not in script, f"the page script uses {writer}"
+	served = served_page_script()
+	assert 'frappe.pages["shipping-policy-wizard"].on_page_load' in served
+	files = [("the served script", served)]
+	files += [(path.name, path.read_text(encoding="utf-8")) for path in (PAGE_SCRIPT, *page_parts())]
+	for name, text in files:
+		for writer in HTML_WRITERS:
+			assert writer not in text, f"{name} uses {writer}"
 
 
 def test_the_policy_form_opens_the_wizard_from_a_primary_button():
@@ -554,11 +614,7 @@ def test_the_wizard_style_stays_on_the_page_and_has_three_accents():
 
 
 def test_the_wizard_files_are_indented_with_tabs():
-	for path in (
-		PAGE_DIR / "shipping_policy_wizard.js",
-		PAGE_DIR / "shipping_policy_wizard.css",
-		FORM_SCRIPT,
-	):
+	for path in (PAGE_SCRIPT, *page_parts(), PAGE_DIR / "shipping_policy_wizard.css", FORM_SCRIPT):
 		for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
 			# a line inside a CSS comment block starts with " *"
 			assert not line.startswith(" ") or line.startswith(" *"), (
