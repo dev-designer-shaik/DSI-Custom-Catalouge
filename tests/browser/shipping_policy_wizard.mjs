@@ -250,6 +250,11 @@ async function colourOf(testid) {
 	return page.$eval(by(testid), (element) => getComputedStyle(element).color);
 }
 
+// The last thing the receipt prints above its total.
+async function lastLine() {
+	return page.$eval(`${by("tape-lines")} > :last-child`, (line) => line.innerText.replace(/\s+/g, " ").trim());
+}
+
 // A zone and a rule of a draft, in the shape wizard_state() gives them (shipping_engine.py documents it).
 const zoneOf = (name, countries, extra = {}) => ({
 	name,
@@ -411,6 +416,8 @@ await check("with the empty policy off, the tape says so and the customer would 
 	assert((await textOf("tape-total")) === "$38.20", "to the cent");
 	const label = await textOf("tape-total-label");
 	assert(label === "Customer would pay", `while the policy is off the total reads "${label}"`);
+	const said = "No zone covers this country, so the carrier's price is passed through.";
+	assert((await lastLine()) === said, `the statement comes after the lines: ${await lastLine()}`);
 	const colour = await colourOf("tape-total");
 	assert(colour === "rgb(154, 113, 22)", `what the customer pays is brass: ${colour}`);
 	await page.evaluate(() => document.activeElement?.blur());
@@ -619,6 +626,7 @@ await check("the receipt says how a draft that is on priced the order, in plain 
 	await expectText("tape-lines", "The carrier could not quote, so the fallback price applies.");
 	await expectText("tape-lines", "Standard delivery");
 	await expectText("tape-total", "$35.00");
+	assert((await lastLine()).startsWith("The carrier could not quote"), "the statement is the last line");
 	await page.click(by("tape-unavailable"));
 	await pickCountry("Jordan");
 	await expectText("tape-lines", "No rule fits this order, so the carrier's price is passed through.");

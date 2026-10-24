@@ -601,10 +601,11 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			this.set_total("not_offered");
 			return;
 		}
+		// The workings first, then how they came about, just above the total: the receipt reads top down.
 		const [first, ...others] = offers;
+		this.lines.append(...this.offer_lines(first, offers.length > 1));
 		const said = this.statement(result, first);
 		if (said) this.lines.append(note(said, "statement"));
-		this.lines.append(...this.offer_lines(first, offers.length > 1));
 		this.set_total(this.amount_of(first));
 		const days = first.estimated_days;
 		if (Number.isInteger(days) && days > 0) {
