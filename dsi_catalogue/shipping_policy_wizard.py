@@ -296,14 +296,18 @@ def apply_policy(draft, expected_version) -> dict:
 	any of the problems `preview_changes` reports. Otherwise written inside one savepoint, in this order:
 
 	1. the item sets, inserted or updated;
-	2. every saved zone the draft drops is switched off, so that the policy's own check in step 4 finds it
-	   inert (a country it lists may now be in another zone);
+	2. every saved zone the draft drops is switched off (a zone saved disabled always saves), so that it is
+	   out of the live policy while the rest is written: the policy's own check in step 4 leaves it out (a
+	   country it lists may now be in another zone, and its countries' codes or its fallback to the rate card
+	   may have gone bad);
 	3. the draft's zones, inserted or updated, one by one, without the zone form's checks across zones (the
 	   draft was checked as a whole: one at a time, a country moving between two zones would be refused);
-	4. the policy's settings (the price source and the rate card among them) and rules, in one save that the
-	   policy's own check validates;
+	4. the policy's settings (the price source and the rate card among them) and rules, in one save. The
+	   policy's own check validates that save only when the draft is on (a policy saved off is not checked):
+	   for a draft that is off, what keeps an invalid policy out is the check of the whole draft before
+	   anything is written, and step 6;
 	5. the zones and item sets the draft drops are deleted: no rule points at them any more;
-	6. the saved policy is read back and checked once more.
+	6. the saved policy is read back and checked once more, on or off.
 
 	A failure at any step rolls everything back and is raised. A zone or item set that would not change is
 	left alone, so the history of each document records only real changes. Afterwards the website is asked
