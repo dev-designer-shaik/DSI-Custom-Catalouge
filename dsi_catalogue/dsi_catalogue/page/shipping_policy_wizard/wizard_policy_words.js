@@ -12,9 +12,11 @@
 //	sp.change_lines(changes, before, after)  what preview_changes (or apply_policy) says will change, as lines:
 //	                                    {label, text}, or {label, from, to} for a setting
 //	sp.change_text(line)               one of those lines as plain text
+//	sp.rule_statement(rule)            a rule as the Review says it: the words of its card in the Rules step
+//	                                    (sp.rule_words, wizard_rule_words.js) with commas, and a rule for an item
+//	                                    set says what the Rules step's asterisk says (ruling P90)
 //	sp.policy_summary(policy, country_name)  the whole policy in plain words, zone by zone
 //	sp.problem_step(sentence)          the step that owns a problem preview_changes found, or null when unsure
-// A rule is said with sp.rule_text (wizard_rule_words.js), the words of its card in the Rules step.
 
 const FALLBACK_CHOICES = [
 	{ method: "policy_default", label: __("Use the policy default") },
@@ -138,6 +140,19 @@ Object.assign(sp, {
 		return __("If the carrier cannot quote, delivery is not offered here.");
 	},
 
+	// "In GCC, for every item, charge the carrier's price, rounded up", and for an item set "In GCC, for orders
+	// made up only of items in Watches, charge nothing (free)": the Review is what the owner reads to go live, so
+	// it says the asterisk's condition in the sentence. Its zone and set are named as the ERP keeps them.
+	rule_statement(rule) {
+		const words = sp.rule_words(rule);
+		const zone = String(rule.zone ?? "").trim() || __("choose a zone");
+		const set = String(rule.item_set ?? "").trim();
+		const items = set ? __("orders made up only of items in {0}", [set]) : words.items;
+		let text = __("In {0}, for {1}, charge {2}", [zone, items, words.charge]);
+		if (words.rounded) text += __(", rounded up");
+		return words.limits ? __("{0} (only when: {1})", [text, words.limits]) : text;
+	},
+
 	not_covered_sentence(policy) {
 		return passes_through(policy)
 			? __("When no rule fits an order, customers pay the carrier's price.")
@@ -246,8 +261,7 @@ Object.assign(sp, {
 								const number = rules.indexOf(rule) + 1;
 								const label = text(rule.label);
 								const ref = label ? __("{0} ({1})", [number, label]) : String(number);
-								const kept = { ...rule, zone: text(rule.zone), item_set: text(rule.item_set) || null };
-								const words = sp.rule_text(kept);
+								const words = sp.rule_statement(rule);
 								return rule.enabled
 									? __("Rule {0}: {1}.", [ref, words])
 									: __("Rule {0} is off: {1}.", [ref, words]);

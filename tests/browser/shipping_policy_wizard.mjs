@@ -2018,17 +2018,17 @@ try {
 		assert((await page.$$(by("review-problem"))).length === 0, "no problems");
 		const zones = await textsOf("review-zone");
 		const want = [
-			"Bahrain Bahrain. Customers read: “Free delivery in Bahrain.” Rule 1 (Free in Bahrain): In Bahrain for every item charge nothing (free). If the carrier cannot quote, the policy default applies: delivery is not offered.",
-			"GCC United Arab Emirates, Saudi Arabia, Kuwait, Oman and Qatar. Customers read: “Gulf delivery, priced by the carrier. Watches ship free.” Rule 2 (Free watches in the Gulf): In GCC for Watches charge nothing (free). Rule 3 (Gulf at the carrier price): In GCC for every item charge the carrier's price, rounded up. If the carrier cannot quote, customers here pay a fixed $35.00.",
-			"Rest of world Everywhere else Every other country. Customers read: “International delivery, priced at checkout.” Rule 4 (International with a minimum): In Rest of world for every item charge max(carrier_price * 1.1, 45), rounded up. If the carrier cannot quote, the policy default applies: delivery is not offered.",
+			"Bahrain Bahrain. Customers read: “Free delivery in Bahrain.” Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free). If the carrier cannot quote, the policy default applies: delivery is not offered.",
+			"GCC United Arab Emirates, Saudi Arabia, Kuwait, Oman and Qatar. Customers read: “Gulf delivery, priced by the carrier. Watches ship free.” Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free). Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up. If the carrier cannot quote, customers here pay a fixed $35.00.",
+			"Rest of world Everywhere else Every other country. Customers read: “International delivery, priced at checkout.” Rule 4 (International with a minimum): In Rest of world, for every item, charge max(carrier_price * 1.1, 45), rounded up. If the carrier cannot quote, the policy default applies: delivery is not offered.",
 			"Not shipped Not shipped Russian Federation and Belarus. Delivery is never offered here. Customers read: “We do not deliver to these countries.” At checkout they read: “We don't deliver to this country.”",
 		];
 		zones.forEach((text, n) => assert(text === want[n], `zone ${n + 1} reads: ${text}`));
 		assert(zones.length === 4, `four zones: ${zones.length}`);
-		// each rule in the words of its card in the Rules step: the same builder, sp.rule_text
+		// each rule in the words of its card in the Rules step (sp.rule_words), with commas: sp.rule_statement
 		const summary = await textOf("review-summary");
 		const sentences = await page.evaluate(() =>
-			frappe.pages["shipping-policy-wizard"].wizard.store.draft.rules.map((rule) => dsi_catalogue.sp.rule_text(rule))
+			frappe.pages["shipping-policy-wizard"].wizard.store.draft.rules.map((rule) => dsi_catalogue.sp.rule_statement(rule))
 		);
 		sentences.forEach((text, n) => assert(summary.includes(`: ${text}.`), `rule ${n + 1} in its card's words: ${text}`));
 		assert(summary.startsWith("Prices start from the carrier's quote for each order."), "where prices start, first");

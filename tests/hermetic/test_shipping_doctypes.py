@@ -968,8 +968,8 @@ def test_what_will_change_is_said_in_short_plain_lines(tmp_path):
 @needs_node
 def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 	"""sp.policy_summary says the whole draft: where prices start, then each zone (who is in it, what customers
-	read, its rules in their order in the Rules step's words, what happens when the carrier cannot quote), then
-	what happens to an order no rule fits."""
+	read, its rules in their order as sp.rule_statement says them, what happens when the carrier cannot quote),
+	then what happens to an order no rule fits."""
 	policy = example()
 	policy["zones"].append(
 		{
@@ -1012,20 +1012,20 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 		"read": ["Customers read: “Free delivery in Bahrain.”"],
 		"off": "",
 		"never": "",
-		"rules": ["Rule 1 (Free in Bahrain): In Bahrain for every item charge nothing (free)."],
+		"rules": ["Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free)."],
 		"no_rules": "",
 		"fallback": "If the carrier cannot quote, the policy default applies: delivery is not offered.",
 	}
 	assert gcc["where"] == "United Arab Emirates, Saudi Arabia, Kuwait, Oman and Qatar."
 	assert gcc["rules"] == [
-		"Rule 2 (Free watches in the Gulf): In GCC for Watches charge nothing (free).",
-		"Rule 3 (Gulf at the carrier price): In GCC for every item charge the carrier's price, rounded up.",
+		"Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free).",
+		"Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up.",
 	]
 	assert gcc["fallback"] == "If the carrier cannot quote, customers here pay a fixed $35.00."
 	assert rest["states"] == [{"kind": "everywhere_else", "text": "Everywhere else"}]
 	assert rest["where"] == "Every other country."
 	assert rest["rules"] == [
-		"Rule 4 (International with a minimum) is off: In Rest of world for every item charge "
+		"Rule 4 (International with a minimum) is off: In Rest of world, for every item, charge "
 		"max(carrier_price * 1.1, 45), rounded up."
 	]
 	assert closed["states"] == [{"kind": "not_shipped", "text": "Not shipped"}]
@@ -1049,6 +1049,37 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 		"There is no zone yet.",
 		"When no zone or no rule fits an order, customers pay the carrier's price.",
 	]
+
+
+@needs_node
+def test_the_review_says_a_rule_with_commas_and_a_sets_condition(tmp_path):
+	"""Ruling P90: the Review says a rule in the words of its card (sp.rule_words) with commas, and a rule for an
+	item set says what the Rules step's asterisk says, that it is only for orders made up of items in the set.
+	The Rules step's cards keep their own sentence (sp.rule_text)."""
+	rules = example()["rules"]
+	limited = {**rules[2], "min_order_value": 100, "max_order_value": 500, "max_weight_kg": 2.5}
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		const rules = {json.dumps([*rules, limited, {**rules[0], "zone": " ", "method": "formula"}])};
+		return {{ said: rules.map((rule) => sp.rule_statement(rule)), cards: rules.map((rule) => sp.rule_text(rule)) }};
+		""",
+	)
+	assert got["said"] == [
+		"In Bahrain, for every item, charge nothing (free)",
+		"In GCC, for orders made up only of items in Watches, charge nothing (free)",
+		"In GCC, for every item, charge the carrier's price, rounded up",
+		"In Rest of world, for every item, charge max(carrier_price * 1.1, 45), rounded up",
+		"In GCC, for every item, charge the carrier's price, rounded up "
+		"(only when: order value from $100.00 up to $500.00 and weight up to 2.5 kg)",
+		"In choose a zone, for every item, charge a formula",
+	]
+	assert got["cards"][:4] == [
+		"In Bahrain for every item charge nothing (free)",
+		"In GCC for Watches charge nothing (free)",
+		"In GCC for every item charge the carrier's price, rounded up",
+		"In Rest of world for every item charge max(carrier_price * 1.1, 45), rounded up",
+	], "the cards keep their words"
 
 
 @needs_node
@@ -1076,10 +1107,12 @@ def test_the_review_reads_names_as_the_erp_keeps_them_without_outer_spaces(tmp_p
 	got = run_page_helpers(tmp_path, f"return sp.policy_summary({json.dumps(policy)}, (code) => code);")
 	bahrain, gcc = got["zones"][:2]
 	assert (bahrain["name"], gcc["name"]) == ("Bahrain", "GCC")
-	assert bahrain["rules"] == ["Rule 1 (Free in Bahrain): In Bahrain for every item charge nothing (free)."]
+	assert bahrain["rules"] == [
+		"Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free)."
+	]
 	assert gcc["rules"] == [
-		"Rule 2 (Free watches in the Gulf): In GCC for Watches charge nothing (free).",
-		"Rule 3 (Gulf at the carrier price): In GCC for every item charge the carrier's price, rounded up.",
+		"Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free).",
+		"Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up.",
 	]
 	assert (bahrain["no_rules"], gcc["no_rules"]) == ("", "")
 
