@@ -25,7 +25,9 @@ const STEPS = ["zones", "rates", "rules", "fallback", "review", "test"];
 const LABELS = ["Zones", "Rates", "Rules", "If the carrier can't quote", "Review", "Test"];
 const HOSTILE = "<img src=x onerror=alert(1)>";
 const HOSTILE_MESSAGE = "<img src=x onerror=alert(2)>";
-const OFF = "The policy is switched off, so customers would pay the carrier's price. Turn it on in the Review step.";
+const OFF =
+	"The policy is switched off, so today customers pay the carrier's price. This receipt shows what they " +
+	"would pay once you turn the policy on in the Review step.";
 const ITEM = "10005020"; // a priced fragrance on erp2 (229.00 in USD - Online)
 
 // What erp2 shows on every desk page, with or without the wizard: the dsi_plm app asks for a script it does
@@ -399,7 +401,7 @@ await check("prefers-reduced-motion removes the receipt's transition", async () 
 	assert(reduced === "0s", `with reduced motion: ${reduced}`);
 });
 
-await check("with the empty policy off, the tape says so and Customer pays is the typed quote", async () => {
+await check("with the empty policy off, the tape says so and the customer would pay the typed quote", async () => {
 	await pickCountry("United Arab Emirates");
 	const country = await page.$eval(by("tape-country"), (input) => input.value);
 	assert(country === "United Arab Emirates", `found by name: ${country}`);
@@ -407,6 +409,8 @@ await check("with the empty policy off, the tape says so and Customer pays is th
 	await expectText("tape-lines", OFF);
 	await expectText("tape-total", "$38.20");
 	assert((await textOf("tape-total")) === "$38.20", "to the cent");
+	const label = await textOf("tape-total-label");
+	assert(label === "Customer would pay", `while the policy is off the total reads "${label}"`);
 	const colour = await colourOf("tape-total");
 	assert(colour === "rgb(154, 113, 22)", `what the customer pays is brass: ${colour}`);
 	await page.evaluate(() => document.activeElement?.blur());
@@ -515,7 +519,7 @@ await check("asking the carrier fills the quote and lists what it said", async (
 	await expectText("tape-lines", `${cheapest} The carrier quoted ${quote}.`);
 	assert(!(await textOf("tape-lines")).includes("[object"), "every line is printed as text");
 	const file = await shot("wizard-asked-the-carrier");
-	return `the carrier said "${services}", the quote field holds ${quote}, Customer pays ${await textOf("tape-total")}; ${file}`;
+	return `the carrier said "${services}", the quote field holds ${quote}, the total reads ${await textOf("tape-total")}; ${file}`;
 });
 
 await check("removing the item takes it out of the order", async () => {
@@ -609,7 +613,8 @@ await check("the receipt says how a draft that is on priced the order, in plain 
 	await expectText("tape-total", "$39.00");
 	await expectText("tape-lines", "Rule 2 applies: Gulf, every item, charges the carrier's price, rounded up.");
 	await expectText("tape-lines", "Rounded up to the next whole dollar, which adds 0.80. +$0.80");
-	assert(!(await textOf("tape-lines")).includes(OFF), "the draft is on: no note that it is off");
+	assert(!(await textOf("tape-lines")).includes("switched off"), "the draft is on: no note that it is off");
+	assert((await textOf("tape-total-label")) === "Customer pays", "the draft is on: the customer pays");
 	await page.click(by("tape-unavailable"));
 	await expectText("tape-lines", "The carrier could not quote, so the fallback price applies.");
 	await expectText("tape-lines", "Standard delivery");

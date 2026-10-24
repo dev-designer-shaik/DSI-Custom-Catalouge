@@ -169,6 +169,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		);
 
 		this.lines = el("div", { class: "sp-receipt-lines", "data-testid": "tape-lines" });
+		this.total_label = el("span", { class: "sp-total-label", "data-testid": "tape-total-label" });
 		this.total = el("span", { class: "sp-total-amount", "data-testid": "tape-total" });
 		this.after_total = el("p", { class: "sp-after-total", hidden: true });
 		this.more = el("div", { class: "sp-more", hidden: true });
@@ -180,7 +181,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			el(
 				"p",
 				{ class: "sp-total", "aria-live": "polite", "aria-atomic": "true" },
-				el("span", { class: "sp-total-label" }, __("Customer pays")),
+				this.total_label,
 				this.total
 			),
 			this.after_total,
@@ -561,9 +562,14 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	}
 
 	// ---------------------------------------------------------- the receipt
-	// Prints an answer of try_order, a reason why nothing is priced yet (blocked), or a problem.
+	// Prints an answer of try_order, a reason why nothing is priced yet (blocked), or a problem. The tape prices
+	// the draft as if it were switched on, so that it can be tried before it goes live; whether it is on is
+	// read from the draft. While it is off, the receipt says so first, and its total is what customers would
+	// pay once it is on.
 	render_receipt({ answer = null, blocked = null, problem = null } = {}) {
 		const note = (text, kind) => el("p", { class: `sp-${kind}` }, text);
+		const off = !this.wizard.store.draft.active;
+		this.total_label.textContent = off ? __("Customer would pay") : __("Customer pays");
 		this.lines.replaceChildren();
 		this.more.replaceChildren();
 		this.more.hidden = true;
@@ -578,16 +584,11 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			return;
 		}
 		const result = sp.is_record(answer?.result) ? answer.result : {};
-		// The tape prices the draft as if it were switched on; whether it is on is read from the draft.
-		if (!this.wizard.store.draft.active) {
-			this.lines.append(
-				note(
-					__(
-						"The policy is switched off, so customers would pay the carrier's price. Turn it on in the Review step."
-					),
-					"note"
-				)
+		if (off) {
+			const today = __(
+				"The policy is switched off, so today customers pay the carrier's price. This receipt shows what they would pay once you turn the policy on in the Review step."
 			);
+			this.lines.append(note(today, "note"));
 		}
 		const offers = (Array.isArray(result.offers) ? result.offers : [])
 			.filter(sp.is_record)
@@ -622,7 +623,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 						el(
 							"p",
 							{ class: "sp-offer-total" },
-							el("span", {}, __("Customer pays")),
+							el("span", {}, this.total_label.textContent),
 							el(
 								"span",
 								{ class: amount === 0 ? "sp-money is-free" : "sp-money" },
