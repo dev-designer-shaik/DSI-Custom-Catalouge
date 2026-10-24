@@ -23,7 +23,8 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		this.asking = false;
 		this.quote_epoch = 0; // moves on when a quote is typed: an answer to an earlier Ask is then dropped
 		this.ask_tried = false; // "Ask the carrier" was pressed while it could not be used
-		this.packed = { weight: 0, volume: 0, cartons: 0 }; // the cartons the ERP packed the items into
+		// the cartons the ERP packed the items into, and the items they were packed for (JSON of the order's items)
+		this.packed = { weight: 0, volume: 0, cartons: 0, key: null };
 		this.computed_value = null; // the items' value in the price list, from the last answer
 		this.sequence = 0; // the number of the newest request: the answer to an older one is dropped
 		this.timer = null;
@@ -456,8 +457,9 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		if (!weight.ok) return refuse(weight, __("Type the weight in kilograms as a number, such as 1.2."));
 		if (!volume.ok) return refuse(volume, __("Type the volume in litres as a number, such as 3."));
 		const typed_cartons = weight.value !== null || volume.value !== null;
+		const both_typed = weight.value !== null && volume.value !== null;
 		const units = items.reduce((sum, item) => sum + item.qty, 0);
-		if (!typed_cartons && units > MAX_PACKED_UNITS) {
+		if (!both_typed && units > MAX_PACKED_UNITS) {
 			return block(
 				"invalid",
 				__("Try an order packs at most {0} units. Lower the quantities, or type the weight and volume.", [
@@ -465,15 +467,6 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 				])
 			);
 		}
-		// Typed figures make one carton; what is not typed comes from the cartons the ERP packed.
-		const boxes = typed_cartons
-			? [
-					{
-						weight_kg: weight.value !== null ? weight.value : this.packed.weight,
-						volume_l: volume.value !== null ? volume.value : this.packed.volume,
-					},
-			  ]
-			: null;
 		// null: nothing typed; []: the carrier gives no price; a list: the quotes to price with
 		let quotes = null;
 		if (sample.unavailable) quotes = [];
@@ -499,6 +492,19 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 				__("Type the carrier's quote, ask the carrier, or tick “The carrier can't quote”.")
 			);
 		}
+		// One measure is typed and the items changed since the ERP last packed them: first ask how it packs
+		// them (no quote, so the carrier is not asked), so that the measure not typed is the packed one and
+		// never one packed for other items. price() then asks again with the fresh figure.
+		const items_key = JSON.stringify(items);
+		if (typed_cartons && !both_typed && items.length && this.packed.key !== items_key) {
+			const order = { country_code: sample.country, items, order_value: value.value, boxes: null, quotes: [] };
+			return { packing: { draft, order }, items_key };
+		}
+		// Typed figures make one carton; a figure not typed is the packed one (no items, no cartons).
+		const packed = items.length ? this.packed : { weight: 0, volume: 0 };
+		const boxes = typed_cartons
+			? [{ weight_kg: weight.value ?? packed.weight, volume_l: volume.value ?? packed.volume }]
+			: null;
 		const order = { country_code: sample.country, items, order_value: value.value, boxes, quotes };
 		const args = { draft, order };
 		if (ask) {
@@ -506,7 +512,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			args.city = sample.city.trim();
 		}
 		const typed_value = value.value !== null;
-		return { args, typed_cartons, typed_value, key: this.asked_key(), epoch: this.quote_epoch };
+		return { args, typed_cartons, typed_value, items_key, key: this.asked_key(), epoch: this.quote_epoch };
 	}
 
 	// Price the sample with the draft now. Every call gets a number; an answer that is not to the newest
@@ -522,6 +528,22 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			return Promise.resolve();
 		}
 		this.set_busy(true);
+		if (request.packing) {
+			return this.wizard.call("try_order", request.packing, { quiet: true }).then(
+				(answer) => {
+					if (sequence !== this.sequence) return;
+					this.keep_packed(answer?.order, request.items_key);
+					this.render_controls();
+					return this.price({ ask });
+				},
+				(problem) => {
+					if (sequence !== this.sequence) return;
+					this.set_busy(false);
+					this.wizard.set_priced(null);
+					this.render_receipt({ problem });
+				}
+			);
+		}
 		return this.wizard.call("try_order", request.args, { quiet: true }).then(
 			(answer) => {
 				if (ask) this.keep_asked(request, answer);
@@ -551,12 +573,18 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		this.quote_input.value = this.sample.quote;
 	}
 
+	// The cartons the ERP packed the items into (the order as try_order priced it, with no carton typed),
+	// remembered with the items they were packed for.
+	keep_packed(order, items_key) {
+		const boxes = Array.isArray(order?.boxes) ? order.boxes : [];
+		const sum = (key) => boxes.reduce((total, box) => total + (Number(box?.[key]) || 0), 0);
+		this.packed = { weight: sum("weight_kg"), volume: sum("volume_l"), cartons: boxes.length, key: items_key };
+	}
+
 	take(answer, request) {
 		const order = sp.is_record(answer?.order) ? answer.order : {};
 		if (!request.typed_cartons && this.wizard.price_source() === "carrier") {
-			const boxes = Array.isArray(order.boxes) ? order.boxes : [];
-			const sum = (key) => boxes.reduce((total, box) => total + (Number(box?.[key]) || 0), 0);
-			this.packed = { weight: sum("weight_kg"), volume: sum("volume_l"), cartons: boxes.length };
+			this.keep_packed(order, request.items_key);
 		}
 		if (!request.typed_value) {
 			this.computed_value = sp.is_number(order.order_value) ? order.order_value : null;

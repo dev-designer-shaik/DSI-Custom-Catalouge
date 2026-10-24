@@ -563,6 +563,45 @@ await check("removing the item takes it out of the order", async () => {
 	assert((await page.$$(by("tape-item"))).length === 0, "no item lines left");
 });
 
+await check("with one measure typed, the other is packed again whenever the items change", async () => {
+	const sent = [];
+	const listen = (request) => {
+		if (!request.url().includes("shipping_policy_wizard.try_order")) return;
+		sent.push(JSON.parse(new URLSearchParams(request.postData() || "").get("order") || "null"));
+	};
+	await fill("tape-volume", ""); // only the weight (1 kg) is typed now
+	await page.waitForNetworkIdle({ idleTime: 600 });
+	page.on("request", listen);
+	try {
+		await page.focus(by("tape-add-item"));
+		await page.type(by("tape-add-item"), ITEM);
+		await page.waitForFunction(
+			(code) =>
+				[...document.querySelectorAll(".sp-item-picker [role='option']")].some((option) =>
+					option.textContent.includes(code)
+				),
+			{ timeout: 15000 },
+			ITEM
+		);
+		await page.keyboard.press("Enter");
+		await page.waitForSelector(by("tape-item"));
+		await page.waitForNetworkIdle({ idleTime: 600 });
+		const [packing, pricing] = sent.splice(0);
+		assert(packing?.boxes === null && JSON.stringify(packing?.quotes) === "[]", "first the ERP packs the items");
+		const carton = JSON.stringify(pricing?.boxes);
+		assert(carton === JSON.stringify([{ weight_kg: 1, volume_l: 0 }]), `then the typed weight, packed volume: ${carton}`);
+		await fill("tape-weight", "2");
+		await page.waitForNetworkIdle({ idleTime: 600 });
+		const again = sent.splice(0);
+		assert(again.length === 1 && again[0].boxes[0].weight_kg === 2, "the same items are not packed again");
+		await page.click(by("tape-item-remove"));
+		await page.waitForNetworkIdle({ idleTime: 600 });
+	} finally {
+		page.off("request", listen);
+	}
+	return `erp2 has no packer, so the packed volume is 0 there`;
+});
+
 await check("a stored draft of this version is restored with its step, and can be discarded", async () => {
 	const draft = { ...original, not_covered: "no_delivery" };
 	await openWithStored({ version, draft, step: "rules" });
