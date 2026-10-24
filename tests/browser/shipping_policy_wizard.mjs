@@ -109,8 +109,13 @@ const RATES = await access(RATES_REAL.config)
 	);
 
 // What erp2 shows on every desk page, with or without the wizard: the dsi_plm app asks for a script it does
-// not ship. Seen on /desk/shipping-policy and /desk/shipping-dashboard before the wizard existed.
-const KNOWN_NOISE = [/\/assets\/dsi_plm\/js\/project_customization\.js/];
+// not ship. Seen on /desk/shipping-policy and /desk/shipping-dashboard before the wizard existed. And the
+// dsi_copilot app pings its model every 3 minutes while a desk page is open (copilot.js, setInterval 180000):
+// a ping still on its way when the run opens another page is aborted by the browser itself.
+const KNOWN_NOISE = [
+	/\/assets\/dsi_plm\/js\/project_customization\.js/,
+	/^request failed: POST \S+\/api\/method\/dsi_copilot\.api\.keep_warm net::ERR_ABORTED$/,
+];
 
 for (const name of ["PUPPETEER", "CHROME", "ERP_USER", "ERP_PASSWORD"]) {
 	if (!process.env[name]) {
@@ -199,6 +204,7 @@ let holdGroups = 0; // ms to hold the next read of the Item Group list before it
 let holdApply = 0; // ms to hold the next apply_policy request before it goes out
 let holdPreview = 0; // ms to hold the next preview_changes request before it goes out
 let holdTest = 0; // ms to hold the next test_integration request before it goes out
+let holdImport = 0; // ms to hold the next import_rate_card request before it goes out
 const fakeNext = {};
 page.on("request", (request) => {
 	const isTry = request.url().includes("shipping_policy_wizard.try_order");
@@ -208,10 +214,11 @@ page.on("request", (request) => {
 	const isApply = request.url().includes("shipping_policy_wizard.apply_policy");
 	const isPreview = request.url().includes("shipping_policy_wizard.preview_changes");
 	const isTest = request.url().includes("shipping_policy_wizard.test_integration");
+	const isImport = request.url().includes("shipping_policy_wizard.import_rate_card");
 	if (isTry) priced += 1;
 	if (isCheck) checked += 1;
 	if (isApply) applied += 1;
-	if (request.url().includes("shipping_policy_wizard.import_rate_card")) imported += 1;
+	if (isImport) imported += 1;
 	if (isTest) tested += 1;
 	if (!intercepting) return;
 	const fake = Object.keys(fakeNext).find((method) => request.url().includes(`shipping_policy_wizard.${method}`));
@@ -232,6 +239,7 @@ page.on("request", (request) => {
 		(isApply && holdApply) ||
 		(isPreview && holdPreview) ||
 		(isTest && holdTest) ||
+		(isImport && holdImport) ||
 		0;
 	if (wait) {
 		if (isTry) holdNext = 0;
@@ -239,6 +247,7 @@ page.on("request", (request) => {
 		else if (isApply) holdApply = 0;
 		else if (isPreview) holdPreview = 0;
 		else if (isTest) holdTest = 0;
+		else if (isImport) holdImport = 0;
 		else holdGroups = 0;
 		setTimeout(() => request.continue().catch(() => {}), wait);
 	} else {
@@ -2173,9 +2182,9 @@ try {
 		const zones = await textsOf("review-zone");
 		const want = [
 			"Bahrain Bahrain. Customers read: “Free delivery in Bahrain.” Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free). If the carrier cannot quote, the policy default applies: delivery is not offered.",
-			"GCC United Arab Emirates, Saudi Arabia, Kuwait, Oman and Qatar. Customers read: “Gulf delivery, priced by the carrier. Watches ship free.” Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free). Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up. If the carrier cannot quote, customers here pay a fixed $35.00.",
+			"GCC United Arab Emirates; Saudi Arabia; Kuwait; Oman; Qatar. Customers read: “Gulf delivery, priced by the carrier. Watches ship free.” Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free). Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up. If the carrier cannot quote, customers here pay a fixed $35.00.",
 			"Rest of world Everywhere else Every other country. Customers read: “International delivery, priced at checkout.” Rule 4 (International with a minimum): In Rest of world, for every item, charge max(carrier_price * 1.1, 45), rounded up. If the carrier cannot quote, the policy default applies: delivery is not offered.",
-			"Not shipped Not shipped Russian Federation and Belarus. Delivery is never offered here. Customers read: “We do not deliver to these countries.” At checkout they read: “We don't deliver to this country.”",
+			"Not shipped Not shipped Russian Federation; Belarus. Delivery is never offered here. Customers read: “We do not deliver to these countries.” At checkout they read: “We don't deliver to this country.”",
 		];
 		zones.forEach((text, n) => assert(text === want[n], `zone ${n + 1} reads: ${text}`));
 		assert(zones.length === 4, `four zones: ${zones.length}`);
@@ -2667,6 +2676,10 @@ try {
 		const after = await store();
 		assert(!after.dirty && after.version === written.version, "the saved policy, adopted");
 		assert(after.original.rules[2].label === "Gulf at the carrier price, again", "with the edit");
+		// said as a prompt answer is said (B1): whether the policy is on, and what the last check of the draft found
+		const done = await textOf("apply-done");
+		assert(done.includes("Customers see the new prices now."), `whether it is on: ${done}`);
+		assert(done.includes("Rules changed: Rule 3 (Gulf at the carrier price, again)"), `what changed: ${done}`);
 		await pause(500);
 		assert((await stored()) === null, "no draft is left in storage");
 		return tallShot("wizard-answered-late");
@@ -2844,13 +2857,34 @@ try {
 	await check("the Shopify export is read through the Rates step: what the card holds, its notes, what stops it, the countries not delivered by name", async () => {
 		await (await page.$(by("rates-file-config"))).uploadFile(RATES.config);
 		await (await page.$(by("rates-file-notdelivered"))).uploadFile(RATES.closed);
-		await page.waitForFunction(
-			() =>
-				[...document.querySelectorAll('[data-testid="rates-import"] .sp-file-note')].every((note) =>
-					/characters read\.$/.test(note.textContent)
-				),
-			{ timeout: 10000 }
-		);
+		const read = () =>
+			page.waitForFunction(
+				() =>
+					[...document.querySelectorAll('[data-testid="rates-import"] .sp-file-note')].every((note) =>
+						/characters read\.$/.test(note.textContent)
+					),
+				{ timeout: 10000 }
+			);
+		await read();
+		// after a tab switch the files the panel holds are still the fields' state, not the browser's "No file chosen"
+		await page.click(by("step-tab-zones"));
+		await page.click(by("step-tab-rates"));
+		await read();
+		const buttons = await page.$$eval(`${by("rates-import")} .sp-file-button`, (found) => found.map((label) => label.textContent));
+		assert(buttons.join("|") === "Choose another file|Choose another file", `the fields say they hold a file: ${buttons}`);
+		// texts that change while the server reads them: the answer is for texts that are gone, and the panel says so
+		await intercept(true);
+		try {
+			holdImport = 2500;
+			await page.click(by("rates-preview"));
+			await pause(300);
+			await paste("rates-paste-notdelivered", "ISO-2,Country\nCU,Cuba\n");
+			await expectText("rates-import-problem", "The files changed while they were read. Preview again.", 15000);
+		} finally {
+			await intercept(false);
+		}
+		assert(await page.$eval(by("rates-import-preview"), (box) => box.hidden), "no preview of texts that are gone");
+		await paste("rates-paste-notdelivered", "");
 		imported = 0;
 		await page.click(by("rates-preview"));
 		await expectText("rates-import-read", RATES.read, 30000);
@@ -2892,6 +2926,7 @@ try {
 		assert((await focusedTestid()) === "rates-import-taken-title", `the focus goes to what was done: ${await focusedTestid()}`);
 		const draft = await draftNow();
 		const card = draft.rate_card;
+		ratesCard = card; // the later checks compare with it, whatever this one finds
 		assert(JSON.stringify(card) === JSON.stringify(sorted(card)), "the card's keys are in the order the ERP keeps them");
 		assert(Object.keys(card).join() === "currency,profiles,unit,version", Object.keys(card).join());
 		const names = card.profiles.map((profile) => profile.name).join("|");
@@ -2904,14 +2939,22 @@ try {
 		);
 		assert(zone.countries.length === kept && !RATES.missing.some((code) => zone.countries.includes(code)), `its countries: ${zone.countries}`);
 		assert(JSON.stringify(Object.keys(zone)) === JSON.stringify(Object.keys(zoneOf("x", []))), "in the server's key order");
-		await expectText("rates-import-taken", `The new Not shipped zone Not delivered lists ${kept} countries not delivered to.`);
+		await expectText("rates-import-taken", `The new Not shipped zone “Not delivered” lists ${kept} countries not delivered to.`);
 		assert(draft.price_source === "carrier", "the price source is not switched by itself");
 		assert((await textOf("rates-switch-source")) === "Switch the price source to Rate card", "switching it is offered");
 		await expectText(
 			"rates-not-used-note",
 			"Nothing uses the rate card now: the price source is the carrier, and no fallback says Use the rate card."
 		);
-		ratesCard = card;
+		// its work done, the import folds to its title line, with what was done under it (M8b)
+		assert((await expanded("rates-import-toggle")) === "false", "the import is folded");
+		const folded = await page.$eval(by("rates-import"), (panel) => ({
+			body: panel.querySelector(".sp-import-body").hidden,
+			taken: Boolean(panel.querySelector('[data-testid="rates-import-taken"]').offsetParent),
+		}));
+		assert(folded.body && folded.taken, `folded, what was done in view: ${JSON.stringify(folded)}`);
+		await page.evaluate(() => document.activeElement?.blur());
+		return tallShot("wizard-rates-import-folded");
 	});
 
 	await check("the card reads back lazily: a line per profile, a zone once its profile opens, then its countries, method, days and tiers", async () => {
@@ -2921,6 +2964,8 @@ try {
 		);
 		assert(toggles.length === 4 && toggles.every(([open]) => open === "false"), `four profiles, closed: ${JSON.stringify(toggles)}`);
 		assert(toggles[0][1] === RATES.petite, `profile 1 reads: ${toggles[0][1]}`);
+		// the profile with a pattern of * takes whatever the others leave, and says so in words (M8h)
+		assert(toggles[3][1].startsWith("4 Rest of the World Allowed Items Every other product. "), `profile 4 reads: ${toggles[3][1]}`);
 		assert((await page.$$(by("rates-zone"))).length === 0, "no zone is drawn until its profile opens");
 		await openProfile(2);
 		const zones = await (await nth("rates-profile", 2)).$$eval(by("rates-zone-toggle"), (found) =>
@@ -3009,11 +3054,30 @@ try {
 		}
 		// Bahrain is in the profile's GCC zone already: refused, naming that zone
 		const before = JSON.stringify((await draftNow()).rate_card);
-		await typeInto(zone, "rates-country-add", "Bahrain");
-		await page.keyboard.press("Enter");
-		const refused = await zone.$eval(by("rates-country-problem"), (line) => line.textContent);
-		assert(refused === "Bahrain is already in the zone GCC – all 6 (incl. BH & QA) of this profile.", refused);
+		const refusal = () => zone.$eval(by("rates-country-problem"), (line) => line.textContent);
+		const refuse = async () => {
+			await typeInto(zone, "rates-country-add", "Bahrain");
+			await page.keyboard.press("Enter");
+		};
+		await refuse();
+		const said = "Bahrain is already in the zone “GCC – all 6 (incl. BH & QA)” of this profile.";
+		assert((await refusal()) === said, await refusal());
 		assert(JSON.stringify((await draftNow()).rate_card) === before, "and it is not added");
+		// the refusal goes once another country is typed, with the next change, and when the zone is closed (M1)
+		await typeInto(zone, "rates-country-add", "Ba");
+		assert((await refusal()) === "", `typing takes it away: ${await refusal()}`);
+		await refuse();
+		const gcc = await openZone(3, "GCC – all 6 (incl. BH & QA)");
+		const days = await gcc.$eval(by("rates-zone-days"), (input) => input.value);
+		await typeInto(gcc, "rates-zone-days", days === "4" ? "5" : "4");
+		assert((await refusal()) === "", `the next change takes it away: ${await refusal()}`);
+		await typeInto(gcc, "rates-zone-days", days);
+		await (await gcc.$(by("rates-zone-toggle"))).click(); // the GCC zone closed again
+		await refuse();
+		await (await zone.$(by("rates-zone-toggle"))).click(); // closed
+		await (await zone.$(by("rates-zone-toggle"))).click(); // and opened again
+		assert((await refusal()) === "", `closing the zone takes it away: ${await refusal()}`);
+		assert(JSON.stringify((await draftNow()).rate_card) === before, "nothing of this is in the card");
 		if (!RATES.unknown) return "the sample has no code the ERP does not know";
 		await expectText("rates-problems", `Country code ${RATES.unknown} in zone Worldwide (Allowed Items)`, 15000);
 		await (await zone.$(`${by("rates-unknown-countries")} ${by("rates-country-remove")}`)).click();
@@ -3031,18 +3095,46 @@ try {
 		await openProfile(0);
 		const profile = await nth("rates-profile", 0);
 		const chips = () => profile.$$eval(`${by("rates-pattern-chip")} .sp-token-text`, (found) => found.map((chip) => chip.textContent).join("|"));
+		const refusal = () => profile.$eval(by("rates-pattern-problem"), (line) => line.textContent);
+		const refuse = async () => {
+			await typeInto(profile, "rates-pattern-input", "{F-CR-XYZ-*}");
+			await page.keyboard.press("Enter");
+			assert((await refusal()) === "Write the product code without braces, such as F-CR-XYZ-*.", await refusal());
+		};
 		assert((await chips()) === "F-*-PT|F-CR-PC-*", `the patterns: ${await chips()}`);
-		await typeInto(profile, "rates-pattern-input", "{F-CR-XYZ-*}");
-		await page.keyboard.press("Enter");
-		const refused = await profile.$eval(by("rates-pattern-problem"), (line) => line.textContent);
-		assert(refused === "Write the product code without braces, such as F-CR-XYZ-*.", refused);
+		// how a pattern is written is said once for the whole card, folded, and each pattern field points to it
+		assert((await page.$$(by("rates-pattern-help"))).length === 1, "the pattern help is there once");
+		assert(!(await page.$eval(by("rates-pattern-help"), (details) => details.open)), "and folded");
+		const second = await inCard("rates-profile", 1, "rates-profile-toggle");
+		const closed = (await second.evaluate((button) => button.getAttribute("aria-expanded"))) !== "true";
+		await openProfile(1);
+		const described = await page.$$eval(by("rates-pattern-input"), (inputs) =>
+			inputs.map((input) => input.getAttribute("aria-describedby").split(" ").includes("sp-pattern-help"))
+		);
+		assert(described.length >= 2 && described.every(Boolean), `each field is described by it: ${described}`);
+		assert((await page.$$(by("rates-pattern-help"))).length === 1, "two profiles open, the help is still there once");
+		if (closed) await second.click(); // as it was
+		await refuse();
 		assert(JSON.stringify((await draftNow()).rate_card) === before, "it is not added");
+		// a refusal goes once the profile is closed and opened again (M1) ...
+		await clickIn("rates-profile", 0, "rates-profile-toggle");
+		await clickIn("rates-profile", 0, "rates-profile-toggle");
+		assert((await refusal()) === "", `closing the profile takes it away: ${await refusal()}`);
+		// ... once another pattern is typed ...
+		await refuse();
+		await (await profile.$(by("rates-pattern-input"))).type("x");
+		assert((await refusal()) === "", `typing takes it away: ${await refusal()}`);
+		// ... and once a pattern is added or removed
+		await refuse();
 		await typeInto(profile, "rates-pattern-input", "F-TEST-*");
 		await page.keyboard.press("Enter");
 		assert((await chips()) === "F-*-PT|F-CR-PC-*|F-TEST-*", `added: ${await chips()}`);
-		assert((await profile.$eval(by("rates-pattern-problem"), (line) => line.textContent)) === "", "the refusal is gone");
+		assert((await refusal()) === "", "the refusal is gone");
+		await refuse();
 		await (await profile.$$(by("rates-pattern-remove")))[2].click();
 		assert((await chips()) === "F-*-PT|F-CR-PC-*", `and removed: ${await chips()}`);
+		assert((await refusal()) === "", `a removal takes it away: ${await refusal()}`);
+		await typeInto(profile, "rates-pattern-input", "");
 		// a new profile goes before the one that takes every item, which has to stay last
 		await page.click(by("rates-profile-add"));
 		assert(
@@ -3061,6 +3153,16 @@ try {
 		await (await inCard("rates-profile", 2, "rates-profile-up")).focus();
 		await page.keyboard.press("Enter");
 		assert(JSON.stringify((await draftNow()).rate_card) === before, "the card is as it was");
+		// the profile that takes every item moved above another: the server's sentence says why it has to be last
+		await clickIn("rates-profile", 3, "rates-profile-up");
+		assert((await names()) === "Dangerous Goods Petite|Refill Service|Rest of the World Allowed Items|Dangerous Goods", await names());
+		const last =
+			'Profile 3 ("Rest of the World Allowed Items") matches every item (a pattern of *) but is not the last profile, so the profiles after it would never be used.';
+		await expectText("rates-problems", last, 15000);
+		await clickIn("rates-profile", 2, "rates-profile-down");
+		assert(JSON.stringify((await draftNow()).rate_card) === before, "back last, the card is as it was");
+		await page.waitForFunction(() => document.querySelector('[data-testid="rates-problems"]')?.hidden, { timeout: 15000 });
+		return "the profile with * moved up: the server's sentence, then gone once it is last again";
 	});
 
 	await check("a zone is added to a profile, priced by weight a tier at a time, and deleted after a question; days are whole numbers", async () => {
@@ -3075,10 +3177,15 @@ try {
 		const zone = await zoneOfProfile(1, "New zone");
 		const said = (selector) => zone.$eval(selector, (found) => found.textContent);
 		assert((await said(".sp-tier-price .sp-problem")) === "Type the price, such as 35.", "one price at any weight, not typed yet");
-		// by weight: the one price becomes the first tier, from 0 up to a weight still to be typed
-		await (await zone.$(`${by("rates-zone-prices")}[value="weight"]`)).click();
+		await typeInto(zone, "rates-tier-price", "25");
 		let tiers = (await zonesNow())[3].tiers;
-		assert(JSON.stringify(tiers) === JSON.stringify([{ from: 0, price: null, to: null }]), `by weight: ${JSON.stringify(tiers)}`);
+		assert(JSON.stringify(tiers) === JSON.stringify([{ from: null, price: 25, to: null }]), `$25 at any weight: ${JSON.stringify(tiers)}`);
+		// by weight: the one price becomes the first tier, from 0 up to a weight still to be typed, its price kept (M10c)
+		await (await zone.$(`${by("rates-zone-prices")}[value="weight"]`)).click();
+		tiers = (await zonesNow())[3].tiers;
+		assert(JSON.stringify(tiers) === JSON.stringify([{ from: 0, price: 25, to: null }]), `by weight, the price kept: ${JSON.stringify(tiers)}`);
+		const kept = await zone.$eval(by("rates-tier-price"), (input) => input.value);
+		assert(kept === "25.00", `the field shows it: ${kept}`);
 		await typeInto(zone, "rates-tier-to", "2");
 		await typeInto(zone, "rates-tier-price", "40");
 		await (await zone.$(by("rates-tier-add"))).click();
@@ -3086,9 +3193,22 @@ try {
 		const two = [{ from: 0, price: 40, to: 2 }, { from: 2.01, price: null, to: null }];
 		assert(JSON.stringify(tiers) === JSON.stringify(two), `a tier from a hundredth of a pound on: ${JSON.stringify(tiers)}`);
 		assert((await focusedTestid()) === "rates-tier-to", `its upper weight has the focus: ${await focusedTestid()}`);
-		assert(await zone.$eval(`${by("rates-zone-prices")}[value="flat"]`, (radio) => radio.disabled), "one price waits for the other tiers to go");
+		// one price waits for the other tiers to go, and says so only as the hint of that choice (M8g)
+		const flat = await zone.evaluate((li) => {
+			const radio = li.querySelector('[data-testid="rates-zone-prices"][value="flat"]');
+			const hint = document.getElementById(radio.getAttribute("aria-describedby") || "");
+			const box = hint?.getBoundingClientRect();
+			return { disabled: radio.disabled, title: radio.closest("label").title, hint: hint?.textContent, seen: box ? box.width > 1 || box.height > 1 : null };
+		});
+		const why = "Remove the other weight tiers first.";
+		assert(flat.disabled && flat.title === why && flat.hint === why && flat.seen === false, `the hint of the choice: ${JSON.stringify(flat)}`);
 		await (await zone.$$(by("rates-tier-remove")))[1].click();
 		assert((await zonesNow())[3].tiers.length === 1, "the second tier is removed");
+		const back = await zone.evaluate((li) => {
+			const radio = li.querySelector('[data-testid="rates-zone-prices"][value="flat"]');
+			return { disabled: radio.disabled, title: radio.closest("label").hasAttribute("title"), described: radio.hasAttribute("aria-describedby") };
+		});
+		assert(!back.disabled && !back.title && !back.described, `one tier left, nothing to say: ${JSON.stringify(back)}`);
 		// days: a whole number from 0 to 60, or none
 		await typeInto(zone, "rates-zone-days", "abc");
 		assert((await said(".sp-czone-method .sp-problem")) === "Type a whole number of days from 0 to 60, or leave it empty.", "days refused");
@@ -3179,6 +3299,25 @@ try {
 		assert(state.policy.zones.map((zone) => zone.name).join() === "Not delivered", "with the zone Not delivered");
 	});
 
+	await check("right after Apply, before any reload, the Rates step no longer says the rates are in the draft (I1)", async () => {
+		await page.click(by("step-tab-rates"));
+		const seen = await page.evaluate(() => {
+			const panel = document.querySelector('[data-testid="rates-import"]');
+			return {
+				taken: panel.querySelector('[data-testid="rates-import-taken"]').childElementCount,
+				switch: Boolean(document.querySelector('[data-testid="rates-switch-source"]')),
+				said: panel.innerText.replace(/\s+/g, " ").trim(),
+			};
+		});
+		assert(seen.taken === 0 && !seen.switch, `nothing of Use these rates is said: ${seen.said}`);
+		assert(!seen.said.includes("in your draft now") && !seen.said.includes("Nothing is live"), `no word of a draft: ${seen.said}`);
+		assert((await expanded("rates-import-toggle")) === "false", "the draft holds the applied card: the import stays a line");
+		await expectText("rates-summary", RATES.after);
+		assert(!(await store()).dirty, "the draft is the policy as applied");
+		await page.evaluate(() => document.activeElement?.blur());
+		return tallShot("wizard-rates-after-apply");
+	});
+
 	await check("after a reload the card is the one applied, the draft is clean, and the import is one line", async () => {
 		await open();
 		await page.click(by("step-tab-rates"));
@@ -3197,22 +3336,34 @@ try {
 		await page.click(by("step-tab-test"));
 		const intro = await page.$eval("#sp-panel-test .sp-step-intro", (line) => line.textContent);
 		assert(intro === "These checks use the saved policy and the live site, not your draft.", intro);
+		// beside checks of what is live, the tape says that it prices the draft (M8a, ruling P93)
+		const tapeTitle = () => page.$eval("#sp-tape-title", (title) => title.textContent);
+		assert((await tapeTitle()) === "Try an order with your draft", `the tape beside the Test tab: ${await tapeTitle()}`);
 		tested = 0;
 		await intercept(true);
 		try {
 			holdTest = 2500; // a run takes a while: the spinner shows, and a second press sends nothing
 			await page.click(by("test-run"));
 			await pause(400);
-			const running = await page.evaluate(() => ({
-				disabled: document.querySelector('[data-testid="test-run"]').getAttribute("aria-disabled"),
-				spinner: !document.querySelector(".sp-spinner").hidden,
-				label: document.querySelector(".sp-spinner").getAttribute("aria-label"),
-				turning: getComputedStyle(document.querySelector(".sp-spinner")).animationName,
-				status: document.querySelector(".sp-test-status").textContent,
-			}));
+			const running = await page.evaluate(() => {
+				const verdict = document.querySelector('[data-testid="test-verdict"]');
+				return {
+					disabled: document.querySelector('[data-testid="test-run"]').getAttribute("aria-disabled"),
+					spinner: !document.querySelector(".sp-spinner").hidden,
+					label: document.querySelector(".sp-spinner").getAttribute("aria-label"),
+					turning: getComputedStyle(document.querySelector(".sp-spinner")).animationName,
+					status: document.querySelector(".sp-test-status").textContent,
+					// the verdict's live region is there before its sentence comes, empty and not hidden (M2)
+					verdict: { live: verdict?.getAttribute("aria-live"), said: verdict?.textContent, hidden: Boolean(verdict?.closest("[hidden]")) },
+				};
+			});
 			assert(running.disabled === "true" && running.spinner && running.label === "Running the checks", JSON.stringify(running));
 			assert(running.turning !== "none", `the desk's spinner turns: ${running.turning}`);
 			assert(running.status === "Running the checks. A run takes 15 to 45 seconds, sometimes more.", running.status);
+			assert(
+				running.verdict.live === "polite" && running.verdict.said === "" && !running.verdict.hidden,
+				`the verdict waits in its live region: ${JSON.stringify(running.verdict)}`
+			);
 			await page.click(by("test-run"));
 			await page.waitForFunction(() => document.querySelector('[data-testid="test-verdict"]')?.textContent.trim(), { timeout: 90000 });
 		} finally {
@@ -3236,6 +3387,7 @@ try {
 		assert(/^\d[\d,]* ms$/.test(erp.time), `its time: ${erp.time}`);
 		assert(carrier.status === "Passed" && carrier.summary.startsWith("The carrier returned"), JSON.stringify(carrier));
 		assert(website.status === "Not asked" && website.summary.startsWith("The website was not asked."), JSON.stringify(website));
+		assert(website.time === "", `a check that was not asked shows no time (M8e): ${website.time}`);
 		assert(cards.every((card) => card.folded), "each check's details are folded");
 		const verdict = await textOf("test-verdict");
 		const want =
@@ -3267,6 +3419,9 @@ try {
 		await theme("dark");
 		files.push(await tallShot("wizard-test-dark"));
 		await theme("light");
+		// beside any other step the tape has its own title again
+		await page.click(by("step-tab-rates"));
+		assert((await tapeTitle()) === "Try an order", `the tape beside the Rates step: ${await tapeTitle()}`);
 		return files.join(", ");
 	});
 
@@ -3364,6 +3519,34 @@ const HOSTILE_RATES = [
 	"Rest of the World Allowed Items,Worldwide,1,US - United States,Express (5 days),,,40",
 ].join("\n");
 
+// The names of countries as the page has them from the ERP.
+const countryNames = (codes) =>
+	page.evaluate((codes) => {
+		const names = new Map(frappe.pages["shipping-policy-wizard"].wizard.state.countries.map((country) => [country.code, country.name]));
+		return codes.map((code) => names.get(code) || code);
+	}, codes);
+
+await check("a zone named Not delivered that is not Not shipped takes the countries, and the panel says customers there are still priced (M3)", async () => {
+	const draft = { ...original, zones: [zoneOf("Not delivered", ["FR"])] };
+	await openWithStored({ version, draft, step: "rates" });
+	await paste("rates-paste-config", HOSTILE_RATES);
+	await paste("rates-paste-notdelivered", "ISO-2,Country\nCU,Cuba\nKP,North Korea\n");
+	await page.click(by("rates-preview"));
+	await expectText("rates-import-read", "The shipping rates hold 2 profiles, 2 zones, 2 weight tiers and 2 countries.", 30000);
+	// names that hold a comma are listed apart by semicolons (M8c)
+	const names = await countryNames(["CU", "KP"]);
+	await expectText("rates-import-not-delivered", `Not delivered 2 countries: ${names.join("; ")}.`);
+	await page.click(by("rates-import-apply"));
+	await expectText("rates-import-taken", "The zone “Not delivered” now lists 2 countries not delivered to.");
+	await expectText(
+		"rates-import-priced",
+		"It is not marked Not shipped, so customers there are priced as in any other zone: turn on Not shipped in the Zones step."
+	);
+	const zone = (await draftNow()).zones[0];
+	assert(zone.countries.join() === "CU,KP" && !zone.not_shipped && zone.enabled, `its countries replaced, nothing else: ${JSON.stringify(zone)}`);
+	return names.join("; ");
+});
+
 await check("the countries not delivered leave out one already in another zone that is on, and say which", async () => {
 	await openWithStored({ version, draft: { ...original, zones: [zoneOf("Closed", ["RU"])] }, step: "rates" });
 	await paste("rates-paste-config", HOSTILE_RATES);
@@ -3371,16 +3554,20 @@ await check("the countries not delivered leave out one already in another zone t
 	await page.click(by("rates-preview"));
 	await expectText("rates-import-read", "The shipping rates hold 2 profiles, 2 zones, 2 weight tiers and 2 countries.", 30000);
 	await page.click(by("rates-import-apply"));
-	await expectText("rates-import-conflict", "Russian Federation is already in the zone Closed, so it was not added to Not delivered.");
+	await expectText("rates-import-conflict", "Russian Federation is already in the zone “Closed”, so it was not added to “Not delivered”.");
 	const zones = (await draftNow()).zones;
 	assert(zones[0].countries.join() === "RU", "it stays where it is");
 	const made = zones.find((zone) => zone.name === "Not delivered");
 	assert(made?.countries.join() === "CU" && made.not_shipped, `the zone made: ${JSON.stringify(made)}`);
-	await expectText("rates-import-taken", "The new Not shipped zone Not delivered lists 1 country not delivered to.");
+	await expectText("rates-import-taken", "The new Not shipped zone “Not delivered” lists 1 country not delivered to.");
+	assert(!(await page.$(by("rates-import-priced"))), "a zone made Not shipped needs no word about prices");
 });
 
 await check("a card pasted with a hostile profile name and a zone named Gulf & <b>Co</b> reads as typed: the preview, the card and the Review", async () => {
-	// read again: the draft has a card now, so the page asks before it replaces it
+	// read again: the draft has a card now, so the page asks before it replaces it. Use these rates folded the
+	// import to its title line, so it is opened first
+	assert((await expanded("rates-import-toggle")) === "false", "the import folded after Use these rates");
+	await page.click(by("rates-import-toggle"));
 	await page.click(by("rates-preview"));
 	await expectText("rates-import-preview", "They replace the rate card in your draft, which has 2 profiles.", 30000);
 	await page.click(`${by("rates-import-notes")} summary`);
@@ -3413,6 +3600,75 @@ await check("a card pasted with a hostile profile name and a zone named Gulf & <
 	const file = await tallShot("wizard-rates-hostile");
 	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
 	return file;
+});
+
+await check("right after the draft is discarded, the Rates step says nothing of the rates that were in it, and the import is open (I1)", async () => {
+	// the draft restored above, with the card Use these rates put into it, is still on the page
+	await page.click(by("step-tab-rates"));
+	await expectText("rates-import-taken", "These rates are in your draft now.");
+	await page.click(by("step-tab-review"));
+	await page.click(by("draft-discard"));
+	await answerDialog(true);
+	await page.waitForFunction((selector) => document.querySelector(selector)?.hidden, {}, by("draft-banner"));
+	await page.click(by("step-tab-rates"));
+	const seen = await page.evaluate(() => ({
+		taken: document.querySelector('[data-testid="rates-import-taken"]').childElementCount,
+		switch: Boolean(document.querySelector('[data-testid="rates-switch-source"]')),
+		card: document.querySelector('[data-testid="rates-card"]').hidden,
+	}));
+	assert(seen.taken === 0 && !seen.switch, `nothing of Use these rates is said: ${JSON.stringify(seen)}`);
+	assert(seen.card, "the saved policy has no card to show");
+	assert((await expanded("rates-import-toggle")) === "true", "no card left: the import is open again");
+	assert(!(await store()).dirty, "the draft is the saved policy");
+	await page.evaluate(() => document.activeElement?.blur());
+	return tallShot("wizard-rates-after-discard");
+});
+
+await check("a name of 300 characters from the file is shown cut to 140, the whole of it in a title, and kept whole in the draft (M7)", async () => {
+	const long = Array(60).fill("Gulf").join(" "); // 299 characters
+	const zone = Array(40).fill("Coast").join(" "); // 239 characters
+	const cut = (name) => `${name.slice(0, 139)}…`;
+	const rates = [HOSTILE_RATES.split("\n")[0], `${long},${zone},1,AE - United Arab Emirates,Express (2 days),,,25`].join("\n");
+	await go(NEUTRAL);
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	await open();
+	await page.click(by("step-tab-rates"));
+	await paste("rates-paste-config", rates);
+	await page.click(by("rates-preview"));
+	await expectText("rates-import-read", "The shipping rates hold 1 profile", 30000);
+	await page.click(by("rates-import-apply"));
+	await expectText("rates-import-taken", "These rates are in your draft now.");
+	assert((await draftNow()).rate_card.profiles[0].name === long, "the draft keeps the name whole");
+	await openProfile(0);
+	const profile = await nth("rates-profile", 0);
+	const line = await profile.evaluate((li) => {
+		const title = li.querySelector(".sp-profile-title");
+		const zone = li.querySelector(".sp-czone-title");
+		return { text: title.textContent, title: title.title, label: li.getAttribute("aria-label"), zone: zone.textContent, zone_title: zone.title };
+	});
+	assert(line.text === cut(long) && line.text.length === 140, `the profile's line: ${line.text.length} characters`);
+	assert(line.title === long, "the whole name is its title");
+	assert(line.label === `Profile 1: ${cut(long)}`, `its name for assistive technology: ${line.label.length} characters`);
+	assert(line.zone === cut(zone) && line.zone_title === zone, `the zone's line: ${line.zone.length} characters`);
+	assert((await profile.$eval(by("rates-profile-name"), (input) => input.value)) === long, "the name field holds it whole, to be fixed");
+	await page.click(`${by("price-source")}[value="rate_card"]`);
+	await page.click(by("step-tab-review"));
+	await page.waitForFunction(() => document.querySelector('[data-testid="review-card-profile"]'), { timeout: 15000 });
+	const review = await page.$eval(by("review-card-profile"), (article) => {
+		const name = article.querySelector("h4 span:last-child");
+		return { text: name.textContent, title: name.title, zone: article.querySelector("li").textContent };
+	});
+	assert(review.text === cut(long) && review.title === long, `the Review's card: ${review.text.length} characters`);
+	assert(review.zone.startsWith(`${cut(zone)}: United Arab Emirates.`), `its zone: ${review.zone.slice(0, 160)}`);
+	await expectText("review-diff", "Rate card profiles added:", 15000);
+	const added = await page.$$eval(`${by("review-diff")} .sp-change`, (lines) =>
+		lines
+			.map((line) => ({ text: line.innerText.replace(/\s+/g, " ").trim(), title: line.querySelector(".sp-change-text").title }))
+			.find((line) => line.text.startsWith("Rate card profiles added"))
+	);
+	assert(added?.text === `Rate card profiles added: ${cut(long)}` && added.title === long, `what will change: ${added?.text.length} characters`);
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	return "the profile, its zone, the Review's card and what will change: 140 characters each, whole in the title";
 });
 
 await check("hostile zone and item set names are shown as text in Zones and Rules", async () => {
