@@ -5,7 +5,7 @@ code. A zone saved disabled is out of the live policy and always saves, whatever
 switching a zone off always works; switching it on again checks them. A country can be in only one enabled
 zone, and at most one enabled zone is Everywhere else. Zone names and country names are typed by people, so
 they are escaped before they go into a message. The fixed amount is kept to the cent, and an amount that is
-not a finite number is refused, never rounded to 0.
+not a number (NaN, an infinity, text such as "abc") is refused, never rounded to 0.
 """
 
 import frappe
@@ -14,7 +14,7 @@ from frappe.model.document import Document
 from frappe.utils import cint, escape_html
 
 from dsi_catalogue.shipping_engine import normalize_country
-from dsi_catalogue.shipping_policy_data import is_not_finite
+from dsi_catalogue.shipping_policy_data import is_not_a_number
 
 # The fields `round_floats_in` rounds.
 _ROUNDED = {"fieldtype": ["in", ["Currency", "Float", "Percent"]]}
@@ -27,7 +27,7 @@ def _bold(text):
 class ShippingZone(Document):
 	def validate(self):
 		self.zone_name = (self.zone_name or "").strip()
-		self.check_numbers_are_finite()
+		self.check_numbers_are_numbers()
 		self.round_floats_in(self)  # the fallback amount as it is stored, to the cent
 		self.check_everywhere_else_lists_no_countries()
 		if cint(self.enabled):  # read as the database will keep it
@@ -41,12 +41,12 @@ class ShippingZone(Document):
 		self.check_country_is_in_one_enabled_zone()
 		self.check_one_everywhere_else_zone()
 
-	def check_numbers_are_finite(self):
-		"""Rounded to the cent, NaN or an infinity would become 0 without a word (Frappe's `flt` reads a
-		number it cannot round as 0), and a fixed amount of 0.00 is free delivery. Refused before anything is
-		rounded, enabled or not."""
+	def check_numbers_are_numbers(self):
+		"""Rounded to the cent, NaN, an infinity or text that is not a number would become 0 without a word
+		(Frappe's `flt` reads what it cannot read or round as 0), and a fixed amount of 0.00 is free delivery.
+		Refused before anything is rounded, enabled or not (`is_not_a_number`)."""
 		for field in self.meta.get("fields", _ROUNDED):
-			if is_not_finite(self.get(field.fieldname)):
+			if is_not_a_number(self.get(field.fieldname)):
 				frappe.throw(_("{0} is not a number.").format(_bold(_(field.label))))
 
 	def check_everywhere_else_lists_no_countries(self):

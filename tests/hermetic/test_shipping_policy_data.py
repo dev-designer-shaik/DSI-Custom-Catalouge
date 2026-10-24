@@ -2438,20 +2438,23 @@ def test_read_json_reads_every_number_a_float_can_hold():
 			read_json(text)
 
 
-def test_a_number_frappe_would_round_to_zero_without_a_word_is_not_finite():
-	"""Frappe rounds a Float field with `flt`, which reads NaN, an infinity or an integer too big for a float
-	as 0, whether it comes as a number or as text (commas aside). Those are what `is_not_finite` finds, so
-	that the doctypes refuse them before they round. A finite number, and what Frappe does not read as a
-	number at all, are not."""
-	not_finite = shipping_policy_data.is_not_finite
+def test_what_frappe_would_keep_as_zero_without_a_word_is_not_a_number():
+	"""Frappe rounds a Float field with `flt`, which reads a value as `float` does (commas taken out of text)
+	and keeps 0, without a word, for what it cannot read or cannot round: NaN, an infinity, an integer too
+	big for a float, and text that is not a number. Those are what `is_not_a_number` finds, so that the
+	doctypes refuse them before they round. A number, text holding one ("1,000.5"), blank text and None (a
+	field left empty: 0, or no limit) are not refused."""
+	not_a_number = shipping_policy_data.is_not_a_number
 	for value in (math.nan, math.inf, -math.inf, "NaN", " nan ", "-Infinity", "1e400", "1,000e400"):
-		assert not_finite(value), value
+		assert not_a_number(value), value
 	for value in (Decimal("NaN"), Decimal("-Infinity"), 10**400, -(10**400)):
-		assert not_finite(value), value
-	for value in (0, 0.0, -1.5, 1e308, 10**300, Decimal("1.5"), "12.5", "1,234.5", True):
-		assert not not_finite(value), value
-	for value in (None, "", "abc", [], {}, object()):
-		assert not not_finite(value), value
+		assert not_a_number(value), value
+	for value in ("abc", "12abc", "1 000", "--1", "$5", "five", "1.2.3"):
+		assert not_a_number(value), value
+	for value in (0, 0.0, -1.5, 1e308, 10**300, Decimal("1.5"), "12.5", " 12.5 ", "1,234.5", "1,000.5", True):
+		assert not not_a_number(value), value
+	for value in (None, "", "   ", "\t\n"):
+		assert not not_a_number(value), value
 
 
 def test_a_card_of_numbers_json_can_hold_is_written_as_it_always_was():

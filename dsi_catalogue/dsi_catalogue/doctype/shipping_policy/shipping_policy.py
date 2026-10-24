@@ -12,8 +12,9 @@ as they are), so switching it off, and editing it while it is off, always work, 
 stored card has gone bad. Every road back on is checked: saving the policy on is refused until the problems
 are fixed, and the wizard checks its whole draft before it writes and the written policy after.
 
-On or off, a number that is not finite (NaN, an infinity, an integer too big for a float) is refused first,
-naming its field: rounded, it would become 0 without a word, a free fixed amount or "no limit".
+On or off, a value that is not a number (NaN, an infinity, an integer too big for a float, text such as
+"abc") is refused first, naming its field: rounded, it would become 0 without a word, a free fixed amount or
+"no limit".
 
 The rate card is stored on it as JSON text, and the text is read first: the loader reads text that is not
 JSON as no card at all, which would send the person to the wrong sentence ("there is no rate card yet").
@@ -27,7 +28,7 @@ from frappe.utils import cint, escape_html
 
 from dsi_catalogue.shipping_engine import validate_policy
 from dsi_catalogue.shipping_policy import load_policy
-from dsi_catalogue.shipping_policy_data import is_not_finite, read_json
+from dsi_catalogue.shipping_policy_data import is_not_a_number, read_json
 
 NOT_JSON = "The stored rate card is not valid JSON. Import the rates again in the wizard."
 NOT_A_CARD = (
@@ -48,12 +49,13 @@ def _refuse(problems):
 	)
 
 
-def _not_finite(doc, prefix="") -> list[str]:
-	"""A sentence for each field of `doc` that `round_floats_in` would round from NaN or an infinity to 0."""
+def _not_numbers(doc, prefix="") -> list[str]:
+	"""A sentence for each field of `doc` that `round_floats_in` would turn into 0 without a word: one that
+	holds NaN, an infinity or text that is not a number (`is_not_a_number`)."""
 	return [
 		f'{prefix}"{field.label}" is not a number.'
 		for field in doc.meta.get("fields", _ROUNDED)
-		if is_not_finite(doc.get(field.fieldname))
+		if is_not_a_number(doc.get(field.fieldname))
 	]
 
 
@@ -79,11 +81,11 @@ def stored_card_problem(value) -> str | None:
 
 class ShippingPolicy(Document):
 	def validate(self):
-		not_finite = _not_finite(self)
+		not_numbers = _not_numbers(self)
 		for number, rule in enumerate(self.rules, start=1):
-			not_finite += _not_finite(rule, f"Rule {number}: ")
-		if not_finite:
-			_refuse(not_finite)
+			not_numbers += _not_numbers(rule, f"Rule {number}: ")
+		if not_numbers:
+			_refuse(not_numbers)
 		self.round_floats_in(self)
 		for rule in self.rules:
 			self.round_floats_in(rule)

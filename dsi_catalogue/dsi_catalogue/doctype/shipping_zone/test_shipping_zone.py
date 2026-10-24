@@ -213,17 +213,26 @@ class TestShippingZone(ShippingPolicyTestCase):
 		self.assertEqual(gulf.fallback_amount, 12.35)
 		self.assertEqual(frappe.db.get_value("Shipping Zone", "Gulf", "fallback_amount"), 12.35)
 
-	def test_a_fallback_amount_that_is_not_a_finite_number_is_refused_not_kept_as_zero(self):
+	def test_a_fallback_amount_that_is_not_a_number_is_refused_not_kept_as_zero(self):
 		# Rounded to its two decimals, NaN or an infinity would become 0 without a word (Frappe's `flt` reads
-		# a number it cannot round as 0), and a fixed amount of 0.00 is free delivery: it is refused first, in
-		# a zone that is on or off, as is a number too big to be held at all.
-		amounts = (math.nan, math.inf, -math.inf, "NaN", "-Infinity", 10**400)
+		# a number it cannot round as 0), and so would text that is not a number: a fixed amount of 0.00 is
+		# free delivery. It is refused first, in a zone that is on or off, as is a number too big to be held.
+		amounts = (math.nan, math.inf, -math.inf, "NaN", "-Infinity", 10**400, "abc")
+		fixed = {"fallback_method": "Charge a fixed amount"}
 		for number, amount in enumerate(amounts, start=1):
 			for enabled in (1, 0):
 				with self.subTest(amount=amount, enabled=enabled):
-					fallback = {"fallback_method": "Charge a fixed amount", "fallback_amount": amount}
-					gulf = zone(f"Gulf {number} {enabled}", ["BH"], enabled=enabled, **fallback)
+					gulf = zone(
+						f"Gulf {number} {enabled}", ["BH"], enabled=enabled, fallback_amount=amount, **fixed
+					)
 					with self.assertRaises(frappe.ValidationError) as caught:
 						gulf.insert()
 					self.assertEqual(str(caught.exception), f"{bold('Fixed amount (USD)')} is not a number.")
 		self.assertEqual(frappe.db.count("Shipping Zone"), 0, "nothing was saved")
+		# Text Frappe reads as a number is one (commas aside), and a field left blank is 0, as ever.
+		for typed, kept in (("1,000.5", 1000.5), ("", 0.0)):
+			with self.subTest(typed=typed):
+				zone(f"Typed {kept}", ["BH"], enabled=0, fallback_amount=typed, **fixed).insert()
+				self.assertEqual(
+					frappe.db.get_value("Shipping Zone", f"Typed {kept}", "fallback_amount"), kept
+				)

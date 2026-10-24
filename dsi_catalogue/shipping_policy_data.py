@@ -283,13 +283,21 @@ def _float(value):
 		return value
 
 
-def is_not_finite(value) -> bool:
-	"""Is `value` what Frappe reads as a number (a number, or text holding one, commas aside) that is NaN, an
-	infinity or too big for a float? Rounded to the decimals of its field such a number becomes 0 without a
-	word (Frappe's `flt` reads a number it cannot round as 0), so the doctypes refuse it before they round.
-	What Frappe does not read as a number at all (None, other text) is not one of these."""
+def is_not_a_number(value) -> bool:
+	"""Would Frappe keep `value`, given for a Float field, as 0 without a word? Frappe's `flt` reads it as
+	`float` does, with the commas taken out of text, and keeps 0 for what it cannot read or cannot round to
+	the field's decimals. So these are not numbers: NaN, an infinity or an integer too big for a float, as a
+	number or as text, and text that is not blank and not a number ("abc"). The doctypes refuse them before
+	they round. Text holding a number ("1,000.5"), blank text and None (a field left empty: 0, or no limit)
+	are not refused; nor is any other value, which this does not look at."""
 	if isinstance(value, str):
 		value = value.replace(",", "")
+		if not value.strip():
+			return False
+		try:
+			return not math.isfinite(float(value))
+		except ValueError:  # text that is not a number
+			return True
 	try:
 		return not math.isfinite(float(value))
 	except OverflowError:  # an integer too big for a float
