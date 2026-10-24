@@ -503,7 +503,7 @@ def _log_formula_error(policy, result, country_code):
 		named = f' ("{label}")' if label else ""
 		number = index + 1 if isinstance(index, int) else "?"
 		text = (
-			f"Rule {number}{named} could not be priced, so the zone's fallback applied.\n"
+			f"Rule {number}{named} could not be priced, so the order went to the zone's fallback.\n"
 			f"Formula: {rule.get('formula') or ''}\n"
 			f"Zone: {result.get('zone')}\n"
 			f"Country: {normalize_country(country_code)}"
@@ -565,8 +565,10 @@ def price_delivery(country_code=None, items=None, boxes=None, quotes=None, langu
 	except InputError as error:
 		frappe.throw(str(error), frappe.ValidationError)
 	result = resolve(policy, order)
-	# A rule is named with no offer only when its formula failed and the fallback, the rate card, could not
-	# price the order: the answer then carries the card's reason, not "formula_error".
+	# A rule whose formula failed is named in the answer, whose reason is then "formula_error", unless the
+	# fallback was the rate card and the card could not price the order either: the answer then carries the
+	# card's reason, and a rule named with no offer is what shows a formula failed. (A rule that priced the
+	# order always has offers.)
 	if result.get("reason") == "formula_error" or (
 		result.get("rule") is not None and not result.get("offered")
 	):

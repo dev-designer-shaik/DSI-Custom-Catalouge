@@ -800,7 +800,9 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 				(refused["offered"], refused["reason"], refused["offers"]), (False, "too_heavy", [])
 			)
 			[entry] = new_entries()
-			self.assertIn('Rule 1 ("Weight formula") could not be priced', entry["error"])
+			# It went to the fallback, which priced nothing: the entry does not say the fallback applied.
+			said = 'Rule 1 ("Weight formula") could not be priced, so the order went to the zone\'s fallback.'
+			self.assertEqual(entry["error"].split("\n")[0], said)
 			self.assertEqual(
 				(entry["reference_doctype"], entry["reference_name"]), ("Shipping Policy Rule", rule_row)
 			)
