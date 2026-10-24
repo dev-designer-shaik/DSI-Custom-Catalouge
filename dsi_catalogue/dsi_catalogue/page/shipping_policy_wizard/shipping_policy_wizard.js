@@ -14,6 +14,7 @@
 //	wizard_core.js            dsi_catalogue.ShippingPolicyWizard: the store, the regions, the server calls
 //	wizard_chips.js           what the Zones and Rules steps share: names as the ERP compares them, removable
 //	                          tokens, a polite announcer, reading a desk list
+//	wizard_rule_words.js      the words of a rule (sp.rule_words, sp.rule_text...): the Rules and Review steps'
 //	wizard_itemset_editor.js  dsi_catalogue.ItemSetEditor: an item set's name, groups and items (Rules step)
 //	wizard_rule_card.js       one rule of the Rules step as a card: its sentence of chips, price and editors
 //	step_<id>.js              the body of each tab, one file each, step_<id> = {render, refresh, priced}:
@@ -87,6 +88,7 @@ frappe.provide("dsi_catalogue");
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_tape.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_core.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_chips.js" %}
+	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_words.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_itemset_editor.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_card.js" %}
 	{% include "dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_zones.js" %}

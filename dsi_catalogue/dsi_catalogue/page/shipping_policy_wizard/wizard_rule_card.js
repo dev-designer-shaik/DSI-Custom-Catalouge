@@ -158,21 +158,19 @@ class RuleCard {
 		this.down.setAttribute("aria-label", __("Move rule {0} down", [place]));
 		this.delete.setAttribute("aria-label", __("Delete rule {0}", [place]));
 
-		const zone = String(rule.zone ?? "");
-		this.chips.zone.textContent = zone || __("choose a zone");
-		this.chips.zone.setAttribute("aria-label", __("Zone: {0}", [this.chips.zone.textContent]));
-		const items = rule.item_set ? String(rule.item_set) : __("every item");
-		this.chips.items.replaceChildren(items, el("span", { class: "sp-asterisk", "aria-hidden": "true" }, "*"));
-		this.chips.items.setAttribute("aria-label", __("Items: {0}", [items]));
-		const charge = charge_words(rule);
-		const rounded = Boolean(rule.round_up) && rule.method !== "free";
-		this.chips.charge.textContent = charge;
+		// the sentence's words are sp.rule_words's (wizard_rule_words.js), which the Review step prints too
+		const words = sp.rule_words(rule);
+		this.chips.zone.textContent = words.zone;
+		this.chips.zone.setAttribute("aria-label", __("Zone: {0}", [words.zone]));
+		this.chips.items.replaceChildren(words.items, el("span", { class: "sp-asterisk", "aria-hidden": "true" }, "*"));
+		this.chips.items.setAttribute("aria-label", __("Items: {0}", [words.items]));
+		this.chips.charge.textContent = words.charge;
 		this.chips.charge.setAttribute(
 			"aria-label",
-			rounded ? __("Charge: {0}, rounded up", [charge]) : __("Charge: {0}", [charge])
+			words.rounded ? __("Charge: {0}, rounded up", [words.charge]) : __("Charge: {0}", [words.charge])
 		);
-		this.rounded.hidden = !rounded;
-		const limits = limits_words(rule);
+		this.rounded.hidden = !words.rounded;
+		const limits = words.limits || __("no limits");
 		this.chips.limits.textContent = limits;
 		this.chips.limits.setAttribute("aria-label", __("Only when: {0}", [limits]));
 
@@ -359,7 +357,7 @@ class RuleCard {
 			options.push({
 				value: name,
 				text: name || __("A set without a name"),
-				note: set_summary(set),
+				note: sp.set_summary(set),
 				after: [
 					link("itemset-edit", __("Edit"), __("Edit the item set {0}", [name]), () => this.edit_set(set)),
 					link("itemset-delete", __("Delete"), __("Delete the item set {0}", [name]), () => this.delete_set(set)),
@@ -545,7 +543,7 @@ class RuleCard {
 			for (const input of inputs) {
 				if (document.activeElement === input) continue;
 				const key = input.dataset.key;
-				input.value = key in typed ? typed[key] : limit_of(rule[key]) ? String(rule[key]) : "";
+				input.value = key in typed ? typed[key] : sp.limit_of(rule[key]) ? String(rule[key]) : "";
 			}
 			problems.replaceChildren(...this.limit_problems().map((text) => el("li", {}, text)));
 		};

@@ -13,7 +13,7 @@
 //
 // This file is the list (RulesView: the cards in their order, adding, moving, deleting, the open editor,
 // checking formulas, what is wrong with a rule); wizard_rule_card.js is one rule's card (RuleCard) and its
-// editors.
+// editors; wizard_rule_words.js has the words both use (sp.rule_words and its kin, CHARGES, LIMITS).
 //
 // What the body shows that is not the draft lives in wizard.ui.rules, because the panel is emptied on every
 // tab switch: `open` ({rule, chip}, the editor that is open), `set_editor` (the item set being edited, see
@@ -24,73 +24,7 @@ const ASTERISK = __(
 	"* A rule for selected items applies only when every item in the order is one of them. A rule for every item applies to every order."
 );
 
-// What a formula may use: VARIABLES and FUNCTIONS of shipping_formula.py, word for word (a hermetic test holds
-// these two lists to the server's).
-const FORMULA_VARIABLES = ["carrier_price", "order_value", "weight_kg", "volume_l", "boxes", "item_count"];
-const FORMULA_FUNCTIONS = ["min", "max", "round", "ceil", "floor", "abs"];
 const FORMULA_CHECK_DELAY = 300; // ms after the last key before the server checks a formula
-
-// The three ways a rule charges, and the limits of its "Only when" row: the field's label (with its unit),
-// the word for it in a sentence, the rule's two keys, and how a value reads.
-const CHARGES = [
-	{ method: "carrier_price", label: __("The carrier's price") },
-	{ method: "free", label: __("Free") },
-	{ method: "formula", label: __("A custom formula") },
-];
-const LIMITS = [
-	{
-		label: __("Order value ($)"),
-		noun: __("order value"),
-		low: "min_order_value",
-		high: "max_order_value",
-		show: (value) => sp.money(value),
-	},
-	{
-		label: __("Weight (kg)"),
-		noun: __("weight"),
-		low: "min_weight_kg",
-		high: "max_weight_kg",
-		show: (value) => __("{0} kg", [sp.measure(value)]),
-	},
-	{
-		label: __("Volume (litres)"),
-		noun: __("volume"),
-		low: "min_volume_l",
-		high: "max_volume_l",
-		show: (value) => __("{0} litres", [sp.measure(value)]),
-	},
-];
-
-// A limit as the engine reads it: 0, blank or not a number is no limit.
-function limit_of(value) {
-	return sp.is_number(value) && value > 0 ? value : 0;
-}
-
-function charge_words(rule) {
-	if (rule.method === "free") return __("nothing (free)");
-	if (rule.method === "formula") return String(rule.formula ?? "").trim() || __("a formula");
-	return __("the carrier's price");
-}
-
-function limits_words(rule) {
-	const said = [];
-	for (const band of LIMITS) {
-		const low = limit_of(rule[band.low]);
-		const high = limit_of(rule[band.high]);
-		if (low && high) said.push(__("{0} from {1} up to {2}", [band.noun, band.show(low), band.show(high)]));
-		else if (low) said.push(__("{0} from {1}", [band.noun, band.show(low)]));
-		else if (high) said.push(__("{0} up to {1}", [band.noun, band.show(high)]));
-	}
-	return said.length ? sp.and_list(said) : __("no limits");
-}
-
-function set_summary(set) {
-	const groups = Array.isArray(set.item_groups) ? set.item_groups.map(String) : [];
-	const items = Array.isArray(set.items) ? set.items.length : 0;
-	const said = groups.length ? [groups.join(", ")] : [];
-	if (items) said.push(items === 1 ? __("1 item") : __("{0} items", [items]));
-	return said.join("; ");
-}
 
 class RulesView {
 	constructor(wizard, panel) {
@@ -412,8 +346,8 @@ class RulesView {
 			else if (error && card.chip !== "charge") said.push(__("The formula cannot be used: {0}", [error]));
 		}
 		for (const band of LIMITS) {
-			const low = limit_of(rule[band.low]);
-			const high = limit_of(rule[band.high]);
+			const low = sp.limit_of(rule[band.low]);
+			const high = sp.limit_of(rule[band.high]);
 			if (low && high && low >= high) {
 				said.push(
 					__("The limits on the {0} are the wrong way round: “up to” has to be higher than “from”.", [band.noun])

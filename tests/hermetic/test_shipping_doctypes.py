@@ -766,6 +766,37 @@ def test_names_are_compared_as_the_erp_compares_them(tmp_path):
 	}
 
 
+@needs_node
+def test_a_rule_reads_as_one_sentence_for_any_step(tmp_path):
+	"""sp.rule_words and sp.rule_text (wizard_rule_words.js) give a rule's words as plain text: the Rules step's
+	cards show them in chips, and the Review step prints them."""
+	rules = example()["rules"]
+	limited = {**rules[2], "min_order_value": 100, "max_order_value": 500, "max_weight_kg": 2.5}
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		const rules = {json.dumps([*rules, limited, {**rules[0], "zone": "", "method": "formula"}])};
+		return {{ texts: rules.map((rule) => sp.rule_text(rule)), words: sp.rule_words(rules[4]) }};
+		""",
+	)
+	assert got["texts"] == [
+		"In Bahrain for every item charge nothing (free)",
+		"In GCC for Watches charge nothing (free)",
+		"In GCC for every item charge the carrier's price, rounded up",
+		"In Rest of world for every item charge max(carrier_price * 1.1, 45), rounded up",
+		"In GCC for every item charge the carrier's price, rounded up "
+		"(only when: order value from $100.00 up to $500.00 and weight up to 2.5 kg)",
+		"In choose a zone for every item charge a formula",
+	]
+	assert got["words"] == {
+		"zone": "GCC",
+		"items": "every item",
+		"charge": "the carrier's price",
+		"rounded": True,
+		"limits": "order value from $100.00 up to $500.00 and weight up to 2.5 kg",
+	}
+
+
 def test_the_rules_step_shows_the_asterisk_sentence_word_for_word():
 	"""The plan's Global Constraints: the sentence is on the wizard's Rules step, verbatim."""
 	assert f'"{ASTERISK}"' in (PAGE_DIR / "step_rules.js").read_text(encoding="utf-8")
@@ -775,11 +806,11 @@ def test_the_formula_names_the_rules_step_lists_are_the_servers():
 	"""The line under a rule's formula names what a formula may use: a copy of shipping_formula's two lists."""
 	from dsi_catalogue.shipping_formula import FUNCTIONS, VARIABLES
 
-	rules = (PAGE_DIR / "step_rules.js").read_text(encoding="utf-8")
+	words = (PAGE_DIR / "wizard_rule_words.js").read_text(encoding="utf-8")
 
 	def listed(name):
-		found = re.search(rf"^const {name} = (\[[^\]]*\]);$", rules, re.MULTILINE)
-		assert found, f"{name} is one line of step_rules.js"
+		found = re.search(rf"^const {name} = (\[[^\]]*\]);$", words, re.MULTILINE)
+		assert found, f"{name} is one line of wizard_rule_words.js"
 		return tuple(json.loads(found.group(1)))
 
 	assert listed("FORMULA_VARIABLES") == VARIABLES
