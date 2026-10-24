@@ -21,7 +21,8 @@
 //	             message path, and are read with sp.refusal_lines. "Someone else is applying" is one of them
 //	no word      no answer, or none the step can read (a lost connection, a status Frappe answers by itself, a 200
 //	             it cannot read): the write may still have gone through, so the saved policy is read again before
-//	             anything is said (written): "Applied. The server answered late." (adopted as above), "Could not
+//	             anything is said (written): "Applied. The server answered late." (adopted as above, with whether
+//	             the policy is on and what the last check of the draft as sent said would change), "Could not
 //	             apply: the server did not accept the change. Nothing was changed.", stale as above, or, when the
 //	             server cannot be asked either, "Could not reach the server. Nothing was changed."
 //	unread       applied, but the saved policy could not be read again: Apply waits for a reload of the page
@@ -154,6 +155,16 @@ function applied_sentence(outcome) {
 	return __("Applied. The policy is off, so customers still pay the carrier's price.");
 }
 
+// The same, said under "Applied. The server answered late.": whether the policy is on, without "Applied" again.
+function late_sentence(outcome) {
+	const on = Boolean(outcome.after?.active);
+	const was = Boolean(outcome.before?.active);
+	if (on && was) return __("Customers see the new prices now.");
+	if (on) return __("It is switched on: customers see the new prices now.");
+	if (was) return __("It is switched off: customers pay the carrier's price again.");
+	return __("The policy is off, so customers still pay the carrier's price.");
+}
+
 // Lines of what will change (sp.change_lines) as a list: the label, then what it says. A setting reads
 // "off → on", the arrow said as "becomes".
 function change_list(lines, testid) {
@@ -175,7 +186,7 @@ function change_list(lines, testid) {
 							" ",
 							line.to
 					  )
-					: el("span", { class: "sp-change-text" }, line.text)
+					: el("span", { class: "sp-change-text", title: line.title || null }, line.text)
 			)
 		)
 	);
@@ -435,7 +446,8 @@ class ReviewView {
 						"h4",
 						{ class: "sp-summary-name" },
 						el("span", { class: "sp-summary-number" }, String(index + 1)),
-						el("span", {}, profile.name)
+						// a name cut to 140 characters (sp.card_summary) gives the whole of it as its title
+						el("span", { title: profile.title || null }, profile.name)
 					),
 					el("p", { class: "sp-summary-text" }, profile.codes),
 					profile.zones.length
@@ -566,6 +578,9 @@ class ReviewView {
 					outcome.late ? __("Applied. The server answered late.") : applied_sentence(outcome)
 				)
 			);
+			// a late answer brought no word of its own: whether the policy is on, and what the last check of the draft
+			// as it was sent said would change
+			if (outcome.late) done.push(el("p", {}, late_sentence(outcome)));
 			if (lines.length) done.push(change_list(lines, "apply-changes"));
 		} else if (kind === "rebased") {
 			done.push(
@@ -586,6 +601,9 @@ class ReviewView {
 		const sent = sp.clone(store.draft);
 		const sent_key = JSON.stringify(sent);
 		const expected = store.version;
+		// what the newest check of this very draft said applying it changes (Apply is ready only with one): what a
+		// late answer is said with
+		const planned = sp.is_record(ui.answer?.changes) ? sp.clone(ui.answer.changes) : null;
 		ui.applying = true;
 		ui.outcome = null;
 		wizard.set_busy(true);
@@ -614,7 +632,7 @@ class ReviewView {
 			if (reply.lines.length) return finish({ kind: "refused", lines: reply.lines, draft: sent_key });
 			// No word the step can use: the write may have gone through, so the saved policy says what happened.
 			return written(wizard, sent, expected).then((found) => {
-				if (found === "applied") return adopt(null, true);
+				if (found === "applied") return adopt(planned, true);
 				if (found === "unchanged") return finish({ kind: "not_accepted", draft: sent_key });
 				if (found === "changed") return finish({ kind: "stale" });
 				return finish({ kind: "unreachable", draft: sent_key });
