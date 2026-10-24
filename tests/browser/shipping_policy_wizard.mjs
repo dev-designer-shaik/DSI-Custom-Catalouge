@@ -417,6 +417,23 @@ async function focusedTestid() {
 	return page.evaluate(() => document.activeElement?.dataset?.testid || document.activeElement?.tagName || "");
 }
 
+// Waits until the n-th rule's open formula editor shows the server's answer for `formula` (its error box says
+// which formula its answer is for: an empty box alone may only mean that no answer has come yet).
+async function formulaChecked(n, formula, timeout = 10000) {
+	try {
+		await page.waitForFunction(
+			(n, formula) =>
+				document.querySelectorAll('[data-testid="rule-card"]')[n]?.querySelector('[data-testid="rule-formula-error"]')
+					?.dataset.checked === formula,
+			{ timeout },
+			n,
+			formula
+		);
+	} catch {
+		throw new Error(`rule ${n + 1}: no answer from the server for the formula ${formula}`);
+	}
+}
+
 async function draftNow() {
 	return (await store()).draft;
 }
@@ -850,8 +867,7 @@ await check("a stored draft of this version is restored with its step, and can b
 	assert((await store()).dirty === true, "the draft is dirty");
 	const file = await shot("wizard-restored-draft");
 	await page.click(by("draft-discard"));
-	await page.waitForSelector(".modal.show .btn-primary", { visible: true });
-	await page.click(".modal.show .btn-primary");
+	await answerDialog(true);
 	await page.waitForFunction((selector) => document.querySelector(selector)?.hidden, {}, by("draft-banner"));
 	await pause(500);
 	assert((await stored()) === null, "the stored draft is gone");
@@ -1203,7 +1219,7 @@ await check("an item set is made from the items chip, and the example's four rul
 	await expectIn("rule-card", 3, "rule-formula-names", "carrier_price, order_value, weight_kg, volume_l, boxes and item_count");
 	await typeIn("rule-card", 3, "rule-formula-input", "max(carrier_price * 1.1, 45)");
 	await clickIn("rule-card", 3, "rule-round-up");
-	await pause(900);
+	await formulaChecked(3, "max(carrier_price * 1.1, 45)");
 	assert((await textIn("rule-card", 3, "rule-formula-error")) === "", "the server takes the formula");
 	await page.keyboard.press("Escape");
 	await typeIn("rule-card", 3, "rule-label", "International with a minimum");
@@ -1301,7 +1317,8 @@ await check("a formula is checked 300 ms after the last key, and an older answer
 	await pause(600);
 	checked = 0;
 	await typeIn("rule-card", 3, "rule-formula-input", "max(carrier_price * 1.1, 45");
-	await pause(1200);
+	await formulaChecked(3, "max(carrier_price * 1.1, 45");
+	await pause(500); // a second check would have gone out by now
 	const error = await textIn("rule-card", 3, "rule-formula-error");
 	assert(checked === 1, `${checked} checks for one formula typed`);
 	assert(error.length > 0, "a formula with a missing bracket is refused in a plain sentence");
@@ -1313,15 +1330,19 @@ await check("a formula is checked 300 ms after the last key, and an older answer
 		await typeIn("rule-card", 3, "rule-formula-input", "carrier_price +");
 		await pause(800); // its check has gone out and is held back
 		await typeIn("rule-card", 3, "rule-formula-input", "carrier_price * 2");
-		await pause(900);
+		await formulaChecked(3, "carrier_price * 2");
 		assert((await textIn("rule-card", 3, "rule-formula-error")) === "", "the newer formula is fine");
-		await pause(2500); // the older answer arrives now
-		assert((await textIn("rule-card", 3, "rule-formula-error")) === "", "and stays so after the older answer");
+		await page.waitForNetworkIdle({ idleTime: 500, timeout: 15000 }); // the older answer has arrived now
+		const after = await (await inCard("rule-card", 3, "rule-formula-error")).evaluate((box) => ({
+			text: box.textContent,
+			checked: box.dataset.checked,
+		}));
+		assert(after.text === "" && after.checked === "carrier_price * 2", `after the older answer: ${JSON.stringify(after)}`);
 	} finally {
 		await intercept(false);
 	}
 	await typeIn("rule-card", 3, "rule-formula-input", "max(carrier_price * 1.1, 45)");
-	await pause(500);
+	await formulaChecked(3, "max(carrier_price * 1.1, 45)");
 	assert((await textIn("rule-card", 3, "rule-formula-error")) === "", "the example's formula is fine");
 	// a click outside the open editor closes it; the focus stays where the click put it
 	await page.click(by("tape-city"));
