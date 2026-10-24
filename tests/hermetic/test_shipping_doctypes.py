@@ -797,6 +797,45 @@ def test_a_rule_reads_as_one_sentence_for_any_step(tmp_path):
 	}
 
 
+@needs_node
+def test_a_refusal_is_read_a_sentence_a_line_as_plain_text(tmp_path):
+	"""sp.refusal_lines reads the sentences of a refusal from Frappe's message path: one message, a list of them
+	(apply_policy refuses with a list, escaped), what a code without a handler of its own hands over (the
+	request), and nothing at all. Each goes through frappe.utils.html2text, here a stand-in that decodes."""
+	listed = json.dumps(
+		{
+			"message": [
+				"Zone &quot;Gulf &amp; &lt;b&gt;Co&lt;/b&gt;&quot; has a problem.",
+				"Rule 2 has another.",
+			],
+			"as_list": 1,
+		}
+	)
+	single = json.dumps({"message": "Someone else is applying a change right now. Try again in a moment."})
+	got = run_page_helpers(
+		tmp_path,
+		f"""
+		frappe.utils.html2text = (html) => html.replace(/<[^>]*>/g, "").replace(/&lt;/g, "<")
+			.replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+		const messages = (...entries) => JSON.stringify(entries);
+		return [
+			sp.refusal_lines({{ _server_messages: messages({json.dumps(listed)}) }}),
+			sp.refusal_lines({{ _server_messages: messages({json.dumps(single)}, "A <b>plain</b> sentence.") }}),
+			sp.refusal_lines({{ getResponseHeader() {{}}, responseJSON: {{ _server_messages: messages({json.dumps(single)}) }} }}),
+			sp.refusal_lines(undefined),
+			sp.refusal_lines({{ _server_messages: "not a list" }}),
+		];
+		""",
+	)
+	assert got == [
+		['Zone "Gulf & <b>Co</b>" has a problem.', "Rule 2 has another."],
+		["Someone else is applying a change right now. Try again in a moment.", "A plain sentence."],
+		["Someone else is applying a change right now. Try again in a moment."],
+		[],
+		[],
+	]
+
+
 def test_the_rules_step_shows_the_asterisk_sentence_word_for_word():
 	"""The plan's Global Constraints: the sentence is on the wizard's Rules step, verbatim."""
 	assert f'"{ASTERISK}"' in (PAGE_DIR / "step_rules.js").read_text(encoding="utf-8")

@@ -2,7 +2,8 @@
 //
 // Helpers: dsi_catalogue.sp (el builds elements from text, never HTML; clone, same, is_number, money,
 // measure, read_number, is_record; new_zone, new_rule and new_item_set build entries of the draft in the
-// server's key order), and problem_text, the sentences of a refusal as plain text.
+// server's key order; refusal_lines, the sentences of a refusal as plain text, one each), and problem_text,
+// those sentences as one text.
 
 const sp = (dsi_catalogue.sp = {
 	// An element from a tag, attributes and children. A child that is a string becomes a text node, so
@@ -115,24 +116,50 @@ const sp = (dsi_catalogue.sp = {
 	new_item_set(name) {
 		return { name, item_groups: [], items: [] };
 	},
+
+	// The sentences of a refusal that came through Frappe's message path, each as plain text: the server escapes
+	// what people typed in them (the desk shows them as HTML), so each is read with frappe.utils.html2text. A
+	// message is one sentence, a list of them (as_list) or a table (as_table). `response` is what Frappe hands an
+	// error callback: the answer, or for a code it has no handler for, the request (its responseJSON).
+	refusal_lines(response) {
+		let answer = response;
+		if (answer && typeof answer.getResponseHeader === "function") {
+			try {
+				answer = answer.responseJSON || JSON.parse(answer.responseText);
+			} catch (error) {
+				answer = null;
+			}
+		}
+		let messages = [];
+		try {
+			messages = JSON.parse(answer?._server_messages || "[]");
+		} catch (error) {
+			messages = [];
+		}
+		const lines = [];
+		const add = (value) => {
+			if (Array.isArray(value)) value.forEach(add);
+			else if (value !== null && value !== undefined && value !== "") {
+				const text = frappe.utils.html2text(String(value)).trim();
+				if (text) lines.push(text);
+			}
+		};
+		for (const entry of Array.isArray(messages) ? messages : []) {
+			let message = entry;
+			try {
+				message = JSON.parse(entry);
+			} catch (error) {
+				message = entry; // a sentence sent as it is
+			}
+			add(sp.is_record(message) ? message.message : message);
+		}
+		return lines;
+	},
 });
 const el = sp.el;
 
 // The sentences of an error that came through Frappe's message path, as plain text.
 function problem_text(response) {
-	let messages = [];
-	try {
-		messages = JSON.parse(response?._server_messages || "[]").map((entry) => {
-			const message = JSON.parse(entry);
-			return typeof message === "string" ? message : message?.message;
-		});
-	} catch (error) {
-		messages = [];
-	}
-	const text = messages
-		.filter(Boolean)
-		.map((message) => frappe.utils.html2text(String(message)).trim())
-		.filter(Boolean)
-		.join(" ");
+	const text = sp.refusal_lines(response).join(" ");
 	return text || __("The server did not answer. Check the connection and try again.");
 }
