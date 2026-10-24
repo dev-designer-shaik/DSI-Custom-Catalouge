@@ -48,7 +48,8 @@
 //	refresh(wizard, panel)         after any change of the draft (the body is not rebuilt, so focus stays put)
 //	priced(wizard, panel, answer)  each time the body is drawn (its first show and every tab switch), and
 //	                               after each answer of try_order: {result, previews, order}, or null when
-//	                               there is nothing to price
+//	                               there is nothing to price (or, on a draw, while a change is still being
+//	                               priced: wizard.tape.pending; the answer follows)
 // A step changes the draft only through wizard.change((draft) => { ...edit it in place... }). The wizard then
 // works out dirty, stores the draft, redraws the banner and the tabs, calls the step's refresh, and has the
 // tape price the order again 250 ms later. wizard.priced holds the latest answer (null while nothing is

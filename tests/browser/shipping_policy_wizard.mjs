@@ -1290,6 +1290,28 @@ await check("screenshots of Zones and Rules with the example policy, light and d
 	return files.join(", ");
 });
 
+await check("a step drawn while a change is being priced waits for its price, never shows another rule's", async () => {
+	await expectIn("rule-card", 2, "rule-price", "$39.00"); // the GCC order of the screenshots
+	const prices = () => page.$$eval(by("rule-price"), (found) => found.map((price) => price.textContent));
+	await intercept(true);
+	try {
+		holdNext = 2500; // the price of the move arrives late
+		await (await inCard("rule-card", 0, "rule-down")).click();
+		await page.click(by("step-tab-zones"));
+		await page.click(by("step-tab-rules"));
+		const meanwhile = await prices();
+		assert(meanwhile.every((text) => text === ""), `while the move is priced: ${JSON.stringify(meanwhile)}`);
+		await expectIn("rule-card", 2, "rule-price", "$39.00", 15000);
+		const after = await prices();
+		assert(after[0].includes("Conditions not met") && after[1].includes("Not for this country"), JSON.stringify(after));
+	} finally {
+		await intercept(false);
+	}
+	await (await inCard("rule-card", 1, "rule-up")).click();
+	await expectIn("rule-card", 2, "rule-price", "$39.00");
+	assert(JSON.stringify((await draftNow()).rules) === JSON.stringify(EXAMPLE.rules), "the rules are the example's");
+});
+
 await check("a renamed zone takes its rules along, and a zone that rules use is not deleted", async () => {
 	await page.click(by("step-tab-zones"));
 	await expectIn("zone-card", 1, "zone-usage", "Rules 2 and 3 use this zone.");

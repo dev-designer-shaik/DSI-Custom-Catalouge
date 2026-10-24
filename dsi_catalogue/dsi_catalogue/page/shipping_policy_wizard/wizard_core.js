@@ -102,6 +102,7 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 		this.store.original = sp.clone(policy);
 		this.store.draft = sp.clone(policy);
 		this.store.version = version;
+		this.priced = null; // an answer was for the draft that is gone
 		if (restore) this.restore_draft();
 		this.store.dirty = !sp.same(this.store.draft, this.store.original);
 	}
@@ -258,13 +259,15 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 
 	// Draws the selected step's body into its emptied panel, then hands it the latest answer of try_order
 	// (null while nothing is priced), so a body drawn on its first show or on a tab switch is never without it.
+	// While a change is still being priced (tape.pending) that answer is for an older draft, whose rules may
+	// stand in other places: the body gets null, and the next answer when it comes.
 	render_step() {
 		for (const step of STEPS) this.panels[step.id].hidden = step.id !== this.store.step;
 		const step = this.current_step();
 		const panel = this.panels[step.id];
 		panel.replaceChildren();
 		step.render(this, panel);
-		step.priced?.(this, panel, this.priced);
+		step.priced?.(this, panel, this.tape?.pending ? null : this.priced);
 	}
 
 	current_step() {
@@ -352,6 +355,7 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 	discard_draft() {
 		this.store.draft = sp.clone(this.store.original);
 		this.notice = null;
+		this.priced = null; // an answer was for the draft that is gone
 		this.render_step();
 		this.after_change();
 	}

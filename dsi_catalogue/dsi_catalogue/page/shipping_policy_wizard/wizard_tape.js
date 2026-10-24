@@ -28,6 +28,9 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		this.computed_value = null; // the items' value in the price list, from the last answer
 		this.sequence = 0; // the number of the newest request: the answer to an older one is dropped
 		this.timer = null;
+		// a change (of the sample or the draft) not priced yet: wizard.priced is then the answer to an older one,
+		// and a step body drawn meanwhile waits for the next (wizard.render_step hands it none)
+		this.pending = false;
 		this.build();
 		this.render_controls();
 		this.render_receipt({ blocked: this.request().blocked });
@@ -445,6 +448,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	// (the sequence moves on), so the receipt never shows an answer to a sample that is no longer there.
 	schedule() {
 		this.sequence += 1;
+		this.pending = true;
 		clearTimeout(this.timer);
 		this.timer = setTimeout(() => this.price(), PRICE_DELAY);
 	}
@@ -544,9 +548,11 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	price({ ask = false } = {}) {
 		clearTimeout(this.timer);
 		const sequence = ++this.sequence;
+		this.pending = true;
 		const request = this.request({ ask });
 		if (request.blocked) {
 			this.set_busy(false);
+			this.pending = false;
 			this.wizard.set_priced(null);
 			this.render_receipt({ blocked: request.blocked });
 			return Promise.resolve();
@@ -563,6 +569,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 				(problem) => {
 					if (sequence !== this.sequence) return;
 					this.set_busy(false);
+					this.pending = false;
 					this.wizard.set_priced(null);
 					this.render_receipt({ problem });
 				}
@@ -581,6 +588,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			(problem) => {
 				if (sequence !== this.sequence) return;
 				this.set_busy(false);
+				this.pending = false;
 				this.wizard.set_priced(null);
 				this.render_receipt({ problem });
 			}
@@ -614,6 +622,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 			this.computed_value = sp.is_number(order.order_value) ? order.order_value : null;
 		}
 		this.render_controls();
+		this.pending = false;
 		this.wizard.set_priced(answer);
 		this.render_receipt({ answer });
 	}
