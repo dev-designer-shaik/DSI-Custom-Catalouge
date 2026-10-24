@@ -358,7 +358,8 @@ class ZoneCard {
 				this.zone.everywhere_else = true;
 			})
 		);
-		dialog.on_hide = () => this.everywhere_else.focus();
+		// once the dialog is gone: the desk's Escape takes the focus away while the dialog closes
+		dialog.$wrapper.one("hidden.bs.modal", () => this.everywhere_else.focus());
 	}
 
 	// A rename takes along the rules that named the zone when its name field got the focus. They are found by

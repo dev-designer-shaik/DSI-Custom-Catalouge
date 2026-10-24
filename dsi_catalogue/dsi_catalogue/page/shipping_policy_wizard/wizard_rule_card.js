@@ -31,7 +31,9 @@ class RuleCard {
 				onclick: () => view.toggle(this, name),
 				onkeydown: (event) => {
 					if (event.key === "Escape" && this.chip) {
+						// the desk's own Escape (on the window) would take the focus away from the chip
 						event.preventDefault();
+						event.stopPropagation();
 						view.close();
 					}
 				},
@@ -70,8 +72,13 @@ class RuleCard {
 		);
 		this.problems = el("ul", { class: "sp-problems", "data-testid": "rule-problems" });
 		this.editor = el("div", { class: "sp-editor", id: `${uid}-editor`, "data-testid": "rule-editor", hidden: true });
-		// Escape is seen before a list in a field closes itself: a field whose list is open keeps it
+		// Escape is seen before a list in a field closes itself: a field whose list is open keeps it. Whatever
+		// it closed, Escape goes no further than the editor: the desk's own Escape (on the window) would take
+		// the focus away from where it is.
 		this.editor.addEventListener("keydown", (event) => this.on_editor_key(event), true);
+		this.editor.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") event.stopPropagation();
+		});
 
 		// the head: its place, its name, on or off, move, delete
 		this.grip = el("span", {

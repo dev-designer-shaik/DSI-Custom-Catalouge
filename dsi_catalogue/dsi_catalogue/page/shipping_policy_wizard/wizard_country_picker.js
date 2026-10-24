@@ -188,7 +188,9 @@ dsi_catalogue.CountryPicker = class CountryPicker {
 		} else if (event.key === "Tab" && open && this.active >= 0) {
 			this.choose(this.active);
 		} else if (event.key === "Escape" && open) {
+			// the list's Escape: the desk's own Escape (on the window) would take the focus away from the field
 			event.preventDefault();
+			event.stopPropagation();
 			this.close();
 			this.input.value = this.name_of(this.code);
 		}

@@ -1471,6 +1471,69 @@ await check("an item set that a rule uses is not deleted, a taken name is refuse
 	assert(JSON.stringify(draft.rules) === JSON.stringify(EXAMPLE.rules), "the rules, unchanged");
 });
 
+// The desk listens for Escape on the window and takes the focus away from wherever it is: what Escape closes
+// in the wizard must not let it through.
+await check("Escape closes a list, an editor or a question, and the focus stays where it belongs", async () => {
+	const expanded = (testid, n) =>
+		inCard(n.kind, n.at, testid).then((input) => input.evaluate((found) => found.getAttribute("aria-expanded")));
+	// a zone's country list
+	await page.click(by("step-tab-zones"));
+	await typeIn("zone-card", 1, "zone-country-add", "ba");
+	assert((await expanded("zone-country-add", { kind: "zone-card", at: 1 })) === "true", "the list is open");
+	await page.keyboard.press("Escape");
+	assert((await expanded("zone-country-add", { kind: "zone-card", at: 1 })) === "false", "Escape closes the list");
+	assert((await focusedTestid()) === "zone-country-add", `and the field keeps the focus: ${await focusedTestid()}`);
+	// a question asked by Everywhere else, dismissed with Escape
+	await clickIn("zone-card", 1, "zone-everywhere-else");
+	await page.waitForFunction(() => Boolean(window.cur_dialog?.display), { timeout: 10000 });
+	await page.keyboard.press("Escape");
+	await page.waitForFunction(() => !document.querySelector(".modal.show, .modal-backdrop"), { timeout: 10000 });
+	await pause(200);
+	assert((await focusedTestid()) === "zone-everywhere-else", `the switch has the focus again: ${await focusedTestid()}`);
+	assert((await countriesOf(1)).join() === "AE,SA,KW,OM,QA", "and nothing changed");
+	// a chip whose editor is open: Escape on the chip itself
+	await page.click(by("step-tab-rules"));
+	await clickIn("rule-card", 2, "chip-charge");
+	await page.keyboard.down("Shift");
+	await page.keyboard.press("Tab");
+	await page.keyboard.up("Shift");
+	assert((await focusedTestid()) === "chip-charge", `Shift+Tab goes back to the chip: ${await focusedTestid()}`);
+	await page.keyboard.press("Escape");
+	assert(!(await page.$(`${by("rule-editor")}:not([hidden])`)), "Escape on the chip closes its editor");
+	assert((await focusedTestid()) === "chip-charge", `and the chip keeps the focus: ${await focusedTestid()}`);
+	// the desk's item search in the set editor: Escape closes its list, then cancels the set, then the editor
+	await clickIn("rule-card", 1, "chip-items");
+	await clickIn("rule-card", 1, "itemset-edit");
+	await typeIn("rule-card", 1, "itemset-item-add", WATCH.slice(0, 6));
+	await page.waitForFunction(
+		() => document.querySelector('[data-testid="itemset-item-add"]')?.getAttribute("aria-expanded") === "true",
+		{ timeout: 15000 }
+	);
+	await page.keyboard.press("Escape");
+	assert((await expanded("itemset-item-add", { kind: "rule-card", at: 1 })) === "false", "Escape closes the item list");
+	assert((await focusedTestid()) === "itemset-item-add", `the item field keeps the focus: ${await focusedTestid()}`);
+	assert(await (await nth("rule-card", 1)).$(by("itemset-editor")), "the set editor is still open");
+	await page.keyboard.press("Escape");
+	assert(!(await (await nth("rule-card", 1)).$(by("itemset-editor"))), "a second Escape cancels the set");
+	assert((await focusedTestid()) === "itemset-new", `then New item set has the focus: ${await focusedTestid()}`);
+	await page.keyboard.press("Escape");
+	assert((await focusedTestid()) === "chip-items", `a third closes the editor, back on its chip: ${await focusedTestid()}`);
+	// Delete's question, dismissed with Escape
+	await clickIn("rule-card", 3, "rule-delete");
+	await page.waitForFunction(() => Boolean(window.cur_dialog?.display), { timeout: 10000 });
+	await page.keyboard.press("Escape");
+	await page.waitForFunction(() => !document.querySelector(".modal.show, .modal-backdrop"), { timeout: 10000 });
+	await pause(200);
+	const back = await page.evaluate(() => ({
+		testid: document.activeElement?.dataset?.testid,
+		label: document.activeElement?.getAttribute("aria-label"),
+	}));
+	assert(back.testid === "rule-delete" && back.label === "Delete rule 4", `Delete has the focus again: ${JSON.stringify(back)}`);
+	const draft = await draftNow();
+	assert(JSON.stringify(draft.rules) === JSON.stringify(EXAMPLE.rules), "the rules, unchanged");
+	assert(JSON.stringify(draft.item_sets) === JSON.stringify(builtSets()), "the set, unchanged");
+});
+
 await check("hostile zone and item set names are shown as text in Zones and Rules", async () => {
 	const draft = {
 		...original,

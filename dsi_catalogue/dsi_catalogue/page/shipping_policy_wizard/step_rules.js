@@ -167,14 +167,15 @@ class RulesView {
 			this.wizard.change((draft) => draft.rules.splice(at, 1));
 			this.live.say(__("Rule {0} deleted.", [at + 1]));
 		});
-		dialog.on_hide = () => {
+		// once the dialog is gone: the desk's Escape takes the focus away while the dialog closes
+		dialog.$wrapper.one("hidden.bs.modal", () => {
 			if (deleted === null) {
 				card.delete.focus();
 				return;
 			}
 			const next = this.list.children[Math.min(deleted, this.list.children.length - 1)];
 			(next?.querySelector('[data-testid="rule-delete"]') || this.add_button).focus();
-		};
+		});
 	}
 
 	// ---------------------------------------------------------- the editors
