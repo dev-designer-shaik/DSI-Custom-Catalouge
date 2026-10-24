@@ -11,8 +11,10 @@
 //
 // Nothing here writes to the ERP: the wizard writes only on Apply, and these checks never apply. A draft is
 // put in the browser's own storage, where the wizard keeps it, to test restoring it and showing hostile names.
+// The Zones and Rules checks build the example policy (tests/hermetic/fixtures/shipping_policy_example.json)
+// through the page as a draft, price orders with it, and leave the browser's storage empty again.
 
-import { mkdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 const BASE = (process.env.ERP_URL || "https://erp2.shaik.net").replace(/\/+$/, "");
@@ -29,6 +31,17 @@ const OFF =
 	"The policy is switched off, so today customers pay the carrier's price. This receipt shows what they " +
 	"would pay once you turn the policy on in the Review step.";
 const ITEM = "10005020"; // a priced fragrance on erp2 (229.00 in USD - Online)
+const EXAMPLE = JSON.parse(
+	await readFile(new URL("../hermetic/fixtures/shipping_policy_example.json", import.meta.url), "utf8")
+);
+// erp2's item group for watches (ruling P17: the ERP's group names are upper case; the fixture says "Watches")
+const WATCH_GROUP = "WATCHES";
+// a published watch on erp2, priced in USD - Online: ASTROTIME MK I SAPPHIRE STEEL, in AUTOMATIC under WATCHES
+const WATCH = "10000137";
+const ASTERISK =
+	"* A rule for selected items applies only when every item in the order is one of them. A rule for every " +
+	"item applies to every order.";
+const HOSTILE_SET = "<b>set</b>";
 
 // What erp2 shows on every desk page, with or without the wizard: the dsi_plm app asks for a script it does
 // not ship. Seen on /desk/shipping-policy and /desk/shipping-dashboard before the wizard existed.
@@ -102,17 +115,26 @@ page.on("dialog", async (dialog) => {
 	await dialog.dismiss();
 });
 
-// The try_order requests the page sends, and a way to hold the next one back for a while.
+// The try_order and check_formula requests the page sends, and a way to hold the next one back for a while.
 let priced = 0;
+let checked = 0;
 let intercepting = false;
 let holdNext = 0; // ms to hold the next try_order request before it goes out
+let holdCheck = 0; // ms to hold the next check_formula request before it goes out
+let holdGroups = 0; // ms to hold the next read of the Item Group list before it goes out
 page.on("request", (request) => {
 	const isTry = request.url().includes("shipping_policy_wizard.try_order");
+	const isCheck = request.url().includes("shipping_policy_wizard.check_formula");
+	const isGroups =
+		request.url().includes("frappe.client.get_list") && (request.postData() || "").includes("doctype=Item+Group");
 	if (isTry) priced += 1;
+	if (isCheck) checked += 1;
 	if (!intercepting) return;
-	if (isTry && holdNext) {
-		const wait = holdNext;
-		holdNext = 0;
+	const wait = (isTry && holdNext) || (isCheck && holdCheck) || (isGroups && holdGroups) || 0;
+	if (wait) {
+		if (isTry) holdNext = 0;
+		else if (isCheck) holdCheck = 0;
+		else holdGroups = 0;
 		setTimeout(() => request.continue().catch(() => {}), wait);
 	} else {
 		request.continue().catch(() => {});
@@ -168,6 +190,25 @@ async function shot(name) {
 	const written = await stat(file).catch(() => null);
 	assert(written?.size > 0, `the screenshot ${file} was not written`);
 	return file;
+}
+
+// The desk scrolls its main section, not the window, so a full-page screenshot stops at the window's foot. This
+// one makes the window as tall as the main section's content for the shot (at most 4000 px), then puts the
+// window back: the whole step is in the picture.
+async function tallShot(name) {
+	const size = page.viewport();
+	const height = await page.evaluate(() => {
+		const main = document.querySelector(".main-section");
+		return Math.ceil(Math.max(main ? main.scrollHeight : 0, document.documentElement.scrollHeight));
+	});
+	await page.setViewport({ ...size, height: Math.min(Math.max(height + 24, size.height), 4000) });
+	await pause(400);
+	try {
+		return await shot(name);
+	} finally {
+		await page.setViewport(size);
+		await pause(300);
+	}
 }
 
 // The text of an element as it reads on the screen (innerText: what is hidden is left out, and lines are
@@ -292,6 +333,141 @@ const ruleOf = (zone, method, extra = {}) => ({
 	...extra,
 });
 
+// The example policy as the page builds it on erp2: the fixture's, with erp2's watch group, still switched off
+// (the Review step turns it on) and every zone's fallback left as a new zone has it (that is the next step's).
+const builtZones = () =>
+	EXAMPLE.zones.map((zone) => ({ ...zone, fallback: { method: "policy_default", amount: 0 } }));
+const builtSets = () => [{ name: "Watches", item_groups: [WATCH_GROUP], items: [] }];
+
+// The n-th element (from 0) with a test id, the element with a test id inside the n-th card of a kind
+// ("zone-card" or "rule-card"), and what a person does to it.
+async function nth(testid, n = 0) {
+	const found = await page.$$(by(testid));
+	assert(found[n], `there is no ${testid} number ${n + 1}`);
+	return found[n];
+}
+
+async function inCard(kind, n, testid) {
+	const found = await (await nth(kind, n)).$(by(testid));
+	assert(found, `${kind} ${n + 1} has no ${testid}`);
+	return found;
+}
+
+async function clickIn(kind, n, testid) {
+	await (await inCard(kind, n, testid)).click();
+}
+
+async function typeIn(kind, n, testid, text) {
+	const field = await inCard(kind, n, testid);
+	await field.evaluate((input) => {
+		input.focus();
+		input.select();
+	});
+	await page.keyboard.press("Backspace");
+	if (text) await field.type(text);
+}
+
+async function textIn(kind, n, testid) {
+	return (await inCard(kind, n, testid)).evaluate((element) => element.innerText.replace(/\s+/g, " ").trim());
+}
+
+async function valueIn(kind, n, testid) {
+	return (await inCard(kind, n, testid)).evaluate((input) => input.value);
+}
+
+// Waits until the element with the test id inside the n-th card says `text` (a part of what it says).
+async function expectIn(kind, n, testid, text, timeout = 10000) {
+	try {
+		await page.waitForFunction(
+			(kind, n, testid, text) => {
+				const card = document.querySelectorAll(`[data-testid="${kind}"]`)[n];
+				const element = card?.querySelector(`[data-testid="${testid}"]`);
+				return Boolean(element) && element.innerText.replace(/\s+/g, " ").includes(text);
+			},
+			{ timeout },
+			kind,
+			n,
+			testid,
+			text
+		);
+	} catch {
+		const seen = await textIn(kind, n, testid).catch(() => "(no such element)");
+		throw new Error(`${kind} ${n + 1}: ${testid} should hold "${text}", it says "${seen}"`);
+	}
+}
+
+async function addCountry(n, text) {
+	await typeIn("zone-card", n, "zone-country-add", text);
+	await page.keyboard.press("Enter");
+}
+
+async function countriesOf(n) {
+	return (await nth("zone-card", n)).$$eval(by("zone-country-chip"), (chips) => chips.map((chip) => chip.dataset.key));
+}
+
+// Opens a chip of the n-th rule and picks the option with this value in its editor.
+async function choose(n, chip, option, value) {
+	await clickIn("rule-card", n, chip);
+	const picked = await (await nth("rule-card", n)).$(`${by(option)}[value="${value}"]`);
+	assert(picked, `rule ${n + 1} offers no ${value}`);
+	await picked.click();
+}
+
+async function focusedTestid() {
+	return page.evaluate(() => document.activeElement?.dataset?.testid || document.activeElement?.tagName || "");
+}
+
+async function draftNow() {
+	return (await store()).draft;
+}
+
+// Waits until the confirmation dialog has finished opening (while it fades in, the desk's modal ignores a
+// request to close; Frappe sets cur_dialog once it is shown), presses one of its buttons, and waits until it is
+// gone.
+async function answerDialog(yes) {
+	const button = yes ? ".modal.show .btn-modal-primary" : ".modal.show .btn-modal-secondary";
+	const seen = () =>
+		page.evaluate(() =>
+			JSON.stringify({
+				modals: [...document.querySelectorAll(".modal")].map((modal) => modal.className),
+				dialog: window.cur_dialog ? { display: window.cur_dialog.display } : null,
+				focus: document.activeElement?.dataset?.testid || document.activeElement?.className,
+			})
+		);
+	try {
+		await page.waitForFunction(() => Boolean(window.cur_dialog?.display && document.querySelector(".modal.show")), {
+			timeout: 10000,
+		});
+	} catch {
+		throw new Error(`no dialog opened: ${await seen()}`);
+	}
+	await page.waitForSelector(button, { visible: true });
+	await page.click(button);
+	// closed once its backdrop has faded out too: until then the backdrop takes the page's clicks
+	try {
+		await page.waitForFunction(() => !document.querySelector(".modal.show, .modal-backdrop"), { timeout: 10000 });
+	} catch {
+		throw new Error(`the dialog did not close: ${await seen()}`);
+	}
+	await pause(150);
+}
+
+// Types into the tape's item field and takes the desk's first suggestion.
+async function addTapeItem(code) {
+	await page.focus(by("tape-add-item"));
+	await page.type(by("tape-add-item"), code);
+	await page.waitForFunction(
+		(code) =>
+			[...document.querySelectorAll(".sp-item-picker [role='option']")].some((option) =>
+				option.textContent.includes(code)
+			),
+		{ timeout: 15000 },
+		code
+	);
+	await page.keyboard.press("Enter");
+	await page.waitForSelector(by("tape-item"));
+}
+
 // ---------------------------------------------------------------- the checks
 await check("log in as the test user", login);
 trouble.splice(0); // what the login page itself does is not the wizard's
@@ -331,7 +507,8 @@ await check("the tabs are one tablist in order, Zones selected, Test set apart w
 	assert(tabs[5].left - tabs[4].right > 48, "Test sits apart from Review");
 });
 
-await check("each step shows a plain placeholder line until its body is built", async () => {
+await check("each step not built yet shows a plain placeholder line; Zones and Rules show their bodies", async () => {
+	const BUILT = { zones: "zone-add", rules: "rule-add" }; // a control each built body has
 	for (const step of STEPS) {
 		await page.click(by(`step-tab-${step}`));
 		const panel = await page.$eval(`#sp-panel-${step}`, (element) => ({
@@ -339,8 +516,14 @@ await check("each step shows a plain placeholder line until its body is built", 
 			text: element.textContent.trim(),
 			labelled: element.getAttribute("aria-labelledby"),
 		}));
-		assert(!panel.hidden && panel.text === "This step is built in the next stage.", `${step}: ${panel.text}`);
+		assert(!panel.hidden, `the ${step} panel is shown`);
 		assert(panel.labelled === `sp-tab-${step}`, `the ${step} panel is labelled by its tab`);
+		if (BUILT[step]) {
+			assert(await page.$(`#sp-panel-${step} ${by(BUILT[step])}`), `${step} has its body: ${panel.text}`);
+			assert(!panel.text.includes("built in the next stage"), `${step} has no placeholder`);
+		} else {
+			assert(panel.text === "This step is built in the next stage.", `${step}: ${panel.text}`);
+		}
 	}
 	await page.click(by("step-tab-zones"));
 });
@@ -814,6 +997,505 @@ await check("for the step bodies: priced on every draw, wizard.ui, a picker's ow
 	assert((await stored()) === null, "and nothing is left in storage");
 });
 
+// ---------------------------------------------------------------- Task 8: the Zones and Rules steps
+await check("Zones starts with no zone, and a new zone gets a name no other zone has", async () => {
+	await go(NEUTRAL);
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	await open();
+	await page.click(by("step-tab-zones"));
+	assert((await page.$$(by("zone-card"))).length === 0, "no zone yet");
+	assert((await page.$eval("#sp-panel-zones", (panel) => panel.innerText)).includes("No zones yet."), "it says so");
+	await page.click(by("zone-add"));
+	assert((await focusedTestid()) === "zone-name", "the new zone's name has the focus");
+	await page.click(by("zone-add"));
+	const names = await page.$$eval(by("zone-name"), (inputs) => inputs.map((input) => input.value));
+	assert(names.join("|") === "New zone|New zone 2", `names: ${names.join("|")}`);
+	await clickIn("zone-card", 1, "zone-delete");
+	assert((await page.$$(by("zone-card"))).length === 1, "the second zone is deleted");
+	assert((await focusedTestid()) === "zone-delete", `then the focus is on the zone left: ${await focusedTestid()}`);
+});
+
+await check("the example policy's four zones are built through the page", async () => {
+	await typeIn("zone-card", 0, "zone-name", "Bahrain");
+	await addCountry(0, "Bahrain"); // by name
+	await typeIn("zone-card", 0, "zone-line", "Free delivery in Bahrain.");
+	await page.click(by("zone-add"));
+	await typeIn("zone-card", 1, "zone-name", "GCC");
+	for (const code of ["ae", "sa", "kw", "om", "qa"]) await addCountry(1, code); // by code
+	await typeIn("zone-card", 1, "zone-line", "Gulf delivery, priced by the carrier. Watches ship free.");
+	await page.click(by("zone-add"));
+	await typeIn("zone-card", 2, "zone-name", "Rest of world");
+	await clickIn("zone-card", 2, "zone-everywhere-else");
+	const picker = await (await inCard("zone-card", 2, "zone-country-add")).evaluate((input) => ({
+		disabled: input.disabled,
+		shown: Boolean(input.offsetParent),
+	}));
+	assert(picker.disabled && !picker.shown, `Everywhere else takes no country: ${JSON.stringify(picker)}`);
+	await expectIn("zone-card", 2, "zone-everywhere-else-note", "Every country that is in no other zone");
+	await typeIn("zone-card", 2, "zone-line", "International delivery, priced at checkout.");
+	await page.click(by("zone-add"));
+	await typeIn("zone-card", 3, "zone-name", "Not shipped");
+	await addCountry(3, "ru");
+	await addCountry(3, "by");
+	const hidden = async () =>
+		(await inCard("zone-card", 3, "zone-not-offered-message")).evaluate((input) => !input.offsetParent);
+	assert(await hidden(), "the not-offered message is asked for only in a Not shipped zone");
+	await clickIn("zone-card", 3, "zone-not-shipped");
+	assert(!(await hidden()), "a Not shipped zone asks what customers read");
+	await typeIn("zone-card", 3, "zone-not-offered-message", "We don't deliver to this country.");
+	await typeIn("zone-card", 3, "zone-line", "We do not deliver to these countries.");
+	await expectIn("zone-card", 3, "zone-state", "Not shipped");
+	assert((await countriesOf(1)).join() === "AE,SA,KW,OM,QA", `GCC: ${await countriesOf(1)}`);
+	assert((await textIn("zone-card", 1, "zone-country-chip")) .startsWith("United Arab Emirates"), "a chip names its country");
+	const zones = (await draftNow()).zones;
+	assert(JSON.stringify(zones) === JSON.stringify(builtZones()), `the zones: ${JSON.stringify(zones)}`);
+});
+
+await check("a country already in another zone that is on is refused, naming that zone", async () => {
+	await addCountry(1, "Bahrain");
+	await expectIn("zone-card", 1, "zone-country-problem", "Bahrain is already in the Bahrain zone.");
+	assert((await countriesOf(1)).join() === "AE,SA,KW,OM,QA", "and it is not added");
+	// a country's remove button works from the keyboard, and the focus moves to the next one
+	const remove = await (await nth("zone-card", 1)).$(`${by("zone-country-chip")}[data-key="QA"] ${by("zone-country-remove")}`);
+	await remove.focus();
+	await page.keyboard.press("Enter");
+	assert((await countriesOf(1)).join() === "AE,SA,KW,OM", "Qatar is removed");
+	const label = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+	assert(label === "Remove Oman", `then the focus is on the next remove button: ${label}`);
+	await addCountry(1, "qa");
+	assert((await countriesOf(1)).join() === "AE,SA,KW,OM,QA", "Qatar is back, last");
+	assert((await textIn("zone-card", 1, "zone-country-problem")) === "", "the refusal is gone after the change");
+});
+
+await check("a zone's name keeps out < and >, a taken name is a problem, unserved countries are named", async () => {
+	await page.click(by("zone-add"));
+	await typeIn("zone-card", 4, "zone-name", "Temp<b>");
+	assert((await valueIn("zone-card", 4, "zone-name")) === "Tempb", "< and > are taken out as they are typed");
+	await expectIn("zone-card", 4, "zone-problems", "A zone's name cannot hold < or >.");
+	await typeIn("zone-card", 4, "zone-name", "gcc");
+	await expectIn("zone-card", 4, "zone-problems", "Another zone has this name.");
+	await typeIn("zone-card", 4, "zone-name", "Temporary");
+	await addCountry(4, "Afghanistan");
+	await expectIn("zone-card", 4, "zone-unserved-warning", "No carrier serves: Afghanistan.");
+	const gulf = await (await inCard("zone-card", 1, "zone-unserved-warning")).evaluate((warning) => warning.hidden);
+	assert(gulf, "erp2's carrier serves the whole Gulf: no warning there");
+	// with the rate card as the price source the carrier is not asked, so there is nothing to warn about
+	const source = (await draftNow()).price_source;
+	const set_source = (value) =>
+		page.evaluate((value) => {
+			frappe.pages["shipping-policy-wizard"].wizard.change((draft) => {
+				draft.price_source = value;
+			});
+		}, value);
+	await set_source("rate_card");
+	const hidden = await (await inCard("zone-card", 4, "zone-unserved-warning")).evaluate((warning) => warning.hidden);
+	await set_source(source);
+	assert(hidden, "no warning while the rate card prices orders");
+	await expectIn("zone-card", 4, "zone-unserved-warning", "No carrier serves: Afghanistan.");
+	// a zone that is off says so in words, not only by its look
+	await clickIn("zone-card", 4, "zone-enabled");
+	await expectIn("zone-card", 4, "zone-state", "Off");
+	await clickIn("zone-card", 4, "zone-enabled");
+	assert((await textIn("zone-card", 4, "zone-state")) === "", "and on again");
+});
+
+await check("Everywhere else asks before it removes a zone's countries, then takes none", async () => {
+	await clickIn("zone-card", 4, "zone-everywhere-else");
+	await answerDialog(false);
+	assert((await countriesOf(4)).join() === "AF", "No keeps the countries");
+	assert(!(await (await inCard("zone-card", 4, "zone-everywhere-else")).evaluate((box) => box.checked)), "and the switch off");
+	assert((await focusedTestid()) === "zone-everywhere-else", "the focus is back on the switch");
+	await clickIn("zone-card", 4, "zone-everywhere-else");
+	await answerDialog(true);
+	assert((await countriesOf(4)).length === 0, "Yes removes them");
+	await expectIn("zone-card", 4, "zone-problems", "Another zone that is on is set to Everywhere else.");
+	assert(await (await inCard("zone-card", 4, "zone-unserved-warning")).evaluate((warning) => warning.hidden), "no warning");
+	await clickIn("zone-card", 4, "zone-delete");
+	assert((await page.$$(by("zone-card"))).length === 4, "the temporary zone is deleted");
+	const zones = (await draftNow()).zones;
+	assert(JSON.stringify(zones) === JSON.stringify(builtZones()), "the four zones are as they were");
+});
+
+await check("an item set is made from the items chip, and the example's four rules are built with chips", async () => {
+	await page.click(by("step-tab-rules"));
+	assert((await page.$eval("#sp-panel-rules", (panel) => panel.innerText)).includes("No rules yet."), "no rule yet");
+	// rule 1: Bahrain, every item, free
+	await page.click(by("rule-add"));
+	assert((await focusedTestid()) === "chip-zone", "a new rule's zone chip has the focus");
+	assert((await textIn("rule-card", 0, "rule-number")) === "Rule 1", "it says Rule 1");
+	const sentence = await textIn("rule-card", 0, "rule-sentence");
+	assert(sentence === "In Bahrain for every item* charge the carrier's price", `a new rule: ${sentence}`);
+	await choose(0, "chip-charge", "rule-charge-option", "free");
+	await page.keyboard.press("Escape");
+	assert((await focusedTestid()) === "chip-charge", "Escape closes the editor and gives the chip the focus back");
+	const ring = await page.evaluate(() => {
+		const style = getComputedStyle(document.activeElement);
+		return { style: style.outlineStyle, width: parseFloat(style.outlineWidth) };
+	});
+	assert(ring.style === "solid" && ring.width >= 2, `the chip shows where the focus is: ${JSON.stringify(ring)}`);
+	assert(!(await page.$(`${by("rule-card")} ${by("rule-editor")}:not([hidden])`)), "the editor is closed");
+	await typeIn("rule-card", 0, "rule-label", "Free in Bahrain");
+	// rule 2: GCC, a new item set, free
+	await page.click(by("rule-add"));
+	await choose(1, "chip-zone", "rule-zone-option", "GCC");
+	await page.keyboard.press("Escape");
+	await clickIn("rule-card", 1, "chip-items");
+	// the item groups are read when the first set editor opens: held back here, so that the name is typed
+	// before they arrive, and the open list says they are being read, then offers them
+	const offered = async () =>
+		(await inCard("rule-card", 1, "itemset-group-add")).evaluate((input) =>
+			[...(document.getElementById(input.getAttribute("aria-controls"))?.children || [])].map((item) => item.textContent)
+		);
+	await intercept(true);
+	try {
+		holdGroups = 2500;
+		await clickIn("rule-card", 1, "itemset-new");
+		assert((await focusedTestid()) === "itemset-name", "the set's name has the focus");
+		await typeIn("rule-card", 1, "itemset-name", "Watches");
+		await clickIn("rule-card", 1, "itemset-save");
+		await expectIn("rule-card", 1, "itemset-problem", "Add at least one item group or item.");
+		await typeIn("rule-card", 1, "itemset-group-add", WATCH_GROUP.toLowerCase());
+		const early = await offered();
+		assert(early.join() === "Reading the item groups…", `before the groups arrive: ${JSON.stringify(early)}`);
+		try {
+			await page.waitForFunction(
+				(group) => [...document.querySelectorAll("[role='option']")].some((option) => option.textContent === group),
+				{ timeout: 15000 },
+				WATCH_GROUP
+			);
+		} catch {
+			throw new Error(`the item group list offers ${JSON.stringify((await offered()).slice(0, 8))}`);
+		}
+	} finally {
+		await intercept(false);
+	}
+	await page.keyboard.press("Enter");
+	await expectIn("rule-card", 1, "itemset-group-chip", WATCH_GROUP);
+	await expectIn("rule-card", 1, "itemset-editor", "An item group includes the groups beneath it.");
+	await page.evaluate(() => document.activeElement?.blur());
+	const editor = await tallShot("wizard-itemset-editor");
+	await clickIn("rule-card", 1, "itemset-save");
+	assert(!(await (await nth("rule-card", 1)).$(by("itemset-editor"))), "the set editor closes on Save");
+	const picked = await page.evaluate(() => ({
+		value: document.activeElement?.value,
+		checked: document.activeElement?.checked,
+		testid: document.activeElement?.dataset?.testid,
+	}));
+	assert(picked.testid === "rule-items-option" && picked.value === "Watches" && picked.checked, JSON.stringify(picked));
+	await page.keyboard.press("Escape");
+	assert((await textIn("rule-card", 1, "chip-items")) === "Watches*", "the rule is for the new set");
+	await choose(1, "chip-charge", "rule-charge-option", "free");
+	await page.keyboard.press("Escape");
+	await typeIn("rule-card", 1, "rule-label", "Free watches in the Gulf");
+	// rule 3: GCC, every item, the carrier's price, rounded up
+	await page.click(by("rule-add"));
+	await choose(2, "chip-zone", "rule-zone-option", "GCC");
+	await page.keyboard.press("Escape");
+	await clickIn("rule-card", 2, "chip-charge");
+	await clickIn("rule-card", 2, "rule-round-up");
+	await page.keyboard.press("Escape");
+	await typeIn("rule-card", 2, "rule-label", "Gulf at the carrier price");
+	// rule 4: Rest of world, every item, a formula, rounded up
+	await page.click(by("rule-add"));
+	await choose(3, "chip-zone", "rule-zone-option", "Rest of world");
+	await page.keyboard.press("Escape");
+	await choose(3, "chip-charge", "rule-charge-option", "formula");
+	await expectIn("rule-card", 3, "rule-formula-names", "carrier_price, order_value, weight_kg, volume_l, boxes and item_count");
+	await typeIn("rule-card", 3, "rule-formula-input", "max(carrier_price * 1.1, 45)");
+	await clickIn("rule-card", 3, "rule-round-up");
+	await pause(900);
+	assert((await textIn("rule-card", 3, "rule-formula-error")) === "", "the server takes the formula");
+	await page.keyboard.press("Escape");
+	await typeIn("rule-card", 3, "rule-label", "International with a minimum");
+	const sentences = [];
+	for (let n = 0; n < 4; n += 1) sentences.push(await textIn("rule-card", n, "rule-sentence"));
+	const want = [
+		"In Bahrain for every item* charge nothing (free)",
+		"In GCC for Watches* charge nothing (free)",
+		"In GCC for every item* charge the carrier's price, rounded up",
+		"In Rest of world for every item* charge max(carrier_price * 1.1, 45), rounded up",
+	];
+	assert(JSON.stringify(sentences) === JSON.stringify(want), `the sentences: ${JSON.stringify(sentences)}`);
+	const draft = await draftNow();
+	assert(JSON.stringify(draft.item_sets) === JSON.stringify(builtSets()), `the set: ${JSON.stringify(draft.item_sets)}`);
+	assert(JSON.stringify(draft.rules) === JSON.stringify(EXAMPLE.rules), `the rules: ${JSON.stringify(draft.rules)}`);
+	return editor;
+});
+
+await check("the example policy prices the brief's orders, and each rule shows what it charges", async () => {
+	await pickCountry("United Arab Emirates");
+	await fill("tape-city", "Dubai");
+	await fill("tape-quote", "38.20");
+	await expectText("tape-total", "$39.00");
+	assert((await textOf("tape-total")) === "$39.00", "GCC, Dubai, a quote of 38.20: $39.00");
+	await expectIn("rule-card", 2, "rule-price", "$39.00");
+	assert((await textIn("rule-card", 2, "rule-price")) === "$39.00", "the GCC every-item rule reads $39");
+	const paid = await (await inCard("rule-card", 2, "rule-price")).evaluate(
+		(price) => getComputedStyle(price.querySelector(".sp-rule-amount")).color
+	);
+	assert(paid === "rgb(154, 113, 22)", `what the customer pays is brass: ${paid}`);
+	assert((await textIn("rule-card", 1, "rule-price")) === "– Conditions not met", "no watch in the order");
+	assert((await textIn("rule-card", 0, "rule-price")) === "– Not for this country", "Bahrain's rule");
+	await addTapeItem(WATCH);
+	await expectText("tape-total", "Free");
+	await expectIn("rule-card", 1, "rule-price", "Free");
+	await expectIn("rule-card", 2, "rule-price", "$39.00 Rule 2 comes first");
+	await page.click(by("tape-item-remove"));
+	await pickCountry("United States");
+	await expectText("tape-total", "$45.00");
+	await expectIn("rule-card", 3, "rule-price", "$45.00");
+	await pickCountry("Russian Federation");
+	await expectText("tape-total", "Not offered");
+	await expectText("tape-lines", "We don't deliver to this country.");
+	assert((await textOf("rules-note")) === ASTERISK, `the asterisk sentence: ${await textOf("rules-note")}`);
+	const chips = await page.$$eval(by("chip-items"), (found) => found.map((chip) => chip.textContent));
+	assert(chips.every((text) => text.endsWith("*")), `each items chip carries the asterisk: ${chips}`);
+});
+
+await check("screenshots of Zones and Rules with the example policy, light and dark", async () => {
+	await pickCountry("United Arab Emirates");
+	await expectText("tape-total", "$39.00");
+	await page.evaluate(() => document.activeElement?.blur());
+	const files = [await tallShot("wizard-rules-light")];
+	await theme("dark");
+	files.push(await tallShot("wizard-rules-dark"));
+	const price = await (await inCard("rule-card", 2, "rule-price")).evaluate(
+		(price) => getComputedStyle(price.querySelector(".sp-rule-amount")).color
+	);
+	await theme("light");
+	assert(price === "rgb(216, 178, 89)", `brass in the dark too: ${price}`);
+	await page.click(by("step-tab-zones"));
+	await page.evaluate(() => document.activeElement?.blur());
+	files.push(await tallShot("wizard-zones-light"));
+	await theme("dark");
+	files.push(await tallShot("wizard-zones-dark"));
+	await theme("light");
+	await page.click(by("step-tab-rules"));
+	return files.join(", ");
+});
+
+await check("a renamed zone takes its rules along, and a zone that rules use is not deleted", async () => {
+	await page.click(by("step-tab-zones"));
+	await expectIn("zone-card", 1, "zone-usage", "Rules 2 and 3 use this zone.");
+	await typeIn("zone-card", 1, "zone-name", "Gulf");
+	let rules = (await draftNow()).rules;
+	assert(rules[1].zone === "Gulf" && rules[2].zone === "Gulf", "the two GCC rules follow the new name");
+	await clickIn("zone-card", 1, "zone-delete");
+	await expectIn("zone-card", 1, "zone-problems", "2 rules use this zone. Change or delete those rules first.");
+	assert((await page.$$(by("zone-card"))).length === 4, "the zone stays");
+	// typed letter by letter, "Bahrain 2" passes through "Bahrain", the first zone's name: its rule stays with it
+	await typeIn("zone-card", 1, "zone-name", "Bahrain 2");
+	rules = (await draftNow()).rules;
+	assert(rules[0].zone === "Bahrain", `rule 1 stays with Bahrain: ${rules[0].zone}`);
+	assert(rules[1].zone === "Bahrain 2" && rules[2].zone === "Bahrain 2", "the GCC rules follow their zone");
+	await typeIn("zone-card", 1, "zone-name", "GCC");
+	rules = (await draftNow()).rules;
+	assert(rules[1].zone === "GCC" && rules[2].zone === "GCC", "and back");
+	assert(rules[0].zone === "Bahrain", "rule 1 is still Bahrain's");
+	await page.click(by("step-tab-rules"));
+	assert((await textIn("rule-card", 2, "chip-zone")) === "GCC", "the chip says so");
+});
+
+await check("a formula is checked 300 ms after the last key, and an older answer never replaces a newer one", async () => {
+	await clickIn("rule-card", 3, "chip-charge");
+	await pause(600);
+	checked = 0;
+	await typeIn("rule-card", 3, "rule-formula-input", "max(carrier_price * 1.1, 45");
+	await pause(1200);
+	const error = await textIn("rule-card", 3, "rule-formula-error");
+	assert(checked === 1, `${checked} checks for one formula typed`);
+	assert(error.length > 0, "a formula with a missing bracket is refused in a plain sentence");
+	const role = await (await inCard("rule-card", 3, "rule-formula-error")).evaluate((found) => found.getAttribute("role"));
+	assert(role === "alert", `the refusal is an alert: ${role}`);
+	await intercept(true);
+	try {
+		holdCheck = 2500;
+		await typeIn("rule-card", 3, "rule-formula-input", "carrier_price +");
+		await pause(800); // its check has gone out and is held back
+		await typeIn("rule-card", 3, "rule-formula-input", "carrier_price * 2");
+		await pause(900);
+		assert((await textIn("rule-card", 3, "rule-formula-error")) === "", "the newer formula is fine");
+		await pause(2500); // the older answer arrives now
+		assert((await textIn("rule-card", 3, "rule-formula-error")) === "", "and stays so after the older answer");
+	} finally {
+		await intercept(false);
+	}
+	await typeIn("rule-card", 3, "rule-formula-input", "max(carrier_price * 1.1, 45)");
+	await pause(500);
+	assert((await textIn("rule-card", 3, "rule-formula-error")) === "", "the example's formula is fine");
+	// a click outside the open editor closes it; the focus stays where the click put it
+	await page.click(by("tape-city"));
+	const open = await page.$$eval(`${by("rule-editor")}:not([hidden])`, (found) => found.length);
+	assert(open === 0, "a click outside closes the editor");
+	assert((await focusedTestid()) === "tape-city", `the focus stays where the click put it: ${await focusedTestid()}`);
+	return `the server said: "${error}"`;
+});
+
+await check("rules move with the up and down buttons and with the grip, and each move is said", async () => {
+	const labels = async () => (await draftNow()).rules.map((rule) => rule.label);
+	const first = await labels();
+	assert((await (await inCard("rule-card", 0, "rule-up")).evaluate((button) => button.getAttribute("aria-disabled"))) === "true", "the first rule cannot go up");
+	await (await inCard("rule-card", 3, "rule-up")).focus();
+	await page.keyboard.press("Enter");
+	const moved = await labels();
+	assert(moved[2] === first[3] && moved[3] === first[2], `up: ${moved}`);
+	await expectText("rules-live", "Rule 4 is now rule 3 of 4.");
+	const focus = await page.evaluate(() => ({
+		testid: document.activeElement?.dataset?.testid,
+		card: document.activeElement?.closest('[data-testid="rule-card"]')?.querySelector('[data-testid="rule-label"]')?.value,
+	}));
+	assert(focus.testid === "rule-up" && focus.card === first[3], `the moved rule keeps the focus: ${JSON.stringify(focus)}`);
+	await (await inCard("rule-card", 2, "rule-down")).focus();
+	await page.keyboard.press("Enter");
+	assert(JSON.stringify(await labels()) === JSON.stringify(first), "down puts it back");
+	// with the mouse: the grip of rule 1 dropped under rule 2, and back
+	const drag = async (from, to, below) => {
+		const grip = await (await inCard("rule-card", from, "rule-grip")).boundingBox();
+		const target = await (await nth("rule-card", to)).boundingBox();
+		const y = below ? target.y + target.height - 6 : target.y + 6;
+		await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(grip.x + grip.width / 2, y, { steps: 12 });
+		const line = await page.$$eval(".sp-rule.is-drop-before, .sp-rule.is-drop-after", (found) => found.length);
+		await page.mouse.up();
+		return line;
+	};
+	const line = await drag(0, 1, true);
+	const dragged = await labels();
+	assert(dragged[0] === first[1] && dragged[1] === first[0], `dragged: ${dragged}`);
+	assert(line === 1, `a line shows where it lands: ${line}`);
+	await drag(1, 0, false);
+	assert(JSON.stringify(await labels()) === JSON.stringify(first), "and dragged back");
+	// with reduced motion the card does not follow the pointer; the line still shows where it lands
+	await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }]);
+	try {
+		const grip = await (await inCard("rule-card", 0, "rule-grip")).boundingBox();
+		await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(grip.x + grip.width / 2, grip.y + 40, { steps: 5 });
+		const moved = await page.$eval(".sp-rule.is-dragging", (card) => card.style.transform);
+		await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2, { steps: 5 });
+		await page.mouse.up();
+		assert(moved === "", `reduced motion: the card stays put (${moved})`);
+	} finally {
+		await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "no-preference" }]);
+	}
+	assert(JSON.stringify((await draftNow()).rules) === JSON.stringify(EXAMPLE.rules), "the rules are the example's");
+});
+
+await check("a rule switched off says Off, and a rule is deleted only after a question", async () => {
+	await clickIn("rule-card", 2, "rule-disable");
+	await expectIn("rule-card", 2, "rule-state", "Off");
+	await expectIn("rule-card", 2, "rule-price", "– Off");
+	await clickIn("rule-card", 2, "rule-disable");
+	assert((await textIn("rule-card", 2, "rule-state")) === "", "on again");
+	await page.click(by("rule-add"));
+	assert((await page.$$(by("rule-card"))).length === 5, "a fifth rule");
+	await clickIn("rule-card", 4, "rule-delete");
+	await answerDialog(false);
+	assert((await page.$$(by("rule-card"))).length === 5, "No keeps it");
+	assert((await focusedTestid()) === "rule-delete", "the focus is back on Delete");
+	await clickIn("rule-card", 4, "rule-delete");
+	await answerDialog(true);
+	assert((await page.$$(by("rule-card"))).length === 4, "Yes deletes it");
+	await expectText("rules-live", "Rule 5 deleted.");
+	assert((await focusedTestid()) === "rule-delete", "the focus goes to the Delete of the rule now last");
+	assert(JSON.stringify((await draftNow()).rules) === JSON.stringify(EXAMPLE.rules), "the rules are the example's");
+});
+
+await check("Only when: six limits with no-limit placeholders and their units, read as they are typed", async () => {
+	await clickIn("rule-card", 2, "chip-limits");
+	const fields = await (await nth("rule-card", 2)).$$eval(by("rule-limit"), (inputs) =>
+		inputs.map((input) => ({
+			key: input.dataset.key,
+			placeholder: input.placeholder,
+			label: input.labels?.[0]?.textContent,
+			measure: document.getElementById(input.closest('[role="group"]')?.getAttribute("aria-labelledby"))
+				?.textContent,
+		}))
+	);
+	assert(fields.length === 6 && fields.every((field) => field.placeholder === "no limit"), JSON.stringify(fields));
+	const measures = [...new Set(fields.map((field) => field.measure))].join("|");
+	assert(measures === "Order value ($)|Weight (kg)|Volume (litres)", `the units: ${measures}`);
+	assert(fields.map((field) => field.label).join("|") === "from|up to|from|up to|from|up to", "from and up to");
+	const limit = async (key, text) => {
+		const input = await (await nth("rule-card", 2)).$(`${by("rule-limit")}[data-key="${key}"]`);
+		await input.evaluate((field) => {
+			field.focus();
+			field.select();
+		});
+		await page.keyboard.press("Backspace");
+		if (text) await input.type(text);
+	};
+	await limit("max_order_value", "500");
+	assert((await draftNow()).rules[2].max_order_value === 500, "500 is in the draft");
+	await expectIn("rule-card", 2, "chip-limits", "order value up to $500.00");
+	// a field that stops holding a number keeps its text to itself: the draft keeps the last number it held
+	await page.keyboard.type(" or so");
+	await expectIn("rule-card", 2, "rule-limits-problem", "type a number such as 500");
+	assert((await draftNow()).rules[2].max_order_value === 500, "what is not a number stays out of the draft");
+	await limit("max_order_value", "5,5");
+	await expectIn("rule-card", 2, "rule-limits-problem", "use a period for decimals");
+	assert((await draftNow()).rules[2].max_order_value === 5, "a decimal comma is never read as 55");
+	await limit("min_order_value", "600");
+	await limit("max_order_value", "500");
+	await expectIn("rule-card", 2, "rule-problems", "the wrong way round");
+	await limit("min_order_value", "");
+	await limit("max_order_value", "");
+	await expectIn("rule-card", 2, "chip-limits", "no limits");
+	await page.keyboard.press("Escape");
+	assert(JSON.stringify((await draftNow()).rules) === JSON.stringify(EXAMPLE.rules), "no limits again");
+});
+
+await check("an item set that a rule uses is not deleted, a taken name is refused, an edit says who else changes", async () => {
+	await clickIn("rule-card", 1, "chip-items");
+	await clickIn("rule-card", 1, "itemset-delete");
+	await expectIn("rule-card", 1, "rule-items-problem", "1 rule uses this set. Change that rule first.");
+	await clickIn("rule-card", 1, "itemset-new");
+	await typeIn("rule-card", 1, "itemset-name", "watches");
+	await typeIn("rule-card", 1, "itemset-group-add", WATCH_GROUP.toLowerCase());
+	await page.keyboard.press("Enter");
+	await clickIn("rule-card", 1, "itemset-save");
+	await expectIn("rule-card", 1, "itemset-problem", "Another item set has this name.");
+	await clickIn("rule-card", 1, "itemset-cancel");
+	assert((await focusedTestid()) === "itemset-new", "Cancel goes back to the sets");
+	await page.keyboard.press("Escape");
+	await clickIn("rule-card", 2, "chip-items");
+	await clickIn("rule-card", 2, "itemset-edit");
+	await expectIn("rule-card", 2, "itemset-shared", "Rule 2 uses this set too: saving changes it there as well.");
+	await page.keyboard.press("Escape"); // in the set editor, Escape is Cancel
+	assert(!(await (await nth("rule-card", 2)).$(by("itemset-editor"))), "Escape leaves the set editor");
+	await page.keyboard.press("Escape");
+	const draft = await draftNow();
+	assert(JSON.stringify(draft.item_sets) === JSON.stringify(builtSets()), "the one set, unchanged");
+	assert(JSON.stringify(draft.rules) === JSON.stringify(EXAMPLE.rules), "the rules, unchanged");
+});
+
+await check("hostile zone and item set names are shown as text in Zones and Rules", async () => {
+	const draft = {
+		...original,
+		zones: [zoneOf(HOSTILE, ["AE"])],
+		item_sets: [{ name: HOSTILE_SET, item_groups: [WATCH_GROUP], items: [] }],
+		rules: [ruleOf(HOSTILE, "free", { item_set: HOSTILE_SET })],
+	};
+	await openWithStored({ version, draft, step: "rules" });
+	await expectText("draft-banner", "Restored your unsaved draft.");
+	assert((await textIn("rule-card", 0, "chip-zone")) === HOSTILE, "the zone chip says the name");
+	assert((await textIn("rule-card", 0, "chip-items")) === `${HOSTILE_SET}*`, "the items chip too");
+	await clickIn("rule-card", 0, "chip-items");
+	await expectIn("rule-card", 0, "rule-editor", HOSTILE_SET);
+	assert((await page.$$(".sp-wizard img, .sp-wizard b")).length === 0, "no element was made from a name");
+	await page.evaluate(() => document.activeElement?.blur());
+	const file = await tallShot("wizard-hostile-names-rules");
+	await page.keyboard.press("Escape");
+	await page.click(by("step-tab-zones"));
+	assert((await valueIn("zone-card", 0, "zone-name")) === HOSTILE, "the zone's name field holds the name");
+	await expectIn("zone-card", 0, "zone-usage", "Rule 1 uses this zone.");
+	assert((await page.$$(".sp-wizard img, .sp-wizard b")).length === 0, "no element in Zones either");
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	return file;
+});
+
 await check("the Shipping Policy form opens the wizard from a primary button, under a quiet hint", async () => {
 	await go(NEUTRAL);
 	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
@@ -880,6 +1562,36 @@ await check("at 760 px the tape stacks under the steps and nothing scrolls sidew
 	});
 	assert(Object.values(narrow).every(Boolean), JSON.stringify(narrow));
 	return shot("wizard-760");
+});
+
+await check("at 760 px the zone and rule cards fit, the sentences wrap and nothing scrolls sideways", async () => {
+	const draft = { ...original, zones: builtZones(), item_sets: builtSets(), rules: EXAMPLE.rules };
+	await openWithStored({ version, draft, step: "rules" });
+	const fits = async () =>
+		page.evaluate(() => {
+			const root = document.documentElement;
+			const panel = document.querySelector(".sp-step");
+			const cards = [...document.querySelectorAll('[data-testid="zone-card"], [data-testid="rule-card"]')];
+			return {
+				page: root.scrollWidth <= root.clientWidth,
+				cards: cards.length > 0 && cards.every((card) => card.getBoundingClientRect().right <= panel.getBoundingClientRect().right + 1),
+				inside: cards.every((card) => card.scrollWidth <= card.clientWidth + 1),
+			};
+		});
+	await clickIn("rule-card", 3, "chip-charge");
+	const rules = await fits();
+	const files = [await tallShot("wizard-rules-760")];
+	await page.keyboard.press("Escape");
+	await page.click(by("step-tab-zones"));
+	const zones = await fits();
+	files.push(await tallShot("wizard-zones-760"));
+	// the restored draft was not changed here, so nothing writes it back: the browser's storage is left empty
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	await pause(500);
+	assert((await stored()) === null, "nothing is left in the browser's storage");
+	assert(Object.values(rules).every(Boolean), `rules: ${JSON.stringify(rules)}`);
+	assert(Object.values(zones).every(Boolean), `zones: ${JSON.stringify(zones)}`);
+	return files.join(", ");
 });
 
 await check("no console errors or warnings and no failed requests", expectNoConsoleErrors);
