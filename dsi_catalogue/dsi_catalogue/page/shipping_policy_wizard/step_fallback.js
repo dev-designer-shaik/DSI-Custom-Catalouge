@@ -15,12 +15,14 @@
 // The cards change only the fallback of their zone (or the policy's default_fallback and not_covered), through
 // wizard.change. A fixed amount is kept to the cents the ERP keeps, rounded as the ERP rounds it (the desk's own
 // flt, as the Rules step's limits are). Choosing "Charge a fixed amount" leaves the amount blank until one is
-// typed, unless one was typed before; what is typed that is not an amount stays in its field and says so
+// typed, unless one was typed before: that one waits outside the draft while another choice is made
+// (wizard.ui.fallback.remembered), and the draft holds the saved amount meanwhile, so a choice taken back
+// leaves the draft as it was. What is typed that is not an amount stays in its field and says so
 // (wizard.ui.fallback.typed keeps it across a tab switch), and the draft keeps the last amount it held.
 
 let fallback_cards = 0; // ids for the labels of each card
 
-// The key of the policy default's typed amount in wizard.ui.fallback.typed (the zones' are the zone objects).
+// The key of the policy default in wizard.ui.fallback.typed and .remembered (the zones' are the zone objects).
 const POLICY_DEFAULT = {};
 
 class FallbackView {
@@ -28,6 +30,7 @@ class FallbackView {
 		this.wizard = wizard;
 		this.ui = wizard.ui.fallback;
 		this.ui.typed = this.ui.typed || new WeakMap(); // zone (or POLICY_DEFAULT) -> what is typed, not an amount
+		this.ui.remembered = this.ui.remembered || new WeakMap(); // zone (or POLICY_DEFAULT) -> the amount left behind
 		this.cards = new Map(); // zone object -> FallbackCard
 		this.list = el("div", { class: "sp-zones sp-fallbacks" });
 		this.empty = el(
@@ -220,21 +223,41 @@ class FallbackCard {
 		return this.zone || POLICY_DEFAULT;
 	}
 
-	// A fixed amount is blank until it is typed, unless one was typed before (a choice switched away from keeps
-	// its amount, as the Rules step keeps a charge's formula); a blank one goes back to 0 when another is chosen.
+	// A fixed amount is blank until it is typed, unless one was typed before: leaving "Charge a fixed amount", its
+	// amount waits outside the draft (wizard.ui.fallback.remembered) and the draft takes the saved amount back, so
+	// that a choice switched away from and back again changes nothing in the policy, and the Review shows no change
+	// that is not one. Choosing "Charge a fixed amount" again brings the remembered amount back.
 	choose(method) {
-		this.view.ui.typed.delete(this.typed_key);
+		const ui = this.view.ui;
+		ui.typed.delete(this.typed_key);
 		this.kept = null;
 		this.wizard.change((draft) => {
 			const fallback = this.target(draft);
 			const before = fallback.method;
 			fallback.method = method;
-			if (method === "fixed" && before !== "fixed" && !(sp.is_number(fallback.amount) && fallback.amount > 0)) {
-				fallback.amount = null;
-			} else if (method !== "fixed" && !sp.is_number(fallback.amount)) {
-				fallback.amount = 0;
+			if (before === "fixed" && method !== "fixed") {
+				if (sp.is_number(fallback.amount)) ui.remembered.set(this.typed_key, fallback.amount);
+				fallback.amount = this.saved_amount();
+			} else if (method === "fixed" && before !== "fixed") {
+				const remembered = ui.remembered.get(this.typed_key);
+				if (sp.is_number(remembered)) fallback.amount = remembered;
+				else if (!(sp.is_number(fallback.amount) && fallback.amount > 0)) fallback.amount = null;
+			} else if (!sp.is_number(fallback.amount)) {
+				fallback.amount = this.saved_amount();
 			}
 		});
+	}
+
+	// The amount the saved policy has for this fallback: 0 when it has none (a zone that is new, or renamed).
+	saved_amount() {
+		const original = this.wizard.store.original;
+		let fallback = original?.default_fallback;
+		if (this.zone) {
+			const name = String(this.zone.name ?? "").trim();
+			const zones = Array.isArray(original?.zones) ? original.zones : [];
+			fallback = zones.find((zone) => sp.is_record(zone) && String(zone.name ?? "").trim() === name)?.fallback;
+		}
+		return sp.is_record(fallback) && sp.is_number(fallback.amount) ? fallback.amount : 0;
 	}
 
 	// An amount typed: a number (or nothing) goes into the draft at once, in cents as the ERP keeps it; anything

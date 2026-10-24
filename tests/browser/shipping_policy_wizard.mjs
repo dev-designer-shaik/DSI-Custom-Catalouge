@@ -1951,6 +1951,15 @@ try {
 		await pick("fallback-policy-default", 0, "no_delivery");
 		await expectIn("fallback-zone", 0, "fallback-sentence", "the policy default applies: delivery is not offered.");
 		await expectIn("fallback-policy-default", 0, "fallback-sentence", "When a zone uses the policy default and the carrier cannot quote, delivery is not offered.");
+		// a fixed amount left behind waits outside the draft: the policy default is as it was saved again (M3)
+		await pick("fallback-policy-default", 0, "fixed");
+		await typeIn("fallback-policy-default", 0, "fallback-amount", "35");
+		await pick("fallback-policy-default", 0, "no_delivery");
+		const left = (await draftNow()).default_fallback;
+		assert(JSON.stringify(left) === JSON.stringify(original.default_fallback), `the saved default again: ${JSON.stringify(left)}`);
+		await pick("fallback-policy-default", 0, "fixed");
+		assert((await valueIn("fallback-policy-default", 0, "fallback-amount")) === "35.00", "and the amount comes back with Fixed");
+		await pick("fallback-policy-default", 0, "no_delivery");
 		// Anything not covered: no delivery, then back to passing the carrier's price through
 		await pick("not-covered", 0, "no_delivery", "not-covered-option");
 		await expectIn("not-covered", 0, "fallback-sentence", "When no rule fits an order, delivery is not offered.");
@@ -2189,6 +2198,15 @@ try {
 	});
 
 	await check("an edit while the policy is on: the banner says that edits go live when they are applied", async () => {
+		// a saved zone's choice switched to a fixed amount and back changes nothing: no edit, no banner (M3)
+		await page.click(by("step-tab-fallback"));
+		await pick("fallback-zone", 0, "fixed");
+		await typeIn("fallback-zone", 0, "fallback-amount", "35");
+		assert((await store()).dirty, "a fixed amount is an edit");
+		await pick("fallback-zone", 0, "policy_default");
+		const back = await store();
+		assert(!back.dirty, `back to its saved choice, the draft is the saved policy: ${JSON.stringify(back.draft.zones[0].fallback)}`);
+		assert(await page.$eval(by("draft-banner"), (banner) => banner.hidden), "and no banner");
 		await page.click(by("step-tab-rules"));
 		await typeIn("rule-card", 2, "rule-label", "Gulf at the carrier price, edited");
 		await expectText("draft-banner", "This policy is on: edits go live when you apply them.");
