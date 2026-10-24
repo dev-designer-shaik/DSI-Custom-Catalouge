@@ -1765,18 +1765,31 @@ UNCONFIRMED = (
 	"The server did not confirm the change, and it may still be saving. Reload the page to see the policy as it "
 	"is; your draft stays in this browser until then."
 )
+# ... and when the saved policy cannot be read either (ruling P103): the request may have reached the server.
+UNREACHABLE = (
+	"Could not reach the server, so we cannot tell whether the change was saved. Reload the page to see the policy "
+	"as it is; your draft stays in this browser until then."
+)
 
 
 def test_an_apply_whose_answer_is_lost_never_says_that_nothing_was_changed():
-	"""Ruling P102: an Apply that hears no usable word reads the saved policy once; when its version is still the
-	one the page sent, the write may yet come (the worker can wait 30 s for the lock), so the step says the change is
-	not confirmed and may still be saving, and to reload, never that nothing was changed. No timer: wording only."""
+	"""Rulings P102 and P103: an Apply that hears no usable word reads the saved policy once. When its version is
+	still the one the page sent, the write may yet come (the worker can wait 30 s for the lock); when the saved
+	policy cannot be read either, the request may still have reached the server. Either way the step says the change
+	is not confirmed and to reload, never that nothing was changed. No timer: wording only. The one claim left that
+	the policy was not applied is the server's own refusal, which it rolled back."""
 	review = (PAGE_DIR / "step_review.js").read_text(encoding="utf-8")
 	assert f'"{UNCONFIRMED}"' in review
 	assert 'found === "unchanged") return finish({ kind: "unconfirmed"' in review
+	assert f'"{UNREACHABLE}"' in review
+	assert 'return finish({ kind: "unreachable", draft: sent_key });' in review
 	served = served_page_script()
 	assert "did not accept the change" not in served
 	assert "not_accepted" not in served
+	assert "Nothing was changed" not in served
+	assert served.count('__("The policy was not applied') == 2, (
+		"only for a refusal the server sent with its words"
+	)
 
 
 def test_the_formula_names_the_rules_step_lists_are_the_servers():

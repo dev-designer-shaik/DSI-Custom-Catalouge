@@ -2682,13 +2682,16 @@ try {
 			assert((await ariaDisabled()) === "false", `${what}: Apply is usable again`);
 			said.push(what);
 		}
-		// the server cannot be asked at all: the old sentence
+		// the server cannot be asked at all: the Apply's request may still have reached it, so whether the change was
+		// saved cannot be told (ruling P103)
+		const unreachable =
+			"Could not reach the server, so we cannot tell whether the change was saved. Reload the page to see the policy as it is; your draft stays in this browser until then.";
 		await intercept(true);
 		try {
 			fakeNext.apply_policy = "abort";
 			fakeNext.wizard_state = "abort";
 			await page.click(by("apply-button"));
-			await expectText("apply-error", "Could not reach the server. Nothing was changed.", 20000);
+			await expectText("apply-error", unreachable, 20000);
 		} finally {
 			await intercept(false);
 		}
@@ -2698,9 +2701,10 @@ try {
 			/^request failed: POST .*wizard_state/,
 			/^console error: Failed to load resource: .*wizard_state/
 		);
+		assert(!(await textOf("apply-error")).includes("Nothing was changed"), 'unreachable: never "Nothing was changed"');
 		assert((await ariaDisabled()) === "false", "unreachable: Apply is usable again");
 		assert((await store()).dirty, "the draft is kept");
-		return `${said.join(", ")}: "${notAccepted}"`;
+		return `${said.join(", ")}: "${notAccepted}"; the server not reachable at all: "${unreachable}"`;
 	});
 
 	// The write went through but its answer was lost: the saved policy is the draft that was sent (finding M2).

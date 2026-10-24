@@ -18,16 +18,18 @@
 //	stale        someone changed the policy meanwhile: the draft is kept, and the person chooses to review the
 //	             differences (wizard.rebase_on_saved) or to reload the saved policy; nothing is sent again by itself
 //	refused      the server's sentences in apply-error, each as plain text: they arrive escaped, through Frappe's
-//	             message path, and are read with sp.refusal_lines. "Someone else is applying" is one of them
+//	             message path, and are read with sp.refusal_lines. "Someone else is applying" is one of them. The
+//	             server raised them, so it rolled the Apply back: "The policy was not applied" is said only here
 //	no word      no answer, or none the step can read (a lost connection, a status Frappe answers by itself, a 200
 //	             it cannot read): the write may still have gone through, so the saved policy is read again before
-//	             anything is said (written): "Applied. The server answered late." (adopted as above, with whether
-//	             the policy is on and what the last check of the draft as sent said would change), unconfirmed
-//	             (the version is still the one sent, but the worker may still be waiting for the lock and write
-//	             afterwards, so the step never says that nothing was changed: the change is not confirmed, may
-//	             still be saving, and a reload shows the policy as it is; the draft stays, ruling P102), stale as
-//	             above, or, when the server cannot be asked either, "Could not reach the server. Nothing was
-//	             changed."
+//	             anything is said (written), and nothing is ever said to be unchanged without the server's word:
+//	             "Applied. The server answered late." (adopted as above, with whether the policy is on and what
+//	             the last check of the draft as sent said would change); unconfirmed (the version is still the one
+//	             sent, but the worker may still be waiting for the lock and write afterwards: the change is not
+//	             confirmed, may still be saving, and a reload shows the policy as it is; ruling P102); stale as
+//	             above; or unreachable (the saved policy cannot be read either, and the request may still have
+//	             reached the server: whether the change was saved cannot be told, and a reload shows the policy as
+//	             it is; ruling P103). Unconfirmed and unreachable keep the draft
 //	unread       applied, but the saved policy could not be read again: Apply waits for a reload of the page
 // What the step shows that is not the draft lives in wizard.ui.review, since the panel is drawn again on every
 // tab switch and after Apply: the newest answer and the draft it is for, the request on its way, the outcome of
@@ -605,7 +607,16 @@ class ReviewView {
 				)
 			);
 		} else if (kind === "unreachable") {
-			error.push(el("p", {}, __("Could not reach the server. Nothing was changed.")));
+			// the Apply's request may have reached the server before the connection died (ruling P103)
+			error.push(
+				el(
+					"p",
+					{},
+					__(
+						"Could not reach the server, so we cannot tell whether the change was saved. Reload the page to see the policy as it is; your draft stays in this browser until then."
+					)
+				)
+			);
 		} else if (kind === "unread") {
 			error.push(
 				el(
