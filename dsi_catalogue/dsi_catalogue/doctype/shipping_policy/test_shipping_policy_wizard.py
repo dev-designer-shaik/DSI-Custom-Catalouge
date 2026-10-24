@@ -1858,17 +1858,20 @@ class TestApplyPolicy(WizardTestCase):
 		# the draft takes away.
 		bahrain = country_name("BH")
 		code = frappe.db.get_value("Country", bahrain, "code")
-		card = {**load_example(), "rate_card": copy.deepcopy(CARD)}
-		zone_named(card, "Bahrain")["fallback"] = {"method": "rate_card", "amount": 0.0}
 		cases = {
-			"its country's code was blanked": (load_example(), ""),
-			"its country's code is not two letters": (load_example(), "bhr"),
-			"it falls back to the rate card, which the draft takes away": (card, code),
+			"its country's code was blanked": ("", False),
+			"its country's code is not two letters": ("bhr", False),
+			"it falls back to the rate card, which the draft takes away": (code, True),
 		}
-		for what, (policy, bahrain_code) in cases.items():
+		for what, (bahrain_code, falls_back_to_the_card) in cases.items():
 			with self.subTest(what):
 				wipe_policy()
 				recode(self, bahrain, code)
+				# Loaded after the wipe, which deletes the item groups a policy loaded before it made.
+				policy = load_example()
+				if falls_back_to_the_card:
+					policy["rate_card"] = copy.deepcopy(CARD)
+					zone_named(policy, "Bahrain")["fallback"] = {"method": "rate_card", "amount": 0.0}
 				seed_policy(policy, active=True)
 				recode(self, bahrain, bahrain_code)  # after the zone was saved
 				before = snapshot()
