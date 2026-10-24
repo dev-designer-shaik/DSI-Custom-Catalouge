@@ -28,6 +28,7 @@ import math
 import os
 import random
 import runpy
+import tracemalloc
 from decimal import Decimal
 from pathlib import Path
 
@@ -2351,8 +2352,9 @@ def test_a_text_far_over_its_limit_is_checked_by_its_first_characters_only(place
 	"""Reading a text character by character is what costs (a Python loop over 10 MB took 0.4 s), so the two
 	checks that do it see at most the limit and one character more: whether a name, pattern or method is plain
 	text (`_is_plain`, given at most 141 characters, the longest limit and one), and the printable copy that
-	`_quote` makes for a sentence (`_printable`, given at most 61). A 5 MB text then costs what a short one
-	does, and the sentence keeps its words."""
+	`_quote` makes for a sentence (`_printable`, given at most 61). The key a profile name is compared by is
+	made of its first 141 characters too. What still looks at the whole text does it in C (its length, a
+	search for a brace in a pattern), a fraction of a millisecond for 5 MB. The sentence keeps its words."""
 	put_text, sentence = LONG_TEXTS[place]
 	seen = {"_is_plain": [], "_printable": []}  # the length of every text each one was given
 	for name, lengths in seen.items():
@@ -2408,6 +2410,29 @@ def test_a_long_name_is_read_for_plain_text_up_to_its_limit_and_one_character_mo
 	assert validate_card(card) == [too_long, not_plain]
 	profile["name"] = "N" * 141 + "\x00" + "M" * LONG
 	assert validate_card(card) == [too_long]
+
+
+def test_a_long_profile_name_is_compared_with_the_others_by_its_first_characters_only():
+	"""Two profiles may not share a name (spaces and capital letters aside), and the key a name is compared by
+	is made of its first 141 characters: a longer name is refused anyway. Made of the whole name, the key of
+	5 MB of short words took 136 ms and 100 MB on the way."""
+	card = sample_card()
+	profile = profile_of(card, "Dangerous Goods")
+	profile["name"] = "a " * (LONG // 2) + "a"
+	tracemalloc.start()
+	try:
+		problems = validate_card(card)
+		_, peak = tracemalloc.get_traced_memory()
+	finally:
+		tracemalloc.stop()
+	quoted = '"' + ("a " * 30)[:57] + '..."'
+	assert problems == [f"Profile 3 ({quoted}) has a name longer than 140 characters."]
+	assert peak < 1_000_000, f"{peak:,} bytes held at the most"
+	# The key still ignores spaces and capital letters within the limit.
+	profile["name"] = " refill  SERVICE "
+	assert validate_card(card) == [
+		'Profile 3 ("refill  SERVICE") has the same name as profile 2 ("Refill Service").'
+	]
 
 
 # ---------------------------------------------------------------- a card wrong in many places
