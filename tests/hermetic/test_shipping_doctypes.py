@@ -1189,7 +1189,7 @@ def wizard_module(monkeypatch):
 
 
 @needs_node
-def test_a_problem_links_to_the_step_that_owns_it(tmp_path, wizard_module):
+def test_a_problem_links_to_the_step_that_owns_it(tmp_path, wizard_module, monkeypatch):
 	"""The Review step's "Fix it" goes to the step that owns a problem: sp.problem_step reads the way the engine's
 	and the wizard's sentences start. Here are the engine's real sentences (validate_policy) and the wizard
 	module's own (made by the functions preview_changes and apply_policy use), each made, not copied."""
@@ -1259,12 +1259,28 @@ def test_a_problem_links_to_the_step_that_owns_it(tmp_path, wizard_module):
 			}
 		],
 	}
+	# A disabled zone of a draft whose countries have no two-letter code: one look in the Country list names
+	# them (the database compares codes without case); a code no Country has is shown as it is.
+	asked = []
+
+	def get_all(doctype, filters=None, fields=None, **more):
+		asked.append((doctype, filters))
+		return [{"name": "United Kingdom", "code": "gbr"}]
+
+	monkeypatch.setattr(wizard.frappe, "get_all", get_all, raising=False)
+	parked = wizard._unknown_countries(
+		{"zones": [{"name": "A", "enabled": False, "countries": ["GBR", "XYZ", "AE"]}]}, {"AE": "UAE"}
+	)
+	assert parked == [
+		'Zone "A" is off but lists United Kingdom (code "gbr") and "XYZ", which have no two-letter code in '
+		"the Country list, so the zone cannot be saved as it is. Remove them from the zone, remove the zone, "
+		"or give them two-letter codes in the Country list."
+	]
+	assert asked == [("Country", {"code": ["in", ["GBR", "XYZ"]]})], "one look, at the codes that are wrong"
 	made = {
 		"zones": [
 			*wizard._unknown_countries({"zones": [{"countries": ["ZZ"]}]}, {}),
-			*wizard._unknown_countries(
-				{"zones": [{"name": "A", "enabled": False, "countries": ["XYZ"]}]}, {}
-			),
+			*parked,
 			*wizard._saving_problems({**empty, "zones": [{"name": "Gulf"}, {"name": "gulf"}]}, empty),
 			*wizard._saving_problems({**empty, "zones": [{"name": "gulf"}]}, saved),
 		],

@@ -1895,6 +1895,30 @@ class TestApplyPolicy(WizardTestCase):
 					[row for row in before["stamps"]["Shipping Zone"] if row["name"] != "Bahrain"],
 				)
 				self.assertEqual(after["stamps"]["Shipping Item Set"], before["stamps"]["Shipping Item Set"])
+		# A draft that KEEPS a parked zone whose country's code went bad cannot write the zone back (a zone of
+		# the draft is written by its countries' codes). It is refused before anything is written, with a
+		# sentence that names the zone and the country and says what to do.
+		with self.subTest("a draft that keeps such a zone is refused, and nothing is written"):
+			wipe_policy()
+			france = country_name("FR")
+			parked = load_example()
+			parked["zones"].append(zone_of("Europe", ["FR"], enabled=False))
+			seed_policy(parked, active=True)
+			recode(self, france, "fra")  # after the zone was saved
+			before = snapshot()
+			draft = wizard.wizard_state()["policy"]
+			self.assertEqual(zone_named(draft, "Europe")["countries"], ["FRA"])
+			zone_named(draft, "GCC")["customer_line"] = "Gulf delivery."  # a change of something else
+			sentence = (
+				f'Zone "Europe" is off but lists {france} (code "fra"), which has no two-letter code in '
+				"the Country list, so the zone cannot be saved as it is. Remove it from the zone, remove the "
+				"zone, or give it a two-letter code in the Country list."
+			)
+			self.assertEqual(wizard.preview_changes(draft)["problems"], [sentence])
+			with self.assertRaises(frappe.ValidationError) as caught:
+				apply(draft)
+			self.assertEqual(messages(caught), [frappe.utils.escape_html(sentence)])
+			self.assertEqual(snapshot(), before, "nothing was written")
 
 	def test_apply_refuses_duplicate_zone_names_and_a_country_in_two_zones(self):
 		seed_policy(load_example())

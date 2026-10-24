@@ -634,9 +634,10 @@ def _as_loaded(policy, countries) -> dict:
 # ---------------------------------------------------------------- what stops a draft
 def _problems(policy, countries, saved) -> list[str]:
 	"""Everything that stops the draft from being applied, as plain sentences: `validate_policy`'s (the rate
-	card's own problems among them), then the countries the ERP does not know (those of the zones, then those
-	of the rate card), then what the doctypes would refuse to save although the engine has no quarrel with it,
-	a rate card that cannot be saved included. `saved` is the policy as it is in the ERP now."""
+	card's own problems among them), then the countries the ERP does not know or cannot write back (those of
+	the zones, a disabled one's included, then those of the rate card), then what the doctypes would refuse to
+	save although the engine has no quarrel with it, a rate card that cannot be saved included. `saved` is the
+	policy as it is in the ERP now."""
 	card = policy.get("rate_card")
 	return [
 		*validate_policy(policy),
@@ -728,11 +729,11 @@ def _unsavable_card(card) -> list[str]:
 
 
 def _unknown_countries(policy, countries) -> list[str]:
-	"""One sentence for each two-letter code that is no Country of the ERP, then one for each code of a
-	disabled zone that is not two letters. In an enabled zone such a code gets the engine's own sentence; the
-	engine leaves a disabled zone's codes alone (the zone is out of the live policy), but the draft's zones
-	are written by their codes, and one that is not two letters is no Country to write: the same sentence
-	comes from here."""
+	"""One sentence for each two-letter code that is no Country of the ERP, then one for each disabled zone
+	that lists codes that are not two letters (`_parked_zone_problem`). In an enabled zone such a code gets
+	the engine's own sentence; the engine leaves a disabled zone's codes alone (the zone is out of the live
+	policy), but a draft's zones are written by their codes, and one that is not two letters is no Country to
+	write."""
 	unknown = dict.fromkeys(
 		code
 		for zone in policy["zones"]
@@ -740,15 +741,49 @@ def _unknown_countries(policy, countries) -> list[str]:
 		if normalize_country(code) and code not in countries
 	)
 	problems = [f"Country code {code} is not a country in the ERP." for code in unknown]
+	parked = []  # (position, zone, its codes that are not two letters) of each disabled zone that has some
 	for position, zone in enumerate(policy["zones"], start=1):
-		if not zone.get("enabled"):
-			ref = f'"{zone["name"]}"' if zone.get("name") else f"number {position}"
-			problems += [
-				f'Zone {ref} lists "{code}", which is not a two-letter country code.'
-				for code in zone["countries"]
-				if not normalize_country(code)
-			]
+		wrong = list(dict.fromkeys(code for code in zone["countries"] if not normalize_country(code)))
+		if wrong and not zone.get("enabled"):
+			parked.append((position, zone, wrong))
+	if parked:
+		found = _countries_with_codes([code for _, _, wrong in parked for code in wrong])
+		problems += [_parked_zone_problem(position, zone, wrong, found) for position, zone, wrong in parked]
 	return problems
+
+
+def _countries_with_codes(codes) -> dict[str, dict]:
+	"""{code as the draft has it: the Country ({"name", "code"}) that holds it}, for the codes a Country of
+	the ERP holds, read with one query. The database compares codes as it compares names, without case (the
+	loader writes "gbr" as GBR), so a row is matched back the same way; the first Country by name wins."""
+	rows = frappe.get_all(
+		"Country", filters={"code": ["in", list(dict.fromkeys(codes))]}, fields=["name", "code"]
+	)
+	held = {}
+	for row in sorted(rows, key=lambda row: row["name"]):
+		held.setdefault((row["code"] or "").strip().casefold(), row)
+	return {code: held[code.casefold()] for code in codes if code.casefold() in held}
+
+
+def _parked_zone_problem(position, zone, wrong, found) -> str:
+	"""The sentence for a disabled zone of the draft that lists `wrong`, codes that are not two letters: it
+	names the zone and each Country (its stored code with it), or the code as the draft has it when no Country
+	of the ERP holds it, and says what to do. Plain text, like every sentence of these methods."""
+	ref = f'"{zone["name"]}"' if zone.get("name") else f"number {position}"
+	named = [
+		f'{found[code]["name"]} (code "{found[code]["code"]}")' if code in found else f'"{code}"'
+		for code in wrong
+	]
+	if len(named) == 1:
+		listed, which, them, codes = named[0], "which has", "it", "a two-letter code"
+	else:
+		listed = f"{', '.join(named[:-1])} and {named[-1]}"
+		which, them, codes = "which have", "them", "two-letter codes"
+	return (
+		f"Zone {ref} is off but lists {listed}, {which} no two-letter code in the Country list, so the "
+		f"zone cannot be saved as it is. Remove {them} from the zone, remove the zone, or give {them} "
+		f"{codes} in the Country list."
+	)
 
 
 def _capital_letter_clashes(kind, names, saved_names) -> list[str]:
