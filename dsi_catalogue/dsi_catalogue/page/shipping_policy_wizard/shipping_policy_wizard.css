@@ -1048,15 +1048,17 @@
 	color: var(--sp-sage);
 }
 
-.sp-wizard .sp-rule-amount.is-none {
-	font-weight: 400;
-}
-
 .sp-wizard .sp-rule-reason {
 	display: block;
 	color: var(--text-muted);
 	font-size: var(--text-xs);
 	line-height: 1.35;
+}
+
+/* a rule that does not price the order: its reason alone, level with the sentence's first line */
+.sp-wizard .sp-rule-reason:only-child {
+	font-size: var(--text-sm);
+	line-height: 32px;
 }
 
 .sp-wizard .sp-only-when {

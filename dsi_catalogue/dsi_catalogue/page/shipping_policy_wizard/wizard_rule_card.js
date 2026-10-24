@@ -213,16 +213,15 @@ class RuleCard {
 				reason = __("Rule {0} comes first", [result.rule + 1]);
 			}
 		}
-		let shown = "–";
-		let kind = "is-none";
-		if (amount !== null) {
-			shown = amount === 0 ? __("Free") : sp.money(amount);
-			kind = !paid ? "is-passed" : amount === 0 ? "is-free" : "is-paid";
+		// a rule that does not price the order says only why, quietly: a figure is shown only when there is one
+		const why = reason ? el("span", { class: "sp-rule-reason" }, reason) : null;
+		if (amount === null) {
+			this.price.replaceChildren(...(why ? [why] : []));
+			return;
 		}
-		const amount_line = el("span", { class: `sp-rule-amount ${kind}` }, shown);
-		this.price.replaceChildren(
-			...(reason ? [amount_line, el("span", { class: "sp-rule-reason" }, reason)] : [amount_line])
-		);
+		const kind = !paid ? "is-passed" : amount === 0 ? "is-free" : "is-paid";
+		const shown = el("span", { class: `sp-rule-amount ${kind}` }, amount === 0 ? __("Free") : sp.money(amount));
+		this.price.replaceChildren(...(why ? [shown, why] : [shown]));
 	}
 
 	// ---------------------------------------------------------- the editor under the line of its chip

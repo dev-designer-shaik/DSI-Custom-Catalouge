@@ -1250,8 +1250,10 @@ await check("the example policy prices the brief's orders, and each rule shows w
 		(price) => getComputedStyle(price.querySelector(".sp-rule-amount")).color
 	);
 	assert(paid === "rgb(154, 113, 22)", `what the customer pays is brass: ${paid}`);
-	assert((await textIn("rule-card", 1, "rule-price")) === "– Conditions not met", "no watch in the order");
-	assert((await textIn("rule-card", 0, "rule-price")) === "– Not for this country", "Bahrain's rule");
+	assert((await textIn("rule-card", 1, "rule-price")) === "Conditions not met", "no watch in the order");
+	assert((await textIn("rule-card", 0, "rule-price")) === "Not for this country", "Bahrain's rule");
+	const quiet = await page.$$eval(`${by("rule-price")} .sp-rule-amount`, (found) => found.length);
+	assert(quiet === 1, `a figure only where there is one: ${quiet}`);
 	await addTapeItem(WATCH);
 	await expectText("tape-total", "Free");
 	await expectIn("rule-card", 1, "rule-price", "Free");
@@ -1454,7 +1456,7 @@ await check("rules move with the up and down buttons and with the grip, and each
 await check("a rule switched off says Off, and a rule is deleted only after a question", async () => {
 	await clickIn("rule-card", 2, "rule-disable");
 	await expectIn("rule-card", 2, "rule-state", "Off");
-	await expectIn("rule-card", 2, "rule-price", "– Off");
+	await expectIn("rule-card", 2, "rule-price", "Off");
 	await clickIn("rule-card", 2, "rule-disable");
 	assert((await textIn("rule-card", 2, "rule-state")) === "", "on again");
 	await page.click(by("rule-add"));
