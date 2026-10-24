@@ -205,7 +205,8 @@ page.on("dialog", async (dialog) => {
 // place (fakeNext[method]: {status, body} (JSON) or {status, raw} (text as it is), or "abort" for a request that
 // never reaches the server).
 let priced = 0;
-const tryVerbs = new Set(); // the HTTP verbs of the try_order requests the page sends
+const tryVerbs = new Set(); // the HTTP verbs of the try_order requests the page sends, over the whole run
+let tried = 0; // and how many there were (priced is reset by the checks that count their own)
 let checked = 0;
 let applied = 0;
 let imported = 0;
@@ -230,6 +231,7 @@ page.on("request", (request) => {
 	const isImport = request.url().includes("shipping_policy_wizard.import_rate_card");
 	if (isTry) {
 		priced += 1;
+		tried += 1;
 		tryVerbs.add(request.method());
 	}
 	if (isCheck) checked += 1;
@@ -3950,7 +3952,8 @@ await check("at 760 px the Rates step and the Test tab fit, their lines wrap and
 // a link opened by a signed-in System Manager (a GET) cannot start it (final review M5).
 await check("every try_order the page sent was a POST, and a GET of it is refused", async () => {
 	const verbs = [...tryVerbs];
-	assert(priced > 0 && verbs.length === 1 && verbs[0] === "POST", `the verbs of the page's ${priced} try_order requests: ${verbs}`);
+	const sent = tried; // before the GET below, which is counted too
+	assert(sent > 0 && verbs.length === 1 && verbs[0] === "POST", `the verbs of the page's ${sent} try_order requests: ${verbs}`);
 	const url = `/api/method/${METHOD}try_order?${new URLSearchParams({ draft: "{}", order: "{}" })}`;
 	const status = await page.evaluate(async (url) => (await fetch(url, { headers: { Accept: "application/json" } })).status, url);
 	assert(status === 403, `a GET of try_order answers HTTP ${status}`);
@@ -3959,7 +3962,7 @@ await check("every try_order the page sent was a POST, and a GET of it is refuse
 		/^HTTP 403: GET .*shipping_policy_wizard\.try_order/,
 		/^console error: Failed to load resource: .*403.*shipping_policy_wizard\.try_order/
 	);
-	return `${priced - 1} try_order requests from the page, every one a POST; a GET answers HTTP 403`;
+	return `the page sent ${sent} try_order requests in the whole run, every one a POST; a GET answers HTTP 403`;
 });
 
 await check("no console errors or warnings and no failed requests", expectNoConsoleErrors);

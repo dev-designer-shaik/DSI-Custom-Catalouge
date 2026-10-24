@@ -319,8 +319,10 @@ def apply_policy(draft, expected_version) -> dict:
 	A failure at any step rolls everything back and is raised. A zone or item set that would not change is
 	left alone, so the history of each document records only real changes. Afterwards the website is asked
 	to refresh through dsi_core's outbox, when the site has it: a failure there is logged and the apply
-	stands, except a deadlock or a lock wait timeout, which ends the transaction and is raised. Returns the new
-	version and the changes (`diff_policy(policy before, draft)`).
+	stands, except a deadlock or a lock wait timeout, which is raised. A deadlock has already rolled the
+	transaction back; a lock wait timeout rolls back only its statement on a default server, and the raise is
+	what makes Frappe roll back the rest. Returns the new version and the changes (`diff_policy(policy
+	before, draft)`).
 
 	Two applies never write at the same moment: a second waits for the first to finish writing, and is
 	refused if that takes over 30 seconds. The lock is let go before the first is committed, so it does not
@@ -1179,9 +1181,11 @@ def _refresh_the_website(version):
 	"""Ask the website to refresh the pages that show the policy, through dsi_core's outbox when the site has
 	it, the way `api.notify_revalidate` does for products. A site without dsi_core skips it, and any other
 	failure, a dsi_core that fails as it is imported included, is logged and does not fail the apply, with one
-	exception: a deadlock or a lock wait timeout (`_ends_the_transaction`) is raised, because the database has
-	then rolled back what the apply wrote (the outbox row is written in the same transaction), and an apply that
-	went on would say it was applied.
+	exception: a deadlock or a lock wait timeout (`_ends_the_transaction`) is raised. After a deadlock the
+	database has already rolled back what the apply wrote (the outbox row is written in the same transaction),
+	so an apply that went on would say it was applied when nothing was written; a lock wait timeout rolls back
+	only its statement on a default server, and raising it makes Frappe roll back the rest, so the apply fails
+	whole rather than standing without its refresh.
 
 	The outbox queues nothing for a key it has seen, and `version` names the policy's content, which can come
 	back (A, B, A): the key also names the moment of this apply, so that every apply asks for its refresh.
