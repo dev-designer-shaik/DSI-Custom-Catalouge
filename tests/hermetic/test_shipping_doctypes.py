@@ -249,6 +249,11 @@ def test_policy_defaults_ship_the_policy_off():
 	fields = fields_of(POLICY)
 	assert fields["active"]["fieldtype"] == "Check"
 	assert fields["active"]["default"] == "0"
+	# On, the policy sets the price whatever its source: the rules, or the rate card.
+	assert fields["active"]["description"] == (
+		"Off: delivery costs stay exactly what the carrier quotes. On: the shipping policy sets what "
+		"customers pay, from the rules below or from the rate card, as the price source says."
+	)
 	assert fields["not_covered"]["default"] == "Pass the carrier price through"
 	assert fields["default_fallback_method"]["default"] == "Don't offer delivery"
 
