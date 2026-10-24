@@ -8,14 +8,25 @@
 // () => wizard.state.countries, so that a picker always uses the list the wizard holds now (a plain list is
 // taken too). `id` is the input's id, for a label's `for`; leave it out and each picker gets its own, so that
 // many pickers (one per zone card, say) never share one. `placeholder` and `testid` are the input's.
+// The picker works the same over any list of {code, name} (the item groups of an item set use it, the
+// group's name as both): `list_label` names the list and `none` is what it says when nothing matches.
 let country_pickers = 0;
 dsi_catalogue.CountryPicker = class CountryPicker {
-	constructor({ id, countries, placeholder, testid, on_change }) {
+	constructor({
+		id,
+		countries,
+		placeholder,
+		testid,
+		on_change,
+		list_label = __("Countries"),
+		none = __("No country has that name."),
+	}) {
 		country_pickers += 1;
 		id = id || `sp-country-${country_pickers}`;
 		this.id = id;
 		this.source = countries;
 		this.on_change = on_change;
+		this.none = none;
 		this.code = "";
 		this.matches = [];
 		this.active = -1;
@@ -37,7 +48,7 @@ dsi_catalogue.CountryPicker = class CountryPicker {
 			id: this.list_id,
 			class: "sp-combo-list",
 			role: "listbox",
-			"aria-label": __("Countries"),
+			"aria-label": list_label,
 			hidden: true,
 		});
 		this.root = el("div", { class: "sp-combo" }, this.input, this.list);
@@ -112,9 +123,7 @@ dsi_catalogue.CountryPicker = class CountryPicker {
 			)
 		);
 		if (!this.matches.length) {
-			this.list.append(
-				el("li", { class: "sp-combo-none", role: "presentation" }, __("No country has that name."))
-			);
+			this.list.append(el("li", { class: "sp-combo-none", role: "presentation" }, this.none));
 		}
 		this.list.hidden = false;
 		this.input.setAttribute("aria-expanded", "true");
