@@ -919,7 +919,8 @@ def _carrier_quotes(country, city, cartons) -> list[dict]:
 	"""The carrier's quotes for the cartons, asked one carton at a time as the website asks: each service's
 	prices added up, with the number of cartons it quoted, cheapest first. When the carrier fails in any way
 	(an error, an answer that says it failed, or one that is not a list of prices) there are no quotes at
-	all, never some of them."""
+	all, never some of them. The failure is noted, with its traceback, in the shipping_policy log file (not
+	the Error Log, and never on the page), so that a change in the carrier's call does not go unseen."""
 	code = normalize_country(country)
 	if not code:
 		frappe.throw(_("Asking the carrier needs a country."))
@@ -939,6 +940,11 @@ def _carrier_quotes(country, city, cartons) -> list[dict]:
 		return _quoted(get_shipping_rates, code, place, cartons)
 	except Exception:
 		del frappe.local.message_log[shown:]  # the carrier's own message (a SOAP fault, say) is not passed on
+		# At error level: outside a development server Frappe's loggers keep nothing below it.
+		frappe.logger("shipping_policy").error(
+			"Try an order could not use the carrier's answer, so it priced the order with no quotes.",
+			exc_info=True,
+		)
 		return []
 
 

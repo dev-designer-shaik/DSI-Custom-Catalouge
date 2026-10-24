@@ -327,6 +327,19 @@ def carrier(**patch):
 	return mock.patch("dsi_shipping.api.get_shipping_rates", **patch)
 
 
+@contextmanager
+def file_loggers():
+	"""`frappe.logger` replaced, so that nothing is written to the site's log files: each module's logger is a
+	mock, kept under the module's name in the dict this yields."""
+	loggers = {}
+
+	def logger(module=None, *arguments, **keywords):
+		return loggers.setdefault(module, mock.Mock())
+
+	with mock.patch.object(frappe, "logger", side_effect=logger):
+		yield loggers
+
+
 def rates(*services) -> dict:
 	"""A carrier reply quoting (service_id, name, cost) for one carton."""
 	return {
@@ -1179,7 +1192,7 @@ class TestTryOrder(WizardTestCase):
 			"only the second carton fails": {"side_effect": [good, RuntimeError("timeout")]},
 			"only the second carton is refused": {"side_effect": [good, {"success": False, "rates": []}]},
 		}
-		with mock.patch.object(frappe, "log_error") as logged:
+		with mock.patch.object(frappe, "log_error") as logged, file_loggers() as loggers:
 			for what, behaviour in failures.items():
 				with self.subTest(what), carrier(**behaviour):
 					shown = len(frappe.local.message_log)
@@ -1197,6 +1210,23 @@ class TestTryOrder(WizardTestCase):
 						len(frappe.local.message_log), shown, "the carrier's own message is not passed on"
 					)
 		logged.assert_not_called()
+		self.assertEqual(loggers["shipping_policy"].error.call_count, len(failures), "each one is noted")
+
+	def test_a_carrier_that_fails_is_noted_in_the_log_file_and_nowhere_else(self):
+		# The carrier failing in any way means no quotes, and its own words never reach the page. It is noted
+		# in the shipping_policy log file, so that a change in the carrier's call (an argument it no longer
+		# takes, say) does not go unseen; at error level, since Frappe keeps nothing below it outside a
+		# development server. Never in the Error Log (the class fails a test that writes there).
+		seed_policy(load_example(), active=True)
+		draft = wizard.wizard_state()["policy"]
+		order = sample(items=one_of(perfume()), quotes=None)
+		with file_loggers() as loggers, carrier(side_effect=TypeError("postcode")):
+			answer = tried(draft, order, ask_carrier=True, city="Dubai")
+		self.assertEqual(answer["order"]["quotes"], [])
+		log = loggers["shipping_policy"]
+		self.assertEqual(log.method_calls, [mock.call.error(mock.ANY, exc_info=True)])
+		[said] = log.error.call_args.args
+		self.assertNotIn("postcode", said, "the carrier's words are only in the traceback the log file keeps")
 
 	def test_asking_the_carrier_needs_a_city_a_country_and_a_carton_with_weight(self):
 		seed_policy(load_example(), active=True)
