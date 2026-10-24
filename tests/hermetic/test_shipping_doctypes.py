@@ -579,6 +579,99 @@ def test_the_page_script_as_served_is_valid_javascript(tmp_path):
 	assert result.returncode == 0, result.stderr
 
 
+# The served script run under node, with stand-ins for the few desk globals it touches while it loads (and a
+# tiny document for sp.el), so that its pure helpers can be called. `calls` is the body of a function of
+# `sp` that returns plain data.
+NODE_HARNESS = r"""
+const fs = require("fs");
+const vm = require("vm");
+globalThis.__ = (text, args) => (args ? text.replace(/\{(\d+)\}/g, (_, i) => String(args[i])) : text);
+globalThis.frappe = {
+	provide(name) {
+		globalThis[name] = globalThis[name] || {};
+	},
+	pages: { "shipping-policy-wizard": {} },
+	session: { user: "wizard-test@dsi.local" },
+	utils: {},
+};
+globalThis.document = {
+	createElement(tag) {
+		return {
+			tag,
+			attributes: {},
+			listeners: {},
+			children: [],
+			setAttribute(key, value) {
+				this.attributes[key] = value;
+			},
+			addEventListener(key, listener) {
+				this.listeners[key] = listener;
+			},
+			append(...children) {
+				this.children.push(...children);
+			},
+		};
+	},
+};
+vm.runInThisContext(fs.readFileSync(process.argv[2], "utf8"), { filename: "shipping_policy_wizard.js" });
+const calls = new Function("sp", fs.readFileSync(process.argv[3], "utf8"));
+console.log(JSON.stringify(calls(globalThis.dsi_catalogue.sp)));
+"""
+
+
+def run_page_helpers(tmp_path, calls):
+	served, harness, body = tmp_path / "served.js", tmp_path / "harness.js", tmp_path / "calls.js"
+	served.write_text(served_page_script(), encoding="utf-8")
+	harness.write_text(NODE_HARNESS, encoding="utf-8")
+	body.write_text(calls, encoding="utf-8")
+	command = ["node", str(harness), str(served), str(body)]
+	result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+	assert result.returncode == 0, result.stderr
+	return json.loads(result.stdout)
+
+
+@needs_node
+def test_a_typed_number_takes_commas_only_between_thousands(tmp_path):
+	"""1,5 kg is never read as 15: a comma anywhere but between groups of thousands is refused (comma is set,
+	for the tape to say "Use a period for decimals."), and the other refusals stay as they were."""
+	read = {  # what is typed: [value, ok] or [value, ok, comma]
+		"38.20": [38.2, True],
+		"$38.20": [38.2, True],
+		".5": [0.5, True],
+		"38.": [38, True],
+		"1,234.50": [1234.5, True],
+		"1,234,567": [1234567, True],
+		"1000000000": [1000000000, True],
+		"": [None, True],
+		"  ": [None, True],
+		"1,5": [None, False, True],
+		"12,34": [None, False, True],
+		",5": [None, False, True],
+		"1,2345": [None, False, True],
+		"1,234,56": [None, False, True],
+		"-5": [None, False],
+		"1e5": [None, False],
+		"Infinity": [None, False],
+		"abc": [None, False],
+		"1000000001": [None, False],
+	}
+	texts = json.dumps(list(read))
+	got = run_page_helpers(
+		tmp_path,
+		f"return Object.fromEntries({texts}.map((text) => {{ const r = sp.read_number(text); "
+		"return [text, r.comma ? [r.value, r.ok, true] : [r.value, r.ok]]; }));",
+	)
+	assert got == read
+	above_zero = run_page_helpers(
+		tmp_path, 'return ["0", "0.5", "2,5"].map((text) => sp.read_number(text, { above_zero: true }));'
+	)
+	assert above_zero == [
+		{"value": None, "ok": False},
+		{"value": 0.5, "ok": True},
+		{"value": None, "ok": False, "comma": True},
+	]
+
+
 def test_the_wizard_page_puts_text_on_the_page_only_as_text():
 	served = served_page_script()
 	assert 'frappe.pages["shipping-policy-wizard"].on_page_load' in served

@@ -476,6 +476,11 @@ await check("a field that is not a number says so and prices nothing", async () 
 	await expectText("tape-total", "Not priced yet");
 	await fill("tape-order-value", "");
 	await expectText("tape-total", "$60.00");
+	await fill("tape-weight", "1,5"); // a decimal comma is never read as 15
+	await expectText("tape-lines", "Use a period for decimals.");
+	await expectText("tape-total", "Not priced yet");
+	await fill("tape-weight", "");
+	await expectText("tape-total", "$60.00");
 });
 
 await check("an item is added with the desk's Link field, valued from the price list", async () => {

@@ -48,14 +48,19 @@ const sp = (dsi_catalogue.sp = {
 		return value.toLocaleString("en-US", { maximumFractionDigits: 3 });
 	},
 
-	// What a person typed as a number: {value, ok}. Blank is {value: null, ok: true}. A leading dollar sign
-	// and thousands commas are allowed; a negative number, text, or more than the server takes is not ok.
+	// What a person typed as a number: {value, ok, comma}. Blank is {value: null, ok: true}. A leading dollar
+	// sign is allowed, and commas only between groups of thousands (1,234.50). Any other comma is not ok and
+	// sets comma, so that the tape can say to use a period for decimals: 1,5 kg is never read as 15. A negative
+	// number, an exponent, other text, or more than the server takes is not ok.
 	read_number(text, { above_zero = false } = {}) {
-		const typed = String(text ?? "")
+		let typed = String(text ?? "")
 			.trim()
-			.replace(/^\$/, "")
-			.replace(/,/g, "");
+			.replace(/^\$/, "");
 		if (!typed) return { value: null, ok: true };
+		if (typed.includes(",")) {
+			if (!/^\d{1,3}(,\d{3})+(\.\d*)?$/.test(typed)) return { value: null, ok: false, comma: true };
+			typed = typed.replace(/,/g, "");
+		}
 		if (!/^(\d+(\.\d*)?|\.\d+)$/.test(typed)) return { value: null, ok: false };
 		const value = Number(typed);
 		const ok = value <= MAX_NUMBER && (above_zero ? value > 0 : value >= 0);

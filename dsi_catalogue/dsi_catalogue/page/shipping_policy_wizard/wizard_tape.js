@@ -430,12 +430,14 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 	request({ ask = false } = {}) {
 		const sample = this.sample;
 		const block = (reason, text) => ({ blocked: { [reason]: text } });
+		// a field that holds no number: a comma in the wrong place gets its own plain sentence
+		const refuse = (reading, text) => block("invalid", reading.comma ? __("Use a period for decimals.") : text);
 		if (!sample.country) return block("empty", __("Choose where the order ships to."));
 		const items = [];
 		for (const line of sample.items) {
 			const qty = sp.read_number(line.qty, { above_zero: true });
 			if (qty.value === null) {
-				return block("invalid", __("Type each quantity as a number above 0, such as 1 or 2."));
+				return refuse(qty, __("Type each quantity as a number above 0, such as 1 or 2."));
 			}
 			items.push({ item_code: line.item_code, qty: qty.value });
 		}
@@ -450,9 +452,9 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		const value = sp.read_number(sample.order_value);
 		const weight = sp.read_number(sample.weight);
 		const volume = sp.read_number(sample.volume);
-		if (!value.ok) return block("invalid", __("Type the order value as a number, such as 310 or 310.50."));
-		if (!weight.ok) return block("invalid", __("Type the weight in kilograms as a number, such as 1.2."));
-		if (!volume.ok) return block("invalid", __("Type the volume in litres as a number, such as 3."));
+		if (!value.ok) return refuse(value, __("Type the order value as a number, such as 310 or 310.50."));
+		if (!weight.ok) return refuse(weight, __("Type the weight in kilograms as a number, such as 1.2."));
+		if (!volume.ok) return refuse(volume, __("Type the volume in litres as a number, such as 3."));
 		const typed_cartons = weight.value !== null || volume.value !== null;
 		const units = items.reduce((sum, item) => sum + item.qty, 0);
 		if (!typed_cartons && units > MAX_PACKED_UNITS) {
@@ -479,7 +481,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 		else if (this.asked) quotes = this.asked.quotes;
 		else {
 			const quote = sp.read_number(sample.quote);
-			if (!quote.ok) return block("invalid", __("Type the carrier's quote as a number, such as 38.20."));
+			if (!quote.ok) return refuse(quote, __("Type the carrier's quote as a number, such as 38.20."));
 			if (quote.value !== null) {
 				quotes = [
 					{
