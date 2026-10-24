@@ -585,6 +585,20 @@ class TestRateCardInTheFrappeLayer(ShippingPolicyTestCase):
 		)
 		self.assertEqual(set(gulf), RESPONSE_KEYS)
 		self.assertEqual(set(gulf["offers"][0]), OFFER_KEYS)
+		# A guest can never say what an item is or what it weighs: the ERP's product code and unit weight
+		# price it, and whatever else is posted with an item is dropped as it is cleaned. A forged code that
+		# would make the fragrance a free item of the catch-all profile in the Gulf, and a forged weight
+		# that would be too heavy for the USA, change nothing.
+		forged = {"index_key": "{P-ZZ-1}", "weight_kg": 99, "weight_per_unit": 99, "groups": [], "price": 0}
+		lie = [{**one_of(fragrance)[0], **forged}]
+		self.assertEqual(priced("AE", lie), gulf)
+		self.assertEqual(priced("US", lie), priced("US", one_of(fragrance)))
+		# The control: had they been read, the answers would differ.
+		policy = shipping_policy.load_policy()
+		believed = {"country_code": "AE", "items": [{**lie[0], "qty": 1.0}], "served": True}
+		self.assertEqual(first_amount(shipping_engine.resolve(policy, believed)), 0.0)
+		believed["country_code"] = "US"
+		self.assertEqual(shipping_engine.resolve(policy, believed)["reason"], "too_heavy")
 		# Two profiles in one cart add up, each in its zone of the card; the zone named is the policy's.
 		mixed = priced("US", one_of(fragrance, 2) + one_of(watch))
 		self.assertEqual((mixed["zone"], mixed["offered"], mixed["reason"]), ("Rest of world", True, None))
