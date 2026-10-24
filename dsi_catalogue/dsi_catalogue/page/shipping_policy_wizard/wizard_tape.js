@@ -68,7 +68,7 @@ dsi_catalogue.ShippingPolicyTape = class ShippingPolicyTape {
 
 		this.country = new dsi_catalogue.CountryPicker({
 			id: "sp-tape-country",
-			countries: this.wizard.state.countries,
+			countries: () => this.wizard.state.countries,
 			placeholder: __("Choose a country"),
 			testid: "tape-country",
 			on_change: (code) => {

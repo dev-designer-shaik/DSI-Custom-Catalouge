@@ -710,6 +710,29 @@ def test_the_wizard_page_puts_text_on_the_page_only_as_text():
 
 
 @needs_node
+def test_new_entries_of_the_draft_follow_the_servers_key_order(tmp_path):
+	"""dirty is a JSON compare, key order included: a zone, rule or item set the wizard adds must have the keys
+	the server reads back, in the same order, or an addition taken back would leave the draft dirty."""
+	got = run_page_helpers(
+		tmp_path,
+		'return {zone: sp.new_zone("Gulf"), rule: sp.new_rule("Gulf"), item_set: sp.new_item_set("Watches")};',
+	)
+	example = json.loads(FIXTURE.read_text(encoding="utf-8"))
+	read_back = policy_from_rows(
+		{"rules": [{"zone": "Gulf", "method": "Carrier price"}]},  # a new row as the doctypes default it
+		[{"zone_name": "Gulf", "enabled": 1, "fallback_method": "Use the policy default"}],
+		[{"set_name": "Watches"}],
+		{},
+	)
+	for kind, entries in (("zone", "zones"), ("rule", "rules"), ("item_set", "item_sets")):
+		assert list(got[kind]) == list(example[entries][0]) == list(read_back[entries][0]), kind
+	assert list(got["zone"]["fallback"]) == list(example["zones"][0]["fallback"])
+	assert got["zone"] == read_back["zones"][0], "a new zone is what the server reads back for a new row"
+	assert got["item_set"] == read_back["item_sets"][0]
+	assert got["rule"] == {**read_back["rules"][0], "enabled": True}, "a rule added in the wizard is on"
+
+
+@needs_node
 def test_el_builds_from_text_and_refuses_an_inline_event_handler(tmp_path):
 	got = run_page_helpers(
 		tmp_path,

@@ -39,13 +39,24 @@
 // STEPS spreads into the step's entry. The stub's render prints the placeholder line; replacing the stub
 // removes it. refresh and priced are called only while the step is shown:
 //	refresh(wizard, panel)         after any change of the draft (the body is not rebuilt, so focus stays put)
-//	priced(wizard, panel, answer)  after each answer of try_order ({result, previews, order}), or null when
+//	priced(wizard, panel, answer)  each time the body is drawn (its first show and every tab switch), and
+//	                               after each answer of try_order: {result, previews, order}, or null when
 //	                               there is nothing to price
 // A step changes the draft only through wizard.change((draft) => { ...edit it in place... }). The wizard then
 // works out dirty, stores the draft, redraws the banner and the tabs, calls the step's refresh, and has the
 // tape price the order again 250 ms later. wizard.priced holds the latest answer (null while nothing is
 // priced); wizard.state the rest of wizard_state(): countries, served_codes, price_list, carrier_available.
 // A step that needs its body rebuilt calls wizard.render_step() itself.
+//
+// Notes for the step bodies:
+//	- render_step empties the panel and draws the body again on every tab switch, so an open editor or a
+//	  scroll position cannot live in the panel: keep it in wizard.ui[<step id>], an object per step that
+//	  lasts for the session and is not stored with the draft.
+//	- A dsi_catalogue.CountryPicker gets an id of its own when it is given none (give one only for a label's
+//	  `for`), and reads the countries when it uses them: pass countries: () => wizard.state.countries.
+//	- dirty compares the draft's JSON with the saved policy's, key order included: build new entries with
+//	  dsi_catalogue.sp.new_zone(name), new_rule(zone) and new_item_set(name), which follow the server's
+//	  order, so that an addition taken back leaves the draft clean.
 //
 // Text: everything the server returns and everything people type reaches the page as text (sp.el and
 // textContent), never as HTML. Errors raised through Frappe's message path arrive as HTML that the server

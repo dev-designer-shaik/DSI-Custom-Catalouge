@@ -1,7 +1,8 @@
 // Part of the Shipping policy wizard page: shipping_policy_wizard.js stitches it in and says how.
 //
 // Helpers: dsi_catalogue.sp (el builds elements from text, never HTML; clone, same, is_number, money,
-// measure, read_number, is_record), and problem_text, the sentences of a refusal as plain text.
+// measure, read_number, is_record; new_zone, new_rule and new_item_set build entries of the draft in the
+// server's key order), and problem_text, the sentences of a refusal as plain text.
 
 const sp = (dsi_catalogue.sp = {
 	// An element from a tag, attributes and children. A child that is a string becomes a text node, so
@@ -71,6 +72,48 @@ const sp = (dsi_catalogue.sp = {
 
 	is_record(value) {
 		return value !== null && typeof value === "object" && !Array.isArray(value);
+	},
+
+	// A new zone, rule and item set for the draft, with the server's keys in the server's order (as
+	// wizard_state gives them: shipping_policy_data.policy_from_rows builds them so). The draft is dirty when
+	// its JSON differs from the saved policy's, so an entry with its keys in another order would leave the
+	// draft dirty even when it equals a saved one. A new rule is enabled: one added in the wizard is meant to
+	// apply, and nothing goes live before Apply (the doctype's own new rows start disabled because they go
+	// live on save).
+	new_zone(name) {
+		return {
+			name,
+			enabled: true,
+			countries: [],
+			not_shipped: false,
+			everywhere_else: false,
+			customer_line: "",
+			not_offered_message: "",
+			fallback: { method: "policy_default", amount: 0 },
+		};
+	},
+
+	new_rule(zone) {
+		return {
+			name: null,
+			enabled: true,
+			label: "",
+			zone,
+			item_set: null,
+			min_order_value: 0,
+			max_order_value: 0,
+			min_weight_kg: 0,
+			max_weight_kg: 0,
+			min_volume_l: 0,
+			max_volume_l: 0,
+			method: "carrier_price",
+			formula: "",
+			round_up: false,
+		};
+	},
+
+	new_item_set(name) {
+		return { name, item_groups: [], items: [] };
 	},
 });
 const el = sp.el;

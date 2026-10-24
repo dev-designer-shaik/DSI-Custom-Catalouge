@@ -31,6 +31,10 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 		this.store = { original: null, draft: null, version: null, step: STEPS[0].id, dirty: false };
 		this.state = null;
 		this.priced = null;
+		// What a step's body shows that is not the draft (an open editor, a scroll position), by step id. The
+		// panel is emptied and drawn again on every tab switch, so the body keeps such things here; they last for
+		// the session and are not stored with the draft.
+		this.ui = Object.fromEntries(STEPS.map((step) => [step.id, {}]));
 		this.notice = null; // "restored" or "discarded": what happened to a stored draft on load
 		this.save_timer = null;
 		this.loading = true;
@@ -235,12 +239,15 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 		}
 	}
 
+	// Draws the selected step's body into its emptied panel, then hands it the latest answer of try_order
+	// (null while nothing is priced), so a body drawn on its first show or on a tab switch is never without it.
 	render_step() {
 		for (const step of STEPS) this.panels[step.id].hidden = step.id !== this.store.step;
 		const step = this.current_step();
 		const panel = this.panels[step.id];
 		panel.replaceChildren();
 		step.render(this, panel);
+		step.priced?.(this, panel, this.priced);
 	}
 
 	current_step() {
@@ -253,8 +260,6 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 			this.store.step = id;
 			this.render_tabs();
 			this.render_step();
-			const step = this.current_step();
-			step.priced?.(this, this.panels[step.id], this.priced);
 			if (this.store.dirty) this.save_draft_soon();
 		}
 		if (focus) document.getElementById(`sp-tab-${id}`)?.focus();

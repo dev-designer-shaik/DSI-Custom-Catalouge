@@ -3,9 +3,18 @@
 // A combobox over wizard_state().countries: type to narrow the list (by name, accents ignored, or by the
 // two-letter code), arrow keys to move, Enter or Tab to choose, Escape to close. on_change(code) is called
 // with the chosen code ("" when the field is cleared).
+//
+// Options: `countries` is a function that returns the list when it is called, normally
+// () => wizard.state.countries, so that a picker always uses the list the wizard holds now (a plain list is
+// taken too). `id` is the input's id, for a label's `for`; leave it out and each picker gets its own, so that
+// many pickers (one per zone card, say) never share one. `placeholder` and `testid` are the input's.
+let country_pickers = 0;
 dsi_catalogue.CountryPicker = class CountryPicker {
 	constructor({ id, countries, placeholder, testid, on_change }) {
-		this.countries = Array.isArray(countries) ? countries : [];
+		country_pickers += 1;
+		id = id || `sp-country-${country_pickers}`;
+		this.id = id;
+		this.source = countries;
 		this.on_change = on_change;
 		this.code = "";
 		this.matches = [];
@@ -44,6 +53,12 @@ dsi_catalogue.CountryPicker = class CountryPicker {
 			const option = event.target.closest("[role='option']");
 			if (option) this.choose(Number(option.dataset.index));
 		});
+	}
+
+	// The countries as the wizard holds them now: [{code, name}].
+	get countries() {
+		const list = typeof this.source === "function" ? this.source() : this.source;
+		return Array.isArray(list) ? list : [];
 	}
 
 	name_of(code) {

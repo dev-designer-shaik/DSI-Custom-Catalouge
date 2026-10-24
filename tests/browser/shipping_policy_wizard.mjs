@@ -670,6 +670,39 @@ await check("the receipt says how a draft that is on priced the order, in plain 
 	return file;
 });
 
+await check("for the step bodies: priced on every draw, wizard.ui, a picker's own id and live list", async () => {
+	await go(NEUTRAL);
+	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
+	await open();
+	const seen = await page.evaluate(() => {
+		const wizard = frappe.pages["shipping-policy-wizard"].wizard;
+		const zones = dsi_catalogue.ShippingPolicyWizard.STEPS.find((step) => step.id === "zones");
+		const stub = zones.priced;
+		const calls = [];
+		zones.priced = (_, panel, answer) => calls.push([panel.id, answer === wizard.priced]);
+		wizard.set_step("rates");
+		wizard.set_step("zones");
+		zones.priced = stub;
+		const countries = () => wizard.state.countries;
+		const one = new dsi_catalogue.CountryPicker({ countries, on_change() {} });
+		const two = new dsi_catalogue.CountryPicker({ countries, on_change() {} });
+		wizard.state.countries.push({ code: "ZZ", name: "Zedland" }); // the list changes after the picker is made
+		const found = one.find("zedland").map((country) => country.code);
+		wizard.state.countries.pop();
+		wizard.change((draft) => draft.zones.push(dsi_catalogue.sp.new_zone("Gulf")));
+		const added = wizard.store.dirty;
+		wizard.change((draft) => draft.zones.pop());
+		return { calls, ids: [one.id, two.id], found, added, dirty: wizard.store.dirty, ui: Object.keys(wizard.ui) };
+	});
+	assert(JSON.stringify(seen.calls) === '[["sp-panel-zones",true]]', `priced: ${JSON.stringify(seen.calls)}`);
+	assert(seen.ids[0] !== seen.ids[1], `two pickers, two ids: ${seen.ids}`);
+	assert(seen.found.join() === "ZZ", "the picker reads the wizard's list when it uses it");
+	assert(seen.added && !seen.dirty, "a zone added and taken back leaves the draft clean");
+	assert(seen.ui.join() === STEPS.join(), `wizard.ui has a place for each step: ${seen.ui}`);
+	await pause(500);
+	assert((await stored()) === null, "and nothing is left in storage");
+});
+
 await check("the Shipping Policy form opens the wizard from a primary button, under a quiet hint", async () => {
 	await go(NEUTRAL);
 	await page.evaluate((key) => window.localStorage.removeItem(key), DRAFT_KEY);
