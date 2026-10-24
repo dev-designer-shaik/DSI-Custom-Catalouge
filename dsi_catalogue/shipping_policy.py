@@ -167,7 +167,9 @@ def _country_codes(zone_rows):
 _CARRIER_DOCTYPES = ("Shipping Service", "Shipping Service Country", "Shipping Provider")
 
 
-def _carrier_tables_exist() -> bool:
+def carrier_tables_exist() -> bool:
+	"""Are dsi_shipping's doctypes installed on this site? The wizard asks too (call it through this module,
+	so that one patch of it covers both)."""
 	found = frappe.get_all("DocType", filters={"name": ["in", list(_CARRIER_DOCTYPES)]}, pluck="name")
 	return len(found) == len(_CARRIER_DOCTYPES)
 
@@ -178,7 +180,7 @@ def _carrier_countries(code: str | None = None) -> list[tuple[str, float]] | Non
 	listing, the scope is not looked at, and a limit of 0 means there is none. `code` narrows it to one country
 	(an upper-case ISO code). None when dsi_shipping's doctypes are not installed on this site.
 	"""
-	if not _carrier_tables_exist():
+	if not carrier_tables_exist():
 		return None
 	service, listing, provider = (frappe.qb.DocType(name) for name in _CARRIER_DOCTYPES)
 	query = (

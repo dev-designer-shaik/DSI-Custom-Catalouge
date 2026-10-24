@@ -849,8 +849,15 @@ class TestWizardState(WizardTestCase):
 		self.assertFalse(available(), "the provider is on, its services are off")
 		frappe.db.set_value("Shipping Service", services[0], "enabled", 1)
 		self.assertTrue(available())
-		with mock.patch.object(wizard, "_carrier_doctypes_exist", return_value=False):
-			self.assertFalse(available(), "dsi_shipping is not installed")
+		# Whether dsi_shipping is installed is one question, the loader's, for the wizard and the guests.
+		with mock.patch.object(shipping_policy, "carrier_tables_exist", return_value=False):
+			missing = wizard.wizard_state()
+		self.assertFalse(missing["carrier_available"], "dsi_shipping is not installed")
+		self.assertEqual(
+			set(missing["served_codes"]),
+			{country["code"] for country in missing["countries"]},
+			"so every country counts as served",
+		)
 
 
 # ---------------------------------------------------------------- check_formula

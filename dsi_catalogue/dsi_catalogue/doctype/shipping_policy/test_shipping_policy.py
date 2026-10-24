@@ -1144,7 +1144,7 @@ class TestGuestMethods(ShippingPolicyTestCase):
 
 	def test_without_the_carrier_tables_every_country_is_served(self):
 		country = unserved_code()  # before the tables go: with them gone there is no such country
-		with mock.patch.object(shipping_policy, "_carrier_tables_exist", return_value=False):
+		with mock.patch.object(shipping_policy, "carrier_tables_exist", return_value=False):
 			self.assertTrue(shipping_policy.country_is_served(country, 999))
 			self.assertFalse(shipping_policy.country_is_served("UAE", 0), "a code that is no country is not")
 			every = shipping_policy.served_country_codes()

@@ -48,7 +48,7 @@ from frappe.utils import escape_html, flt, get_url, sbool
 from frappe.utils.file_lock import LockTimeoutError
 from frappe.utils.synchronization import filelock
 
-from dsi_catalogue import shipping_formula, shipping_integration_check
+from dsi_catalogue import shipping_formula, shipping_integration_check, shipping_policy
 from dsi_catalogue.shipping_engine import normalize_country, resolve, rule_previews, validate_policy
 from dsi_catalogue.shipping_formula import FormulaError
 from dsi_catalogue.shipping_policy import (
@@ -188,6 +188,8 @@ _MAY_BE_LEFT_OUT = {"policy": ("price_source", "rate_card")}
 
 # The child tables of a zone and of an item set, each with the field that holds its value.
 _CHILD_TABLES = {ZONE: {"countries": "country"}, ITEM_SET: {"item_groups": "item_group", "items": "item"}}
+# The two of dsi_shipping's doctypes that `_carrier_available` reads (whether they exist is
+# `shipping_policy.carrier_tables_exist`'s to say).
 _CARRIER_DOCTYPES = ("Shipping Service", "Shipping Provider")
 
 
@@ -982,15 +984,10 @@ def _quoted(get_shipping_rates, code, city, cartons) -> list[dict]:
 	return clean_quotes(sorted(quotes, key=lambda quote: quote["amount"]))
 
 
-def _carrier_doctypes_exist() -> bool:
-	found = frappe.get_all("DocType", filters={"name": ["in", list(_CARRIER_DOCTYPES)]}, pluck="name")
-	return len(found) == len(_CARRIER_DOCTYPES)
-
-
 def _carrier_available() -> bool:
 	"""Can Try an order ask the carrier? Only where dsi_shipping is installed and an enabled service of an
 	enabled provider exists."""
-	if not _carrier_doctypes_exist():
+	if not shipping_policy.carrier_tables_exist():
 		return False
 	service, provider = (frappe.qb.DocType(name) for name in _CARRIER_DOCTYPES)
 	found = (
