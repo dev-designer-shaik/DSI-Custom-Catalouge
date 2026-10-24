@@ -79,7 +79,7 @@
    "label": "Shown to customers"
   },
   {
-   "description": "Shown at checkout when delivery is not offered here (a Not shipped zone, or a fallback that declines). Optional.",
+   "description": "Shown at checkout when delivery is not offered here (a Not shipped zone, a country the rate card does not cover, or a fallback that declines), once the policy is on with the rate card as the price source. Optional.",
    "fieldname": "not_offered_message",
    "fieldtype": "Small Text",
    "label": "If delivery isn't offered"
@@ -106,7 +106,7 @@
   }
  ],
  "links": [],
- "modified": "2026-10-23 00:00:00.000000",
+ "modified": "2026-10-25 01:30:00.000000",
  "modified_by": "Administrator",
  "module": "dsi_catalogue",
  "name": "Shipping Zone",

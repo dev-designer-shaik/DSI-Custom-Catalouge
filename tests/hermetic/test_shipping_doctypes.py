@@ -246,6 +246,23 @@ def test_new_zones_start_enabled_and_as_ordinary_zones():
 		assert fields[name].get("default", "0") == "0"
 
 
+def test_a_zones_texts_say_where_the_website_shows_them():
+	"""Ruling P105 (final review I1, its residual): the website's checkout shows a zone's message only while the
+	policy is on with the rate card as the price source (with the carrier it does not apply the policy yet). The
+	zone form and the Zones step say so, true whatever the policy's state."""
+	message = fields_of(ZONE)["not_offered_message"]
+	assert message["description"] == (
+		"Shown at checkout when delivery is not offered here (a Not shipped zone, a country the rate card does not "
+		"cover, or a fallback that declines), once the policy is on with the rate card as the price source. Optional."
+	)
+	zones = (PAGE_DIR / "step_zones.js").read_text(encoding="utf-8")
+	assert (
+		"\"Delivery is not offered to the zone's countries. Once the policy is on with the rate card as the price "
+		"source, checkout shows them the zone's message instead.\""
+	) in zones
+	assert "Checkout shows them the zone's message instead." not in served_page_script()
+
+
 def test_policy_defaults_ship_the_policy_off():
 	fields = fields_of(POLICY)
 	assert fields["active"]["fieldtype"] == "Check"
@@ -1082,9 +1099,11 @@ def test_the_review_reads_the_policy_zone_by_zone_in_plain_words(tmp_path):
 		"max(carrier_price * 1.1, 45), rounded up."
 	]
 	assert closed["states"] == [{"kind": "not_shipped", "text": "Not shipped"}]
+	# the website's checkout shows a zone's message only while the policy is on with the rate card (ruling P105)
 	assert closed["read"] == [
 		"Customers read: “We do not deliver to these countries.”",
-		"At checkout they read: “We don't deliver to this country.”",
+		"Once the policy is on with the rate card as the price source, checkout shows them: “We don't deliver to "
+		"this country.”",
 	]
 	assert (closed["never"], closed["rules"], closed["fallback"]) == (
 		"Delivery is never offered here.",

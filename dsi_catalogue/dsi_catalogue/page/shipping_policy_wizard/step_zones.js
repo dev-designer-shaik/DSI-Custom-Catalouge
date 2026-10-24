@@ -54,7 +54,10 @@ class ZonesView {
 				legend(
 					ZONE_LEGEND.not_shipped,
 					__("Not shipped"),
-					__("Delivery is not offered to the zone's countries. Checkout shows them the zone's message instead.")
+					// the website's checkout shows the message only while the policy is on with the rate card (ruling P105)
+					__(
+						"Delivery is not offered to the zone's countries. Once the policy is on with the rate card as the price source, checkout shows them the zone's message instead."
+					)
 				),
 				legend(
 					ZONE_LEGEND.everywhere_else,

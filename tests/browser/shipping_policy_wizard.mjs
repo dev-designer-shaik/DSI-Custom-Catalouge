@@ -1401,6 +1401,9 @@ await check("the example policy's four zones are built through the page", async 
 		(box) => document.getElementById(box.getAttribute("aria-describedby"))?.textContent
 	);
 	assert(described?.startsWith("Delivery is not offered"), `a switch is described by its legend line: ${described}`);
+	// the website's checkout shows the zone's message only while the policy is on with the rate card (ruling P105)
+	const message = "Once the policy is on with the rate card as the price source, checkout shows them the zone's message instead.";
+	assert(described.endsWith(message), `the Not shipped line says when checkout shows the message: ${described}`);
 });
 
 await check("a country already in another zone that is on is refused, naming that zone", async () => {
@@ -2215,7 +2218,7 @@ try {
 			"Bahrain Bahrain. Customers read: “Free delivery in Bahrain.” Rule 1 (Free in Bahrain): In Bahrain, for every item, charge nothing (free). If the carrier cannot quote, the policy default applies: delivery is not offered.",
 			"GCC United Arab Emirates; Saudi Arabia; Kuwait; Oman; Qatar. Customers read: “Gulf delivery, priced by the carrier. Watches ship free.” Rule 2 (Free watches in the Gulf): In GCC, for orders made up only of items in Watches, charge nothing (free). Rule 3 (Gulf at the carrier price): In GCC, for every item, charge the carrier's price, rounded up. If the carrier cannot quote, customers here pay a fixed $35.00.",
 			"Rest of world Everywhere else Every other country. Customers read: “International delivery, priced at checkout.” Rule 4 (International with a minimum): In Rest of world, for every item, charge max(carrier_price * 1.1, 45), rounded up. If the carrier cannot quote, the policy default applies: delivery is not offered.",
-			"Not shipped Not shipped Russian Federation; Belarus. Delivery is never offered here. Customers read: “We do not deliver to these countries.” At checkout they read: “We don't deliver to this country.”",
+			"Not shipped Not shipped Russian Federation; Belarus. Delivery is never offered here. Customers read: “We do not deliver to these countries.” Once the policy is on with the rate card as the price source, checkout shows them: “We don't deliver to this country.”",
 		];
 		zones.forEach((text, n) => assert(text === want[n], `zone ${n + 1} reads: ${text}`));
 		assert(zones.length === 4, `four zones: ${zones.length}`);
