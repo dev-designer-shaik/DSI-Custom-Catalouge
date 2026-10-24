@@ -516,9 +516,13 @@ class RuleCard {
 		];
 	}
 
-	// The answer of check_formula for this card's formula ("" when it can be used), while its editor is open.
-	show_formula_error(error) {
-		if (this.chip === "charge" && this.formula_error) this.formula_error.textContent = error;
+	// The answer of check_formula ("" when the formula can be used) for `formula`: in the editor while it is open
+	// (data-checked says which formula the shown answer is for), and in the card's problems once it is closed.
+	show_formula_error(error, formula) {
+		if (this.chip === "charge" && this.formula_error) {
+			this.formula_error.textContent = error;
+			this.formula_error.dataset.checked = formula;
+		}
 		this.update(this.index, this.view.rules.length);
 	}
 

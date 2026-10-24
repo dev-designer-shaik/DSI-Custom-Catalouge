@@ -16,9 +16,10 @@
 // editors; wizard_rule_words.js has the words both use (sp.rule_words and its kin, CHARGES, LIMITS).
 //
 // What the body shows that is not the draft lives in wizard.ui.rules, because the panel is emptied on every
-// tab switch: `open` ({rule, chip}, the editor that is open), `set_editor` (the item set being edited, see
-// wizard_itemset_editor.js), `checks` (formula -> what check_formula said, "" when it is fine), `typed`
-// (rule -> limits typed that are not numbers), and the item groups and item names read from the desk.
+// tab switch: `view` (the view drawn last), `open` ({rule, chip}, the editor that is open), `set_editor` (the
+// item set being edited, see wizard_itemset_editor.js), `checks` (formula -> what check_formula said, "" when
+// it is fine), `formula_checks` (rule -> the timer and count of its formula's check), `typed` (rule -> limits
+// typed that are not numbers), and the item groups and item names read from the desk.
 
 const ASTERISK = __(
 	"* A rule for selected items applies only when every item in the order is one of them. A rule for every item applies to every order."
@@ -30,11 +31,12 @@ class RulesView {
 	constructor(wizard, panel) {
 		this.wizard = wizard;
 		this.ui = wizard.ui.rules;
+		this.ui.view = this; // the view drawn last: answers that arrive later go to its cards
 		this.ui.open = this.ui.open || null;
 		this.ui.set_editor = this.ui.set_editor || null;
 		this.ui.checks = this.ui.checks || new Map();
+		this.ui.formula_checks = this.ui.formula_checks || new WeakMap(); // rule -> {sequence, timer}
 		this.ui.typed = this.ui.typed || new WeakMap();
-		this.ui.formula_sequence = this.ui.formula_sequence || 0;
 		this.cards = new Map(); // rule object -> RuleCard
 		this.list = el("ol", {
 			class: "sp-rules",
@@ -225,27 +227,34 @@ class RulesView {
 	}
 
 	// ---------------------------------------------------------- formulas
-	// The formula of the card's rule, checked by the server 300 ms after the last key (soon), or now. Each
-	// check gets a number and only the newest one's answer is shown, so a slow answer to an older formula never
-	// replaces it. What the server said of a formula is remembered, so it is asked once.
+	// The formula of the card's rule, checked by the server 300 ms after the last key (soon), or now. Each rule
+	// has its own timer and count: a check gets a number and only the newest one's answer is shown, so a slow
+	// answer to an older formula never replaces it, and another rule's check never cancels it. The answer goes
+	// to the rule's card as drawn when it arrives (a tab switch draws new cards). What the server said of a
+	// formula is remembered, so it is asked once.
 	check_formula(card, { soon = false } = {}) {
-		const ui = this.ui;
-		const sequence = ++ui.formula_sequence;
-		clearTimeout(ui.formula_timer);
-		const formula = String(card.rule.formula ?? "").trim();
+		const rule = card.rule;
+		let state = this.ui.formula_checks.get(rule);
+		if (!state) {
+			state = { sequence: 0, timer: null };
+			this.ui.formula_checks.set(rule, state);
+		}
+		const sequence = ++state.sequence;
+		clearTimeout(state.timer);
+		const formula = String(rule.formula ?? "").trim();
 		const show = (error) => {
-			if (sequence === ui.formula_sequence) card.show_formula_error(error);
+			if (sequence === state.sequence) this.ui.view?.cards.get(rule)?.show_formula_error(error, formula);
 		};
 		if (!formula) {
 			show("");
 			return;
 		}
-		if (ui.checks.has(formula)) {
-			show(ui.checks.get(formula));
+		if (this.ui.checks.has(formula)) {
+			show(this.ui.checks.get(formula));
 			return;
 		}
 		const ask = () => this.ask_formula(formula).then(show);
-		if (soon) ui.formula_timer = setTimeout(ask, FORMULA_CHECK_DELAY);
+		if (soon) state.timer = setTimeout(ask, FORMULA_CHECK_DELAY);
 		else ask();
 	}
 

@@ -1328,6 +1328,24 @@ await check("a formula is checked 300 ms after the last key, and an older answer
 	const open = await page.$$eval(`${by("rule-editor")}:not([hidden])`, (found) => found.length);
 	assert(open === 0, "a click outside closes the editor");
 	assert((await focusedTestid()) === "tape-city", `the focus stays where the click put it: ${await focusedTestid()}`);
+	// each rule's formula has its own check: opening another formula rule's charge right after typing does not
+	// cancel the first one's, whose card then says what the server said
+	await choose(2, "chip-charge", "rule-charge-option", "formula");
+	await page.evaluate(() => {
+		// typed, and in the same moment (well inside the 300 ms) the other formula rule's charge opened
+		const cards = document.querySelectorAll('[data-testid="rule-card"]');
+		const input = cards[2].querySelector('[data-testid="rule-formula-input"]');
+		input.value = "boxes +"; // a formula not checked before, so the answer has to come from the server
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		cards[3].querySelector('[data-testid="chip-charge"]').click();
+	});
+	await expectIn("rule-card", 2, "rule-problems", "The formula cannot be used:", 10000);
+	await page.keyboard.press("Escape");
+	await clickIn("rule-card", 2, "chip-charge");
+	await typeIn("rule-card", 2, "rule-formula-input", "");
+	await (await (await nth("rule-card", 2)).$(`${by("rule-charge-option")}[value="carrier_price"]`)).click();
+	await page.keyboard.press("Escape");
+	assert(JSON.stringify((await draftNow()).rules) === JSON.stringify(EXAMPLE.rules), "the rules are the example's");
 	return `the server said: "${error}"`;
 });
 
