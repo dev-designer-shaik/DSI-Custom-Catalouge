@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-25 — Website Manager may manage the Shipping Policy
+- The wizard page, its seven methods and the three record types (Shipping Zone,
+  Shipping Item Set, Shipping Policy) are open to System Manager **and Website
+  Manager** (was System Manager only). One list, `MANAGER_ROLES` in
+  `shipping_policy_wizard.py`; the page and doctype JSON name the same roles and
+  a hermetic test fails when they stop agreeing. No new role, Custom DocPerm or
+  customisation; Guest and every other role stay refused. Needs `reload-doc` of
+  the doctypes and the page on a site that already has the policy; the four JSON
+  files carry a new `modified` stamp for that (reload-doc skips a page whose stamp
+  is unchanged, so edited roles alone would never reach it).
+
 ## 2026-10-24 — Shipping Policy (branch `shipping-policy`, not yet promoted)
 - Delivery pricing set in the ERP: doctypes Shipping Zone (+ Country), Shipping
   Item Set (+ Group, Item) and the single Shipping Policy (+ Rule), and the

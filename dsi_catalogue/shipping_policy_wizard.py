@@ -1,6 +1,7 @@
 """The shipping policy wizard's methods: what the wizard page reads, prices and, on Apply, writes.
 
-Seven methods, for the System Manager role only. Each one checks the role before it does anything else.
+Seven methods, for the System Manager and Website Manager roles only (`MANAGER_ROLES`). Each one checks the
+roles before it does anything else.
 
 	wizard_state     the saved policy, its version, and the lists the page needs
 	try_order        prices a sample order with the draft, as if the draft were switched on
@@ -85,6 +86,11 @@ from dsi_catalogue.shipping_rate_card import (
 	parse_shopify_export,
 	validate_card,
 )
+
+# Who may manage the Shipping Policy: every method below checks these roles first. The page and the three
+# record types name the same roles in their JSON; tests/hermetic/test_shipping_doctypes.py fails when the
+# lists stop agreeing.
+MANAGER_ROLES = ("System Manager", "Website Manager")
 
 POLICY = "Shipping Policy"
 ZONE = "Shipping Zone"
@@ -208,7 +214,7 @@ def wizard_state() -> dict:
 	chips; `served_codes` the countries some carrier service delivers to; `price_list` the list an order's
 	value comes from; `carrier_available` whether Try an order can ask the carrier. Plain data only.
 	"""
-	frappe.only_for("System Manager")
+	frappe.only_for(MANAGER_ROLES)
 	policy = load_policy()
 	return {
 		"policy": policy,
@@ -245,7 +251,7 @@ def try_order(draft, order, ask_carrier=False, city=None) -> dict:
 	prices the draft on every keystroke. It takes POST requests only, as the page sends them: with
 	`ask_carrier` it sends this server out to the carrier, once a carton, and a link cannot start that.
 	"""
-	frappe.only_for("System Manager")
+	frappe.only_for(MANAGER_ROLES)
 	policy = _read_draft(draft)
 	if policy is None:
 		frappe.throw(_(SHAPE_PROBLEM))
@@ -259,7 +265,7 @@ def check_formula(source) -> dict:
 	"""{"ok": True, "error": None} for a formula a rule can use, otherwise {"ok": False, "error": <why, in a
 	plain sentence>}. The same check a rule's formula gets when the policy is saved. It never raises,
 	whatever it is given, and nothing is logged."""
-	frappe.only_for("System Manager")
+	frappe.only_for(MANAGER_ROLES)
 	try:
 		shipping_formula.check_formula(source)
 	except FormulaError as error:
@@ -281,7 +287,7 @@ def preview_changes(draft) -> dict:
 	is not a policy gives the single problem "The draft is not in the expected shape." and no changes. A draft
 	may leave out `price_source` and `rate_card` (the carrier, and no card). Nothing is written.
 	"""
-	frappe.only_for("System Manager")
+	frappe.only_for(MANAGER_ROLES)
 	policy = _read_draft(draft)
 	if policy is None:
 		return {"changes": diff_policy({}, {}), "problems": [SHAPE_PROBLEM]}
@@ -331,7 +337,7 @@ def apply_policy(draft, expected_version) -> dict:
 	country put in two zones by two applies at once) are not caught. It is the one method that writes, so it
 	takes POST requests only (a link cannot apply a policy).
 	"""
-	frappe.only_for("System Manager")
+	frappe.only_for(MANAGER_ROLES)
 	try:
 		with filelock(APPLY_LOCK, timeout=APPLY_LOCK_SECONDS):
 			return _apply(draft, expected_version)
@@ -364,7 +370,7 @@ def import_rate_card(config_csv, not_delivered_csv=None) -> dict:
 	The draft is not changed: the page takes the card (and the not-delivered countries, as a Not shipped zone)
 	into its draft, and Apply is the only writer.
 	"""
-	frappe.only_for("System Manager")
+	frappe.only_for(MANAGER_ROLES)
 	config = _csv_text(config_csv, "rates file")
 	not_delivered = (
 		None if _is_blank(not_delivered_csv) else _csv_text(not_delivered_csv, "not-delivered file")
@@ -440,7 +446,7 @@ def test_integration(order=None) -> dict:
 	- an unexpected exception in a check is written once, titled "shipping policy integration test failed",
 	  with Frappe's usual copy of the request's form data, which here is only the optional `order` override.
 	"""
-	frappe.only_for("System Manager")
+	frappe.only_for(MANAGER_ROLES)
 	sample = _integration_sample(order)
 	erp = _run_check("erp_price_api", _check_erp, sample)
 	carrier = _run_check("carrier", _check_carrier, sample)

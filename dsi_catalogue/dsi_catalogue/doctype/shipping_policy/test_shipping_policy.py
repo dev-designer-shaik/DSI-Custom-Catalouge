@@ -495,11 +495,14 @@ class TestShippingPolicy(ShippingPolicyTestCase):
 		self.assertIn("(&lt; &lt;= &gt; &gt;=", text, "the checker's own sentence is escaped too")
 		self.assertNotIn("<", text)
 
-	def test_only_system_manager_can_use_the_doctypes_and_no_custom_permission_was_added(self):
+	def test_only_the_manager_roles_can_use_the_doctypes_and_no_custom_permission_was_added(self):
 		for doctype in ("Shipping Zone", "Shipping Item Set", POLICY):
-			rows = frappe.get_all("DocPerm", filters={"parent": doctype}, fields=["role", "read", "write"])
+			rows = frappe.get_all(
+				"DocPerm", filters={"parent": doctype}, fields=["role", "read", "write"], order_by="idx asc"
+			)
 			self.assertEqual(
-				[(row["role"], row["read"], row["write"]) for row in rows], [("System Manager", 1, 1)]
+				[(row["role"], row["read"], row["write"]) for row in rows],
+				[("System Manager", 1, 1), ("Website Manager", 1, 1)],
 			)
 			self.assertEqual(frappe.db.count("Custom DocPerm", {"parent": doctype}), 0, doctype)
 

@@ -712,7 +712,7 @@ class WizardTestCase(ShippingPolicyTestCase):
 
 # ---------------------------------------------------------------- who may use the wizard
 class TestWizardAccess(WizardTestCase):
-	def test_non_system_managers_are_refused(self):
+	def test_users_without_a_manager_role_are_refused(self):
 		seed_policy(load_example())
 		draft = load_policy()
 		version = snapshot_version(draft)
@@ -752,6 +752,15 @@ class TestWizardAccess(WizardTestCase):
 			self.assertEqual(
 				wizard.import_rate_card(CONFIG_CSV, NOT_DELIVERED_CSV)["summary"], IMPORTED_SUMMARY
 			)
+		# The other manager role: a user whose only role is Website Manager may use the page's methods too.
+		website = make_user(self, "Website Manager")
+		with as_user(website):
+			self.assertEqual(wizard.wizard_state()["version"], version)
+			self.assertTrue(wizard.check_formula("carrier_price * 1.1")["ok"])
+			self.assertEqual(
+				wizard.import_rate_card(CONFIG_CSV, NOT_DELIVERED_CSV)["summary"], IMPORTED_SUMMARY
+			)
+		self.assertEqual(wizard.MANAGER_ROLES, ("System Manager", "Website Manager"))
 
 	def test_each_method_checks_the_role_before_anything_else(self):
 		tree = ast.parse(inspect.getsource(wizard))
@@ -761,7 +770,7 @@ class TestWizardAccess(WizardTestCase):
 				body = functions[method].body
 				if isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
 					body = body[1:]  # the docstring
-				self.assertEqual(ast.unparse(body[0]), "frappe.only_for('System Manager')")
+				self.assertEqual(ast.unparse(body[0]), "frappe.only_for(MANAGER_ROLES)")
 
 	def test_the_methods_are_whitelisted_for_users_and_none_for_guests(self):
 		# Every function the module defines, the private helpers too: one whitelisted by mistake is seen.

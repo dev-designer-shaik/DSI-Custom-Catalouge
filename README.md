@@ -45,7 +45,7 @@ Read-only, ungated: `get_published_website_items`, `get_website_item_by_index_ke
 `shipping_policy.public_summary`.
 Token-gated (`X-DSI-Token`): `sync_product_catalogue`, `receive_publish_callback`,
 `receive_generation_callback`.
-System Manager only: the seven `shipping_policy_wizard` methods (`wizard_state`,
+System Manager or Website Manager only: the seven `shipping_policy_wizard` methods (`wizard_state`,
 `try_order`, `check_formula`, `preview_changes`, `apply_policy`, `import_rate_card`,
 `test_integration`; `apply_policy`, `try_order` and `test_integration` take POST
 only).
@@ -65,7 +65,7 @@ must go through `index_key.get_product_grouping_key`.
 
 ## Shipping Policy
 What customers pay for delivery, set in the ERP (spec and plan in
-`docs/superpowers/`). Its doctypes, System Manager only and version-tracked:
+`docs/superpowers/`). Its doctypes, System Manager or Website Manager only and version-tracked:
 Shipping Zone (countries from the ERP's Country list, Not shipped, Everywhere
 else, a line for customers, what to do when the carrier can't quote), Shipping
 Item Set (item groups, with the groups beneath them, and items), and the single
@@ -76,7 +76,7 @@ item set holds only when every item in the order is in the set). The policy ship
 they were posted.
 
 **The wizard.** The **Open the wizard** button on the Shipping Policy form opens
-the page `/desk/shipping-policy-wizard` (System Manager only). Six tabs: Zones,
+the page `/desk/shipping-policy-wizard` (System Manager or Website Manager only). Six tabs: Zones,
 Rates, Rules, If the carrier can't quote, Review, and Test. It edits a draft kept
 in the browser and writes nothing until **Apply** on Review, which writes the whole
 draft in one transaction or nothing, and refuses when someone changed the policy
@@ -120,7 +120,7 @@ and empty**. This app, with `price_delivery`, goes on the live ERP **before** th
 website change is pushed (the website falls back to the carrier path while the
 method is missing). No new `site_config` keys, no new roles, no Custom DocPerm and
 no customisation (Custom Field, Property Setter, Client or Server Script); the new
-doctypes and the page carry their own System Manager permissions, and `hooks.py`
+doctypes and the page carry their own System Manager and Website Manager permissions, and `hooks.py`
 is unchanged. Then:
 - [ ] Packing and the outbox, on a site that has `dsi_shipping.packing` and
   `dsi_core` (erp2 has neither; the native tests use stand-ins): Try an order with

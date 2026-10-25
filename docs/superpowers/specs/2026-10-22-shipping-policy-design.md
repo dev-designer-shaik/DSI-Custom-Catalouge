@@ -40,7 +40,7 @@ The business wants to set delivery pricing itself, in the ERP, by region, by ite
 ## Constraints (decided)
 
 - New standard doctypes and code inside `dsi_catalogue` only. No Custom Fields, Property Setters, Client Scripts, Server Scripts, new roles or Custom DocPerm rows.
-- Editing is for the System Manager role, the same as Shipping Service today. The two read-only guest methods below return only what a customer may see.
+- Editing is for the System Manager role, the same as Shipping Service today. (Amended 2026-10-25: System Manager **or Website Manager**, `MANAGER_ROLES` in the wizard module.) The two read-only guest methods below return only what a customer may see.
 - Built and verified on erp2 (`ssh erp2-sandbox`) before promotion. erp2's catalogue copy is old and not a git repo; this work happens in the real repo and is copied over. erp2 has `dsi_shipping` installed but no item weights, so weight and volume are typed into the Try an order panel there.
 - The pricing code reads `dsi_shipping`'s Shipping Service and Shipping Service Country records to know whether a carrier serves a country. It is a read only, and if those records do not exist the country counts as served.
 - Promotion goes through the catalogue repo. The live host holds commits that are not on GitHub yet (`6a39d3e`, `702a036`); they must be pushed first.
@@ -114,7 +114,7 @@ Both are in the catalogue app, whitelisted, and read-only.
 - `dsi_catalogue.shipping_policy.price_delivery` (guest). Input as described above, plus an optional language. Output: whether the policy is on, the zone, per-service offers with amount, source and reason code, whether delivery is offered, and a customer-facing message. Never cached.
 - `dsi_catalogue.shipping_policy.public_summary` (guest). While the policy is active: zones, their country codes and names, and each zone's customer line. Nothing else (no formulas, fallbacks or thresholds). While it is off, nothing.
 
-The wizard's own methods (state, apply, try an order) require the System Manager role.
+The wizard's own methods (state, apply, try an order) require the System Manager or the Website Manager role (amended 2026-10-25).
 
 **Languages.** Zone lines and messages are one text field each, written in English. Other languages use the ERP's built-in Translation records: the two methods return the translated text when a translation exists for the requested language, and English otherwise. Standard messages come back as the reason codes above, and the website localises those itself. Country names are localised by the website from the codes. The delivery method created by the fallback is called "Standard delivery" and carries the reason code `fallback_offer`.
 

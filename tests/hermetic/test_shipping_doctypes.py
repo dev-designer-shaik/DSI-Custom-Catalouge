@@ -32,6 +32,20 @@ ROOT = Path(__file__).resolve().parents[2]
 DOCTYPE_DIR = ROOT / "dsi_catalogue" / "dsi_catalogue" / "doctype"
 FIXTURE = Path(__file__).parent / "fixtures" / "shipping_policy_example.json"
 
+
+def _manager_roles():
+	"""MANAGER_ROLES as the wizard module writes it, read from its source (the module needs frappe)."""
+	tree = ast.parse((ROOT / "dsi_catalogue" / "shipping_policy_wizard.py").read_text(encoding="utf-8"))
+	for node in tree.body:
+		if isinstance(node, ast.Assign) and [t.id for t in node.targets if isinstance(t, ast.Name)] == [
+			"MANAGER_ROLES"
+		]:
+			return tuple(ast.literal_eval(node.value))
+	raise AssertionError("MANAGER_ROLES is not defined in the wizard module")
+
+
+MANAGER_ROLES = _manager_roles()
+
 # The sentence the plan's Global Constraints fix word for word.
 ASTERISK = (
 	"* A rule for selected items applies only when every item in the order is one of them. "
@@ -178,11 +192,34 @@ RIGHTS = {
 
 
 @pytest.mark.parametrize("name", TOP_LEVEL)
-def test_only_system_manager_has_permissions(name):
+def test_only_the_manager_roles_have_permissions(name):
 	rows = doctype(name)["permissions"]
-	assert [row["role"] for row in rows] == ["System Manager"]
-	granted = {right for right, value in rows[0].items() if right != "role" and value}
-	assert granted == RIGHTS[name]
+	assert [row["role"] for row in rows] == list(MANAGER_ROLES)
+	for row in rows:  # each manager role has the same rights
+		granted = {right for right, value in row.items() if right != "role" and value}
+		assert granted == RIGHTS[name], row["role"]
+
+
+def test_the_manager_roles_are_system_manager_and_website_manager():
+	"""The owner chose Website Manager to run the Shipping Policy (2026-10-25); System Manager keeps its access."""
+	assert MANAGER_ROLES == ("System Manager", "Website Manager")
+
+
+def test_every_wizard_method_checks_the_manager_roles_before_anything_else():
+	tree = ast.parse((ROOT / "dsi_catalogue" / "shipping_policy_wizard.py").read_text(encoding="utf-8"))
+	methods = {}
+	for node in tree.body:
+		if isinstance(node, ast.FunctionDef) and any(
+			ast.unparse(d.func if isinstance(d, ast.Call) else d) == "frappe.whitelist"
+			for d in node.decorator_list
+		):
+			methods[node.name] = node
+	assert len(methods) == 7, sorted(methods)
+	for name, function in methods.items():
+		body = function.body
+		if isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+			body = body[1:]  # the docstring
+		assert ast.unparse(body[0]) == "frappe.only_for(MANAGER_ROLES)", name
 
 
 @pytest.mark.parametrize("name", CHILDREN)
@@ -626,7 +663,7 @@ def test_the_wizard_page_is_a_standard_page_for_system_managers_only():
 		"Yes",
 		"Shipping policy wizard",
 	)
-	assert page["roles"] == [{"role": "System Manager"}], "one role row: System Manager"
+	assert page["roles"] == [{"role": role} for role in MANAGER_ROLES], "one role row for each manager role"
 	assert page_file(".py").startswith("# Copyright"), "the Python file is the license stub"
 	assert "def " not in page_file(".py")
 
