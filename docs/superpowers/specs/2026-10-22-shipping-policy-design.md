@@ -53,8 +53,8 @@ The business wants to set delivery pricing itself, in the ERP, by region, by ite
 - Name, enabled, a table of countries (each a link to the ERP Country list).
 - "Not shipped": delivery is not offered to these countries.
 - "Everywhere else": the zone that catches any country not in another zone. At most one.
-- "Shown to customers": one optional plain line for the FAQ and Shipping page.
-- "If delivery isn't offered": an optional message shown at checkout (used by Not shipped and by a declined fallback).
+- "Line for customers" (built as the field label; first drafted as "Shown to customers"): one optional plain line meant for the FAQ and Shipping page. The website does not show it yet (it never calls `public_summary`).
+- "If delivery isn't offered": an optional message shown at checkout (used by Not shipped, by a declined fallback and, with the rate card, by a country the card does not cover), once the policy is on with the rate card as the price source.
 - Fallback when the carrier can't quote: use the policy default, don't offer delivery, charge a fixed amount, or free; plus the amount.
 - A country may be in only one enabled zone. Saving a zone that repeats a country names the other zone and is refused.
 

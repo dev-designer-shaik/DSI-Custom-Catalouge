@@ -14,8 +14,8 @@
   promotion proof, `test_policy_off_returns_the_quotes_unchanged`).
 - No new `site_config` keys, roles, Custom DocPerm, Custom Field, Property Setter
   or scripts; `hooks.py` unchanged.
-- Verified end to end on erp2: hermetic 2238, native 14 / 5 / 50 / 27 / 93,
-  browser 104 of 104 with the real export, the guest and role permission matrix,
+- Verified end to end on erp2: hermetic 2240, native 14 / 5 / 50 / 27 / 93,
+  browser 105 of 105 with the real export, the guest and role permission matrix,
   and `price_delivery` equal to `try_order` on 37 orders.
 - Carries the live host's `6a39d3e` (review approval publishes only what the
   draft changes) and `702a036` (review workspace renamed): push them before
