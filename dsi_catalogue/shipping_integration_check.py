@@ -1,31 +1,4 @@
-"""What the wizard's Test tab says about the integration, in plain words.
-
-The Test tab runs three read-only checks against what is live (the saved policy, not the draft):
-
-	erp_price_api   the ERP's own public price API, called over HTTP the way the website calls it
-	carrier         the shipping module, asked in this process for one sample parcel
-	website         the website's shipping rates route, called over HTTP with the same sample cart
-
-The Frappe layer (`shipping_policy_wizard.test_integration`) does the asking. This module is pure Python with
-no Frappe import and no HTTP library, so it is tested standalone; it holds everything that has to be decided or
-worded:
-
-	pick_sample_order            the cart the three checks use
-	check_website_url            whether the website's address may be called at all (the SSRF guard)
-	summarize_policy_response    the first check, from what the ERP answered
-	summarize_carrier_response   the second, from what the shipping module returned or raised
-	summarize_website_response   the third, from what the website answered
-	website_not_asked, unexpected_failure   a check that could not be made
-	rate_card_amount, verdict_for   the one-sentence verdict over the three
-	sanitize_detail              what may be shown of a response
-
-Each check is a dict {"name", "ok", "status", "ms", "summary", "detail"}: `status` is the HTTP status (None for a
-call that gave none), `ms` the time it took, `summary` a plain sentence and `detail` the answer, cleaned and cut
-to 4 KB. When a call gets no answer worth reading the Frappe layer says why with `problem`: "timeout",
-"unreachable", "too_large" (over 64 KB) or "unreadable" (not JSON). The summaries never repeat the address that
-was called, a header, a cookie, a token, the text of an exception or a line of the Error Log: of an answer they
-say only the fields named below, and `detail` drops any key that looks like a secret.
-"""
+"""Read-only integration diagnostics and bounded response/URL validation. No policy presets."""
 
 import ipaddress
 import json
@@ -33,20 +6,15 @@ import math
 import re
 import socket
 from decimal import ROUND_HALF_UP, Decimal
-from fnmatch import fnmatchcase
 from urllib.parse import urlsplit
 
 from dsi_catalogue.shipping_engine import RATE_CARD_SERVICE_ID
-from dsi_catalogue.shipping_rate_card import KNOWN_PROFILES, normalize_index_key
 
 CHECK_NAMES = ("erp_price_api", "carrier", "website")
 HTTP_TIMEOUT_SECONDS = 15  # the longest a call may take, in all
 MAX_BODY_BYTES = 64 * 1024  # the most of an answer that is read
 DETAIL_LIMIT = 4096  # the most of an answer that is shown, as compact JSON
 WEBSITE_RATE_LIMIT = 10  # requests a minute that the website's rates route allows
-
-# Where the sample cart is going (a customer's address in the rest of the world, which the rate card prices).
-SAMPLE_DESTINATION = {"country_code": "US", "country": "United States", "city": "New York"}
 
 _PROBLEMS = ("timeout", "unreachable", "too_large", "unreadable")
 _SHOWN = 5  # methods, rates or names listed in a sentence
@@ -223,81 +191,6 @@ def sanitize_detail(obj, limit=DETAIL_LIMIT) -> dict:
 			return clean
 	text = json.dumps(clean, separators=(",", ":"), ensure_ascii=False)
 	return {"truncated": True, "text": text[: limit - 60]}
-
-
-# ---------------------------------------------------------------- the sample order
-def _is_full_size_fragrance(key) -> bool:
-	"""A product code of the profile "Dangerous Goods": F-*, but not a petite (-PT, F-CR-PC-*) or a refill (-RF)."""
-	for profile, patterns in KNOWN_PROFILES.items():
-		if any(fnmatchcase(key, pattern) for pattern in patterns):
-			return profile == "Dangerous Goods"
-	return False
-
-
-def _is_watch(key) -> bool:
-	return fnmatchcase(key, "P-*")
-
-
-def _website_items(web_items) -> list[dict]:
-	"""The Website Items that can be ordered, as {"name", "item_code", "key", "published"}, by name."""
-	rows = []
-	for entry in web_items if isinstance(web_items, list | tuple) else []:
-		entry = _dict(entry)
-		code = entry.get("item_code")
-		if not isinstance(code, str) or not code.strip():
-			continue
-		name = entry.get("name")
-		rows.append(
-			{
-				"name": name if isinstance(name, str) else "",
-				"item_code": code.strip(),
-				"key": normalize_index_key(entry.get("index_key")),
-				"published": bool(entry.get("published")),
-			}
-		)
-	return sorted(rows, key=lambda row: (row["name"], row["item_code"]))
-
-
-def pick_sample_order(web_items) -> dict:
-	"""The cart the three checks use: {"country_code", "country", "city", "items": [{"item_code", "qty"}],
-	"note"}.
-
-	It holds the first published full-size fragrance (a product code F-*, not a petite one or a refill) and the
-	first published watch (P-*), by Website Item name, one of each, going to New York in the United States: the
-	rate card prices a fragrance and a watch separately, and a US order is one the carrier may not serve. When
-	there is no published fragrance or no published watch, other Website Items stand in (published ones first,
-	then the rest, by name) to make two items, and `note` says so; with no Website Item at all there are no
-	items. `note` is "" when nothing needs saying. An item is taken once. `web_items` are rows of
-	{"name", "item_code", "index_key", "published"}, in any order; they are not changed.
-	"""
-	rows = _website_items(web_items)
-	published = [row for row in rows if row["published"]]
-	chosen = []
-
-	def take(row):
-		if row is not None and all(row["item_code"] != taken["item_code"] for taken in chosen):
-			chosen.append(row)
-			return True
-		return False
-
-	fragrance = take(next((row for row in published if _is_full_size_fragrance(row["key"])), None))
-	watch = take(next((row for row in published if _is_watch(row["key"])), None))
-	for row in [*published, *(row for row in rows if not row["published"])]:
-		if len(chosen) >= 2:
-			break
-		take(row)
-	missing = [what for what, found in (("full-size fragrance", fragrance), ("watch", watch)) if not found]
-	if not rows:
-		note = "The site has no Website Items, so the sample order has no items."
-	elif missing:
-		note = f"No published {' or '.join(missing)} was found, so other items with a Website Item were used."
-	else:
-		note = ""
-	return {
-		**SAMPLE_DESTINATION,
-		"items": [{"item_code": row["item_code"], "qty": 1} for row in chosen],
-		"note": note,
-	}
 
 
 # ---------------------------------------------------------------- the guard on the website's address
@@ -484,6 +377,8 @@ def _words(reason) -> str:
 
 
 def _offers_phrase(answer) -> str:
+	if answer.get("needs_quotes"):
+		return "waiting for provider quotes"
 	offers = [offer for offer in answer["offers"] if isinstance(offer, dict)]
 	if not offers:
 		reason = _words(answer.get("reason"))
@@ -523,11 +418,7 @@ def summarize_policy_response(status, ms, body, in_process_amount, *, problem=No
 			"The ERP answered, but not with a delivery price the website can read.",
 			detail,
 		)
-	if answer.get("policy_active"):
-		source = "rate card" if answer.get("price_source") == "rate_card" else "carrier"
-		policy = f"policy ON, price source {source}"
-	else:
-		policy = "policy OFF"
+	policy = "policy ON" if answer.get("policy_active") else "policy OFF"
 	own = _number(in_process_amount)
 	same = _same_cents(_first_amount(answer), own)
 	summary = f"The ERP answered in {_whole(ms)} ms: {policy}, {_offers_phrase(answer)}."
@@ -537,13 +428,12 @@ def summarize_policy_response(status, ms, body, in_process_amount, *, problem=No
 	return _check(name, same, status, ms, summary, detail)
 
 
-def rate_card_amount(check):
-	"""The amount the ERP offers for the sample order when its check passed, the policy is on, the price source is
-	the rate card and delivery is offered; otherwise None. It is what the website has to charge."""
+def policy_amount(check):
+	"""The final price of a successful active policy response, if available."""
 	if _dict(check).get("ok") is not True:
 		return None
 	answer = _answer(_detail(check))
-	if answer is None or answer.get("policy_active") is not True or answer.get("price_source") != "rate_card":
+	if answer is None or answer.get("policy_active") is not True:
 		return None
 	return _first_amount(answer) if answer["offered"] else None
 
@@ -679,119 +569,3 @@ def summarize_website_response(status, ms, body, erp_amount, *, problem=None) ->
 			ok = False
 			summary += f" Its first amount, {_money(first)}, is not the ERP's {_money(expected)}."
 	return _check(name, ok, status, ms, summary, detail)
-
-
-# ---------------------------------------------------------------- the verdict
-_VERDICT_UNFINISHED = "The three checks did not all run, so there is no verdict."
-_VERDICT_ERP_DOWN = (
-	"The ERP price API did not give a usable answer, so the website cannot get delivery prices from the policy "
-	"(see the first check)."
-)
-_VERDICT_ERP_DISAGREES = (
-	"The public ERP endpoint and the policy disagree about the price of the sample order, so fix that before "
-	"trusting the website (see the first check)."
-)
-_VERDICT_OFF = "The shipping policy is switched off, so customers pay the carrier's own prices."
-_VERDICT_OFF_NO_RATES = "The shipping policy is switched off and the carrier returns no rates, so customers see no delivery method."
-# The website prices from the ERP's answer only while the policy is on with the rate card as the price source; with
-# the carrier it charges the carrier's own prices, whatever the policy says (ruling P100).
-_VERDICT_CARRIER = (
-	"The price source is the carrier, so customers pay the carrier's own prices: for now the website applies the "
-	"policy only with the rate card as the price source."
-)
-_VERDICT_NO_RATES = (
-	"The carrier returns no rates, so while the price source is Carrier customers see no delivery method."
-)
-_VERDICT_STILL_THE_CARRIER = (
-	"The website still asks the carrier: it returned the carrier's methods, not the rate card's."
-)
-_VERDICT_STILL_THE_CARRIER_AND_NOTHING = (
-	"The website still asks the carrier, and the carrier gave it no delivery method, so customers see none."
-)
-# The packing plan the website names when the ERP's policy priced the order (lib/shipping/quote.ts). Its carrier
-# path names the strategy it packed by instead, so a plan that is anything else is the carrier's.
-_RATE_CARD_PLAN = "rate-card"
-
-
-def verdict_for(checks) -> str:
-	"""One plain sentence over the three checks: what customers are charged and whether the website follows the
-	policy. `checks` is the list of check dicts, in any order; with fewer than the three it says so. It never
-	raises.
-
-	The ERP's answer says whether the policy is on and what its price source is. With the rate card as the
-	source, the verdict looks at what the website returned: its own rate-card method at the ERP's price (they
-	agree), the carrier's methods or none at all from the carrier (the website has not been switched over: the
-	packing plan it names is the carrier path's), another price (they disagree), a 429 (try again in a minute)
-	or nothing usable. With the carrier as the source, or the policy off, the website charges the carrier's own
-	prices (it applies the policy only with the rate card), so it is the carrier's rates that matter: no rates
-	means no delivery method for customers; with rates, it says so and, if the website check did not work out (it
-	was not asked, or gave no usable answer), that too.
-	"""
-	by_name = {}
-	for check in checks if isinstance(checks, list | tuple) else []:
-		if isinstance(check, dict) and check.get("name") in CHECK_NAMES:
-			by_name.setdefault(check["name"], check)
-	if len(by_name) < len(CHECK_NAMES):
-		return _VERDICT_UNFINISHED
-	erp, carrier, site = (by_name[name] for name in CHECK_NAMES)
-	answer = _answer(_detail(erp))
-	if erp.get("ok") is not True:
-		return (
-			_VERDICT_ERP_DISAGREES if erp.get("status") == 200 and answer is not None else _VERDICT_ERP_DOWN
-		)
-	if answer is None:
-		return _VERDICT_ERP_DOWN
-	carrier_has_rates = carrier.get("ok") is True
-	if not answer.get("policy_active"):
-		return _with_the_website(_VERDICT_OFF, site) if carrier_has_rates else _VERDICT_OFF_NO_RATES
-	if answer.get("price_source") != "rate_card":
-		return _with_the_website(_VERDICT_CARRIER, site) if carrier_has_rates else _VERDICT_NO_RATES
-	return _rate_card_verdict(answer, site)
-
-
-def _with_the_website(sentence, site) -> str:
-	"""`sentence` (about what customers are charged, ending in a full stop) and, when the website check did not
-	work out, what is wrong with it: it was not asked, or it gave no usable answer. A 429 is the site limiting how
-	often this check may be made, which says nothing about the website, so it adds nothing."""
-	if site.get("ok") is True or site.get("status") == 429:
-		return sentence
-	if _detail(site).get("problem") == "not_asked":
-		return f"{sentence[:-1]}; the website was not asked because its address is not usable (see the third check)."
-	return f"{sentence[:-1]}, but the website did not give a usable answer (see the third check)."
-
-
-def _answered_by_the_carrier_path(site) -> bool:
-	"""Did the website answer HTTP 200 with the packing plan of its carrier path (so it asked the carrier)?"""
-	plan = _detail(site).get("packingPlan")
-	return site.get("status") == 200 and isinstance(plan, str) and plan.strip() not in ("", _RATE_CARD_PLAN)
-
-
-def _rate_card_verdict(answer, site) -> str:
-	"""The verdict for a policy that is on and charges from the rate card."""
-	amount = _first_amount(answer) if answer["offered"] else None
-	methods = _methods(_detail(site))
-	if methods and methods[0][0] != RATE_CARD_SERVICE_ID:
-		return _VERDICT_STILL_THE_CARRIER
-	if not methods and _answered_by_the_carrier_path(site):
-		return _VERDICT_STILL_THE_CARRIER_AND_NOTHING
-	if amount is None:
-		reason = _words(answer.get("reason"))
-		which = f" ({reason})" if reason else ""
-		return f"The rate card offers no delivery for the sample order{which}, so customers see no delivery method for it."
-	price = _money(amount)
-	if site.get("status") == 429:
-		return (
-			f"The ERP price API charges {price} from the rate card, but the website limits this check to "
-			f"{WEBSITE_RATE_LIMIT} requests a minute, so run it again in a minute."
-		)
-	if methods:
-		if _same_cents(methods[0][2], amount):
-			return (
-				f"The ERP price API and the website agree: customers are charged {price} from the rate card, "
-				"and the carrier is not asked."
-			)
-		return (
-			f"The website charges {_money(methods[0][2])} but the ERP price API charges {price} from the rate card: "
-			"they disagree."
-		)
-	return _with_the_website(f"The ERP price API charges {price} from the rate card.", site)

@@ -52,6 +52,7 @@ RELOAD_ORDER=(
 	shipping_zone_country
 	shipping_item_set_group
 	shipping_item_set_item
+	shipping_item_set_pattern
 	shipping_zone
 	shipping_item_set
 	shipping_policy_rule
@@ -85,7 +86,7 @@ try:
 		frappe.local.module_app.setdefault(frappe.scrub(module), app)
 	for item in reloads:
 		kind, name = item.split(":")
-		loaded = frappe.reload_doc(app, kind, name)  # the app's module has the app's name
+		loaded = frappe.reload_doc(app, kind, name, force=(kind == "page"))  # the app's module has the app's name
 		frappe.db.commit()
 		print(f"  {kind} {name}: {'loaded' if loaded else 'already current'}")
 finally:

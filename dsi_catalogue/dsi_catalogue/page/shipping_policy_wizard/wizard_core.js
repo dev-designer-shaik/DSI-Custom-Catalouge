@@ -1,418 +1,689 @@
-// Part of the Shipping policy wizard page: shipping_policy_wizard.js stitches it in and says how.
-//
-// The wizard: the store and the draft kept in this browser, the regions of the page, the server calls.
-
-// The browser keeps one draft, {user, version, draft, step}, and it belongs to the person who made it: for
-// anyone else signed in on this browser it is not there (not restored, no notice, not removed), until their own
-// draft takes its place. Storage can be switched off or full: the draft then lives in this tab only.
-
-// The stored draft of the person signed in, or null.
-function read_stored() {
-	try {
-		const text = window.localStorage.getItem(DRAFT_KEY);
-		if (!text) return null;
-		const stored = JSON.parse(text);
-		if (sp.is_record(stored)) return stored.user === frappe.session.user ? stored : null;
-	} catch (error) {
-		// not readable: dropped below
-	}
-	forget_stored();
-	return null;
-}
-
-// Removes the stored draft, unless it is someone else's.
-function forget_stored() {
-	try {
-		let owner = null;
-		try {
-			owner = JSON.parse(window.localStorage.getItem(DRAFT_KEY))?.user || null;
-		} catch (error) {
-			owner = null; // not readable: nobody's
-		}
-		if (owner && owner !== frappe.session.user) return;
-		window.localStorage.removeItem(DRAFT_KEY);
-	} catch (error) {
-		// nothing to do: storage is not available
-	}
-}
-
 dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 	constructor(page, wrapper) {
 		this.page = page;
 		this.wrapper = wrapper;
-		this.store = { original: null, draft: null, version: null, step: STEPS[0].id, dirty: false };
-		this.state = null;
-		this.priced = null;
-		// What a step's body shows that is not the draft (an open editor, a scroll position), by step id. The
-		// panel is emptied and drawn again on every tab switch, so the body keeps such things here; they last for
-		// the session and are not stored with the draft.
-		this.ui = Object.fromEntries(STEPS.map((step) => [step.id, {}]));
-		this.notice = null; // "restored" or "discarded": what happened to a stored draft on load
-		this.busy = false; // Apply is writing the draft: nothing changes it, and the step stays, until it is done
-		this.save_timer = null;
-		this.loading = true;
-		this.root = el("div", { class: "sp-wizard" });
-		this.page.main.empty().append(this.root);
-		this.root.append(el("p", { class: "sp-loading" }, __("Loading the saved policy…")));
-		// a change made in the last 300 ms is stored before the page goes away
-		window.addEventListener("beforeunload", () => {
-			if (this.save_timer) this.save_draft();
-		});
-		this.load();
+		this.openRow = null;
+		this.sample = { country_code: "", city: "", postcode: "", items: [] };
+		this.sampleNames = {};
+		this.pricing = 0;
+		this.root = el("main", { class: "sp-page" });
+		page.main.get(0).append(this.root);
+		this.root.append(el("p", { class: "sp-muted" }, "Loading shipping policy…"));
+		this.ready = this.load();
 	}
-
-	// ---------------------------------------------------------- the server
-	// A wizard method, as a promise of its answer. With quiet, a refusal is not shown in Frappe's dialog: the
-	// promise is rejected with its sentences as plain text, for the page to show where it belongs.
-	call(method, args = {}, { quiet = false } = {}) {
-		return new Promise((resolve, reject) => {
-			frappe.call({
-				method: METHOD + method,
-				args,
-				silent: quiet,
-				callback: (response) => resolve(response.message),
-				error: (response) => reject(quiet ? problem_text(response) : null),
-			});
-		});
+	async call(name, args = {}) {
+		const reply = await frappe.call({ method: METHOD + name, args, type: "POST", silent: true });
+		return reply.message;
 	}
-
-	load() {
-		return this.call("wizard_state").then(
-			(state) => {
-				this.loading = false;
-				this.take_state(state, { restore: true });
-				this.build();
-				this.render();
-			},
-			() => {
-				this.loading = false;
-				this.root.replaceChildren(
+	async load() {
+		clearTimeout(this.storeTimer);
+		try {
+			this.state = await this.call("wizard_state");
+			this.original = clone(this.state.policy);
+			this.draft = clone(this.original);
+			this.version = this.state.version;
+			this.openRow = null;
+			this.render();
+			const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+			if (saved?.user === frappe.session.user && saved?.draft) {
+				const body = el(
+					"div",
+					{},
 					el(
 						"p",
-						{ class: "sp-problem" },
-						__("The saved policy could not be loaded. Reload the page to try again.")
-					)
+						{},
+						saved.version === this.version
+							? "You have an unfinished draft in this browser."
+							: "The saved policy changed while this draft was unfinished. You can inspect it, but saving will require reloading the current policy.",
+					),
 				);
+				this.dialog("Continue your draft?", body, [
+					button("Discard draft", () => {
+						localStorage.removeItem(DRAFT_KEY);
+						this.closeDialog();
+					}),
+					button(
+						"Continue editing",
+						() => {
+							this.draft = saved.draft;
+							this.version = saved.version;
+							this.closeDialog();
+							this.render();
+							this.changed();
+						},
+						"sp-primary",
+					),
+				]);
 			}
-		);
-	}
-
-	take_state(state, { restore = false } = {}) {
-		const { policy, version, ...rest } = state;
-		this.state = rest;
-		this.store.original = sp.clone(policy);
-		this.store.draft = sp.clone(policy);
-		this.store.version = version;
-		this.priced = null; // an answer was for the draft that is gone
-		if (restore) this.restore_draft();
-		this.store.dirty = !sp.same(this.store.draft, this.store.original);
-	}
-
-	restore_draft() {
-		const stored = read_stored();
-		if (!stored) return;
-		if (!sp.is_record(stored.draft) || sp.same(stored.draft, this.store.original)) {
-			forget_stored(); // unreadable, or nothing in it that is not saved already
-			return;
-		}
-		if (stored.version !== this.store.version) {
-			forget_stored();
-			this.notice = "discarded";
-			return;
-		}
-		this.store.draft = stored.draft;
-		if (STEPS.some((step) => step.id === stored.step)) this.store.step = stored.step;
-		this.notice = "restored";
-	}
-
-	// The saved policy, read again: the draft becomes it (Apply wrote the draft, or the person dropped their draft
-	// for what someone else saved). Nothing is left in storage, and the tape prices the order again.
-	reload_saved() {
-		return this.call("wizard_state", {}, { quiet: true }).then((state) => {
-			this.take_state(state);
-			this.notice = null;
-			this.save_draft(); // the draft is the saved policy: the stored draft goes
-			this.render();
-			this.tape.draft_changed();
-		});
-	}
-
-	// The saved policy, read again, becomes what the draft is compared with and applied over, and the draft
-	// stays as it is: after someone else changed the policy, the Review step then shows what the draft changes in
-	// the policy as it is saved now, and Apply writes it over that. The draft is stored again with the new version.
-	rebase_on_saved() {
-		return this.call("wizard_state", {}, { quiet: true }).then((state) => {
-			const draft = this.store.draft;
-			this.take_state(state);
-			this.store.draft = draft;
-			this.store.dirty = !sp.same(draft, this.store.original);
-			this.save_draft();
-			this.render();
-			this.tape.draft_changed();
-		});
-	}
-
-	// The page came back into view: when the draft is clean, take the saved policy again, so that a change
-	// made on the form meanwhile is what the wizard shows.
-	on_show() {
-		if (this.loading || !this.tape || this.store.dirty) return;
-		this.call("wizard_state").then(
-			(state) => {
-				if (this.store.dirty || state.version === this.store.version) return;
-				this.take_state(state);
-				this.render();
-				this.tape.draft_changed();
-			},
-			() => {}
-		);
-	}
-
-	// ---------------------------------------------------------- the page
-	build() {
-		this.banner = el("div", {
-			class: "sp-banner",
-			role: "status",
-			"data-testid": "draft-banner",
-			hidden: true,
-		});
-		this.tabs = el("div", {
-			class: "sp-tabs",
-			role: "tablist",
-			"aria-label": __("Shipping policy steps"),
-			onkeydown: (event) => this.on_tab_key(event),
-		});
-		this.panels = {};
-		for (const step of STEPS) {
-			this.tabs.append(
-				el(
-					"button",
-					{
-						type: "button",
-						class: step.apart ? "sp-tab sp-tab-apart" : "sp-tab",
-						role: "tab",
-						id: `sp-tab-${step.id}`,
-						"aria-controls": `sp-panel-${step.id}`,
-						"aria-label": step.name || null,
-						"data-label": step.label,
-						"data-testid": `step-tab-${step.id}`,
-						onclick: () => this.set_step(step.id),
-					},
-					step.label
-				)
+		} catch (e) {
+			this.root.replaceChildren(
+				el("p", { role: "alert" }, "The shipping policy could not be loaded."),
+				button("Try again", () => this.load()),
 			);
-			this.panels[step.id] = el("div", {
-				class: "sp-panel",
-				role: "tabpanel",
-				id: `sp-panel-${step.id}`,
-				"aria-labelledby": `sp-tab-${step.id}`,
-				tabindex: "0",
-				hidden: true,
-			});
 		}
-		const tape = el("section", { class: "sp-tape", "aria-labelledby": "sp-tape-title" });
-		this.step_box = el("div", { class: "sp-step", "aria-busy": "false" }, Object.values(this.panels));
-		// The layout is one element inside the root, so that the style can lay it out by the root's own width.
-		this.root.replaceChildren(
+	}
+	onShow() {
+		if (this.state && !this.dirty) this.reload(false);
+	}
+	get dirty() {
+		return JSON.stringify(this.draft) !== JSON.stringify(this.original);
+	}
+	async reload(ask = true) {
+		if (ask && this.dirty && !window.confirm("Discard your unsaved changes?")) return;
+		localStorage.removeItem(DRAFT_KEY);
+		await this.load();
+	}
+	change(fn, render = false) {
+		fn(this.draft);
+		this.changed();
+		if (render) this.renderCards();
+	}
+	changed() {
+		this.renderSaveBar();
+		clearTimeout(this.storeTimer);
+		this.storeTimer = setTimeout(() => {
+			try {
+				if (this.dirty)
+					localStorage.setItem(
+						DRAFT_KEY,
+						JSON.stringify({ user: frappe.session.user, version: this.version, draft: this.draft }),
+					);
+				else localStorage.removeItem(DRAFT_KEY);
+			} catch {}
+		}, 250);
+		clearTimeout(this.priceTimer);
+		this.priceTimer = setTimeout(() => this.priceSample(), 500);
+	}
+	render() {
+		this.root.replaceChildren();
+		const header = el(
+			"header",
+			{ class: "sp-header" },
 			el(
 				"div",
-				{ class: "sp-layout" },
-				this.banner,
-				this.tabs,
-				this.step_box,
-				tape
-			)
+				{},
+				el("p", { class: "sp-eyebrow" }, "PRODUCTS AND DELIVERY"),
+				el("h2", {}, "Your shipping policy"),
+				el("p", { class: "sp-muted" }, "Choose what ships, who delivers it, and what customers pay."),
+			),
+			el(
+				"div",
+				{ class: "sp-actions" },
+				button("Import Shopify rates", () => this.importDialog()),
+				button("Check it works", () => this.checkWorks()),
+			),
 		);
-		this.tape = new dsi_catalogue.ShippingPolicyTape(this, tape);
-	}
-
-	render() {
-		this.render_banner();
-		this.render_tabs();
-		this.render_step();
-	}
-
-	// What the banner says, a line each: {text, action: {label, testid, run}}. While the saved policy is on and
-	// the draft differs from it, a line says that what is changed goes live on Apply.
-	banner_lines() {
-		const lines = [];
-		if (this.notice === "restored") {
-			lines.push({
-				text: __("Restored your unsaved draft. Nothing is live until you apply it."),
-				action: {
-					label: __("Discard the draft"),
-					testid: "draft-discard",
-					run: () => this.confirm_discard(),
-				},
+		this.root.append(
+			header,
+			check("Use this policy at checkout", this.draft.active, (v) => this.change((d) => (d.active = v))),
+		);
+		const layout = el("div", { class: "sp-layout" });
+		this.cards = el("section", { class: "sp-cards", "aria-label": "Product groups" });
+		const left = el(
+			"div",
+			{ class: "sp-main" },
+			this.cards,
+			button("+ Add product group", () => this.addGroup(), "sp-add"),
+		);
+		this.zones = el("section", { class: "sp-section" });
+		left.append(this.zones);
+		this.renderZones();
+		const fallback = el("section", { class: "sp-section" }, el("h3", {}, "If the carrier gives no price"));
+		const fbControls = el("div", { class: "sp-fallback" });
+		const fbAmount = numberInput(
+			this.draft.fallback.amount,
+			(v) => this.change((d) => (d.fallback.amount = v ?? 0)),
+			{ "aria-label": "Fallback amount in USD", placeholder: "0.00" },
+		);
+		const updateFallback = () => {
+			fbAmount.hidden = this.draft.fallback.method !== "fixed";
+		};
+		for (const [v, label] of [
+			["no_delivery", "Don’t offer delivery"],
+			["fixed", "Charge a flat amount (USD)"],
+		]) {
+			const radio = el("input", { type: "radio", name: "sp-fallback", value: v });
+			radio.checked = this.draft.fallback.method === v;
+			radio.addEventListener("change", () => {
+				this.change((d) => (d.fallback.method = v));
+				updateFallback();
 			});
-		} else if (this.notice === "discarded") {
-			lines.push({
-				text: __("Someone changed the policy after you started, so your old draft was discarded."),
-				action: { label: __("Dismiss"), testid: "draft-dismiss", run: () => this.dismiss_notice() },
-			});
+			fbControls.append(el("label", { class: "sp-check" }, radio, label));
 		}
-		if (this.store.original?.active && this.store.dirty) {
-			lines.push({ text: __("This policy is on: edits go live when you apply them.") });
-		}
-		return lines;
+		fbControls.append(fbAmount);
+		updateFallback();
+		fallback.append(fbControls);
+		left.append(fallback);
+		this.preview = el("aside", { class: "sp-preview", "aria-label": "Try an order" });
+		layout.append(left, this.preview);
+		this.root.append(layout);
+		this.saveBar = el("div", { class: "sp-savebar", hidden: true });
+		this.root.append(this.saveBar);
+		this.renderCards();
+		this.renderPreview();
+		this.renderSaveBar();
 	}
-
-	// The banner is a live region: it is drawn again only when what it says changes, so that a line is not read
-	// out again after every change of the draft.
-	render_banner() {
-		const lines = this.banner_lines();
-		const said = JSON.stringify(lines.map((line) => [line.text, line.action?.testid]));
-		if (said === this.banner_said) return;
-		this.banner_said = said;
-		this.banner.replaceChildren(
-			...lines.map((line) =>
+	groups() {
+		return [
+			...this.draft.item_sets.map((g) => ({ key: g.name, group: g })),
+			...(this.draft.rules.some((r) => !r.item_set) ? [{ key: "", group: null }] : []),
+		];
+	}
+	renderCards() {
+		this.cards.replaceChildren();
+		if (!this.groups().length) {
+			this.cards.append(
 				el(
-					"p",
-					{ class: "sp-banner-line" },
-					el("span", {}, line.text),
-					line.action
-						? el(
-								"button",
-								{
-									type: "button",
-									class: "sp-link",
-									"data-testid": line.action.testid,
-									onclick: line.action.run,
-								},
-								line.action.label
-						  )
-						: null
-				)
-			)
-		);
-		this.banner.hidden = !lines.length;
-	}
-
-	render_tabs() {
-		for (const tab of this.tabs.children) {
-			const selected = tab.id === `sp-tab-${this.store.step}`;
-			tab.setAttribute("aria-selected", String(selected));
-			tab.tabIndex = selected ? 0 : -1;
-		}
-	}
-
-	// Draws the selected step's body into its emptied panel, then hands it the latest answer of try_order
-	// (null while nothing is priced), so a body drawn on its first show or on a tab switch is never without it.
-	// While a change is still being priced (tape.pending) that answer is for an older draft, whose rules may
-	// stand in other places: the body gets null, and the next answer when it comes. The tape is told which step it
-	// stands beside (its title says that it prices the draft beside the Test tab).
-	render_step() {
-		for (const step of STEPS) this.panels[step.id].hidden = step.id !== this.store.step;
-		const step = this.current_step();
-		const panel = this.panels[step.id];
-		panel.replaceChildren();
-		step.render(this, panel);
-		this.tape?.show_step(step.id);
-		step.priced?.(this, panel, this.tape?.pending ? null : this.priced);
-	}
-
-	current_step() {
-		return STEPS.find((step) => step.id === this.store.step) || STEPS[0];
-	}
-
-	set_step(id, { focus = false } = {}) {
-		if (this.busy || !STEPS.some((step) => step.id === id)) return; // the step stays while Apply writes
-		if (id !== this.store.step) {
-			this.store.step = id;
-			this.render_tabs();
-			this.render_step();
-			if (this.store.dirty) this.save_draft_soon();
-		}
-		if (focus) document.getElementById(`sp-tab-${id}`)?.focus();
-	}
-
-	// The tab row as a tablist: the arrow keys move between tabs (and select them), Home and End jump.
-	on_tab_key(event) {
-		const ids = STEPS.map((step) => step.id);
-		const at = ids.indexOf(this.store.step);
-		const back = getComputedStyle(this.tabs).direction === "rtl" ? "ArrowRight" : "ArrowLeft";
-		const ahead = back === "ArrowLeft" ? "ArrowRight" : "ArrowLeft";
-		const to = { [ahead]: at + 1, [back]: at - 1, Home: 0, End: ids.length - 1 }[event.key];
-		if (to === undefined) return;
-		event.preventDefault();
-		this.set_step(ids[(to + ids.length) % ids.length], { focus: true });
-	}
-
-	// ---------------------------------------------------------- the draft
-	// Changes the draft, and says whether it did: while Apply writes the draft nothing changes it (a key pressed
-	// under the desk's freeze would otherwise be lost when the saved policy is read again).
-	change(mutate) {
-		if (this.busy) return false;
-		mutate(this.store.draft);
-		this.after_change();
-		return true;
-	}
-
-	// Apply is writing the draft (on), or has finished (off): the step area says so to assistive technology.
-	set_busy(on) {
-		this.busy = Boolean(on);
-		this.step_box?.setAttribute("aria-busy", String(this.busy));
-	}
-
-	after_change() {
-		this.store.dirty = !sp.same(this.store.draft, this.store.original);
-		if (!this.store.dirty && this.notice === "restored") this.notice = null;
-		this.save_draft_soon();
-		this.render_banner();
-		this.render_tabs();
-		const step = this.current_step();
-		step.refresh?.(this, this.panels[step.id]);
-		this.tape.draft_changed();
-	}
-
-	price_source() {
-		return this.store.draft?.price_source === "rate_card" ? "rate_card" : "carrier";
-	}
-
-	set_priced(answer) {
-		this.priced = answer;
-		const step = this.current_step();
-		step.priced?.(this, this.panels[step.id], answer);
-	}
-
-	save_draft_soon() {
-		clearTimeout(this.save_timer);
-		this.save_timer = setTimeout(() => this.save_draft(), SAVE_DELAY);
-	}
-
-	save_draft() {
-		clearTimeout(this.save_timer);
-		this.save_timer = null;
-		if (!this.store.draft) return;
-		if (!this.store.dirty) {
-			forget_stored(); // a draft equal to the saved policy is not kept (someone else's stays)
+					"div",
+					{ class: "sp-empty" },
+					el("h3", {}, "Start with how you want to ship"),
+					el(
+						"p",
+						{ class: "sp-muted" },
+						"Create your own product groups and prices, or use the providers’ live offers.",
+					),
+					button(
+						"Start with the carrier’s own prices",
+						() => {
+							this.change((d) => (d.rules = [{ ...newRow(""), method: "carrier" }]), true);
+						},
+						"sp-primary",
+					),
+					button("Import Shopify rates", () => this.importDialog()),
+				),
+			);
 			return;
 		}
-		try {
-			const { version, draft, step } = this.store;
-			const stored = { user: frappe.session.user, version, draft, step };
-			window.localStorage.setItem(DRAFT_KEY, JSON.stringify(stored));
-		} catch (error) {
-			// storage is full or switched off: the draft then lives in this tab only
+		for (const { key, group } of this.groups()) {
+			const rows = this.draft.rules.map((r, i) => ({ r, i })).filter(({ r }) => (r.item_set || "") === key);
+			const products = group
+				? [
+						...group.patterns.map((p) => "Code: " + p),
+						...group.item_groups.map((g) => "Item group: " + g),
+						...(group.items.length ? [group.items.length + " selected products"] : []),
+					]
+				: ["Every product not listed above"];
+			const tools = el("div", { class: "sp-card-tools" });
+			if (group) {
+				const pos = this.draft.item_sets.indexOf(group);
+				const up = button("↑", () => this.moveGroup(key, -1));
+				up.setAttribute("aria-label", "Move " + key + " up");
+				up.disabled = pos === 0;
+				const down = button("↓", () => this.moveGroup(key, 1));
+				down.setAttribute("aria-label", "Move " + key + " down");
+				down.disabled = pos === this.draft.item_sets.length - 1;
+				const menu = el(
+					"details",
+					{ class: "sp-menu" },
+					el("summary", { "aria-label": "Manage " + key }, "…"),
+					el(
+						"div",
+						{},
+						button("Rename", () => this.renameGroup(key)),
+						button("Delete group", () => {
+							if (window.confirm("Delete " + key + " and its delivery rows?"))
+								this.change((d) => {
+									d.item_sets = d.item_sets.filter((g) => g.name !== key);
+									d.rules = d.rules.filter((r) => r.item_set !== key);
+								}, true);
+						}),
+					),
+				);
+				tools.append(up, down, menu);
+			} else
+				tools.append(
+					button("Delete", () => this.change((d) => (d.rules = d.rules.filter((r) => r.item_set)), true)),
+				);
+			const card = el(
+				"article",
+				{ class: "sp-card", "data-group": key },
+				el(
+					"header",
+					{ class: "sp-card-header" },
+					el(
+						"div",
+						{},
+						el("h3", {}, key || "Everything else"),
+						el(
+							"div",
+							{ class: "sp-chips" },
+							products.length
+								? products.map((p) => el("span", { class: "sp-chip" }, p))
+								: el("span", { class: "sp-muted" }, "No products selected"),
+						),
+					),
+					tools,
+				),
+			);
+			if (group) card.append(button("Edit products", () => this.productPicker(key), "sp-edit-products"));
+			card.append(
+				el(
+					"div",
+					{ class: "sp-row-head", "aria-hidden": "true" },
+					el("span", {}, "Country group"),
+					el("span", {}, "Delivered by"),
+					el("span", {}, "Customer pays"),
+				),
+			);
+			for (const { r, i } of rows) {
+				const summary = button(
+					"",
+					() => {
+						this.openRow = this.openRow === i ? null : i;
+						this.renderCards();
+					},
+					"sp-row-summary",
+				);
+				summary.setAttribute("aria-expanded", String(this.openRow === i));
+				summary.setAttribute("aria-controls", "sp-row-editor-" + i);
+				summary.append(
+					el("span", {}, r.zone || "Everywhere else"),
+					el("span", { class: "sp-delivery-summary" }, this.deliveryText(r)),
+					el(
+						"span",
+						{ class: "sp-price " + (this.priceType(r) === "free" ? "sp-free" : "") },
+						this.priceText(r),
+					),
+				);
+				const remove = button("×", () => {
+					this.openRow = null;
+					this.change((d) => d.rules.splice(i, 1), true);
+				});
+				remove.setAttribute(
+					"aria-label",
+					"Remove " + (r.zone || "Everywhere else") + " row from " + (key || "Everything else"),
+				);
+				const wrap = el("div", { class: "sp-row" }, el("div", { class: "sp-row-line" }, summary, remove));
+				if (this.openRow === i) {
+					const editor = el("div", { class: "sp-row-editor", id: "sp-row-editor-" + i });
+					this.rowEditor(editor, r, i);
+					wrap.append(editor);
+				}
+				card.append(wrap);
+			}
+			card.append(
+				button(
+					"+ Add country group",
+					() => {
+						const row = newRow(key);
+						this.change((d) => {
+							const last = d.rules
+								.map((r, i) => ((r.item_set || "") === key ? i : -1))
+								.filter((i) => i >= 0)
+								.pop();
+							let index = last === undefined ? d.rules.findIndex((r) => !r.item_set) : last + 1;
+							if (index < 0) index = d.rules.length;
+							d.rules.splice(index, 0, row);
+							this.openRow = index;
+						});
+						this.renderCards();
+					},
+					"sp-add",
+				),
+			);
+			this.cards.append(card);
 		}
 	}
-
-	confirm_discard() {
-		frappe.confirm(__("Discard your unsaved draft and start again from the saved policy?"), () =>
-			this.discard_draft()
+	priceType(r) {
+		if (r.method === "carrier" || r.method === "formula") return r.method;
+		return r.price_table.length === 1 && r.price_table[0].up_to_lb === null
+			? r.price_table[0].price === 0
+				? "free"
+				: "fixed"
+			: "weight";
+	}
+	priceText(r) {
+		const kind = this.priceType(r);
+		if (kind === "carrier") return "Carrier’s price";
+		if (kind === "formula") return "Formula over carrier price";
+		if (kind === "free") return "Free";
+		if (kind === "fixed")
+			return typeof r.price_table[0].price === "number" ? money(r.price_table[0].price) : "Enter a price";
+		return "By weight · " + r.price_table.length + " tiers";
+	}
+	deliveryText(r) {
+		if (!r.services.length) return r.method === "table" ? "Arrange manually" : "All available services";
+		if (r.services.length === 1) return r.services[0];
+		return r.services.length + " services";
+	}
+	moveGroup(key, delta) {
+		this.change((d) => {
+			const pos = d.item_sets.findIndex((g) => g.name === key);
+			const [g] = d.item_sets.splice(pos, 1);
+			d.item_sets.splice(pos + delta, 0, g);
+			const order = [...d.item_sets.map((g) => g.name), ""];
+			d.rules.sort((a, b) => order.indexOf(a.item_set || "") - order.indexOf(b.item_set || ""));
+			this.openRow = null;
+		}, true);
+	}
+	addGroup() {
+		const name = input("", () => {}, { placeholder: "e.g. Gift boxes", maxlength: 140 });
+		this.dialog("Add product group", field("Name", name), [
+			button(
+				"Add group",
+				() => {
+					const v = name.value.trim();
+					if (!v) return;
+					if (this.draft.item_sets.some((g) => g.name.toLowerCase() === v.toLowerCase()))
+						return this.notice("That product group already exists.");
+					this.change((d) => d.item_sets.push(newGroup(v)), true);
+					this.closeDialog();
+					this.productPicker(v);
+				},
+				"sp-primary",
+			),
+		]);
+		name.focus();
+	}
+	renameGroup(key) {
+		const name = input(key, () => {}, { maxlength: 140 });
+		this.dialog("Rename product group", field("Name", name), [
+			button(
+				"Rename",
+				() => {
+					const v = name.value.trim();
+					if (!v) return;
+					this.change((d) => {
+						d.item_sets.find((g) => g.name === key).name = v;
+						d.rules.forEach((r) => {
+							if (r.item_set === key) r.item_set = v;
+						});
+					}, true);
+					this.closeDialog();
+				},
+				"sp-primary",
+			),
+		]);
+	}
+	renderZones() {
+		this.zones.replaceChildren(
+			el("h3", {}, "Country groups"),
+			el(
+				"div",
+				{ class: "sp-zone-list" },
+				this.draft.zones.map((z) =>
+					button(
+						z.name + " · " + z.countries.length + (z.not_shipped ? " · Not delivered" : ""),
+						() => this.zoneDialog(z),
+						z.not_shipped ? "sp-blocked" : "",
+					),
+				),
+				button("+ Add country group", () => this.zoneDialog(null)),
+			),
 		);
 	}
-
-	discard_draft() {
-		if (this.busy) return;
-		this.store.draft = sp.clone(this.store.original);
-		this.notice = null;
-		this.priced = null; // an answer was for the draft that is gone
-		this.render_step();
-		this.after_change();
+	renderSaveBar() {
+		if (!this.saveBar) return;
+		this.saveBar.hidden = !this.dirty;
+		if (!this.dirty) return;
+		this.saveBar.replaceChildren(
+			el("span", {}, "Changes not saved"),
+			el(
+				"div",
+				{ class: "sp-actions" },
+				button("Discard", () => this.reload()),
+				button("Review and save", () => this.review(), "sp-primary"),
+			),
+		);
 	}
-
-	dismiss_notice() {
-		this.notice = null;
-		this.render_banner();
+	dialog(title, body, actions = []) {
+		this.closeDialog();
+		const previous = document.activeElement;
+		const d = el(
+			"dialog",
+			{ class: "sp-dialog", "aria-label": title },
+			el(
+				"header",
+				{},
+				el("h3", {}, title),
+				button("×", () => this.closeDialog()),
+			),
+			el("div", { class: "sp-dialog-body" }, body),
+			el(
+				"footer",
+				{},
+				button("Cancel", () => this.closeDialog()),
+				...actions,
+			),
+		);
+		d.querySelector("header button").setAttribute("aria-label", "Close " + title);
+		document.body.append(d);
+		this.modal = d;
+		d.addEventListener("close", () => {
+			d.remove();
+			if (this.modal === d) this.modal = null;
+			previous?.focus();
+		});
+		d.showModal();
+		return d;
+	}
+	closeDialog() {
+		if (this.modal) {
+			this.modal.close();
+			this.modal.remove();
+			this.modal = null;
+		}
+	}
+	notice(message) {
+		const node =
+			this.modal?.querySelector(".sp-dialog-error") || el("p", { class: "sp-dialog-error", role: "alert" });
+		node.textContent = message;
+		if (!node.isConnected) (this.modal?.querySelector(".sp-dialog-body") || this.root).append(node);
+	}
+	async review() {
+		const body = el("div", {}, el("p", {}, "Checking your changes…"));
+		this.dialog("Review and save", body);
+		try {
+			const result = await this.call("preview_changes", { draft: JSON.stringify(this.draft) });
+			body.replaceChildren(
+				el(
+					"ul",
+					{},
+					result.changes.map((t) => el("li", {}, t)),
+				),
+			);
+			if (result.warnings.length)
+				body.append(
+					el("h4", {}, "Please check"),
+					el(
+						"ul",
+						{},
+						result.warnings.map((t) => el("li", {}, t)),
+					),
+				);
+			if (result.problems.length)
+				body.append(
+					el("h4", { class: "sp-blocked" }, "Before saving"),
+					el(
+						"ul",
+						{},
+						result.problems.map((t) => el("li", {}, t)),
+					),
+				);
+			else {
+				const save = button(
+					"Save policy",
+					async () => {
+						save.disabled = true;
+						try {
+							await this.call("apply_policy", {
+								draft: JSON.stringify(this.draft),
+								expected_version: this.version,
+							});
+							this.closeDialog();
+							localStorage.removeItem(DRAFT_KEY);
+							await this.load();
+							frappe.show_alert({ message: __("Shipping policy saved"), indicator: "green" });
+						} catch {
+							save.disabled = false;
+							this.notice(
+								"The policy was not saved. Check the error; if someone changed it, reload before saving.",
+							);
+						}
+					},
+					"sp-primary",
+				);
+				this.modal.querySelector("footer").append(save);
+			}
+		} catch {
+			body.replaceChildren(el("p", { role: "alert" }, "The draft could not be checked. Please try again."));
+		}
+	}
+	renderPreview() {
+		this.preview.replaceChildren(
+			el("h3", {}, "Try an order"),
+			el("p", { class: "sp-muted" }, "Preview these edits before saving."),
+		);
+		const picker = new dsi_catalogue.CountryPicker({
+			countries: () => this.state.countries,
+			placeholder: "Choose a destination",
+			on_change: (code) => {
+				this.sample.country_code = code;
+				this.priceSample();
+			},
+		});
+		picker.set(this.sample.country_code);
+		this.preview.append(
+			field("Destination country", picker.root),
+			field(
+				"City · for live provider quotes",
+				input(
+					this.sample.city,
+					(v) => {
+						this.sample.city = v;
+						clearTimeout(this.sampleTimer);
+						this.sampleTimer = setTimeout(() => this.priceSample(), 700);
+					},
+					{ placeholder: "Destination city" },
+				),
+			),
+			field(
+				"Postcode · where required",
+				input(
+					this.sample.postcode,
+					(v) => {
+						this.sample.postcode = v;
+						clearTimeout(this.sampleTimer);
+						this.sampleTimer = setTimeout(() => this.priceSample(), 700);
+					},
+					{ placeholder: "Destination postcode" },
+				),
+			),
+		);
+		const items = el("div", { class: "sp-sample-items" });
+		this.preview.append(items);
+		for (const [i, row] of this.sample.items.entries())
+			items.append(
+				el(
+					"div",
+					{ class: "sp-sample-item" },
+					el("span", {}, this.sampleNames[row.item_code] || row.item_code),
+					numberInput(
+						row.qty,
+						(v) => {
+							row.qty = v ?? 0;
+							this.priceSample();
+						},
+						{ "aria-label": "Quantity of " + row.item_code },
+					),
+					button("×", () => {
+						this.sample.items.splice(i, 1);
+						this.renderPreview();
+						this.priceSample();
+					}),
+				),
+			);
+		this.preview.append(button("+ Add product", () => this.productPicker(null, true), "sp-add"));
+		this.receipt = el("div", { class: "sp-receipt", "aria-live": "polite" });
+		this.preview.append(this.receipt);
+		this.priceSample();
+	}
+	async priceSample() {
+		if (!this.receipt) return;
+		const seq = ++this.pricing;
+		if (!this.sample.country_code || !this.sample.items.length) {
+			this.receipt.replaceChildren(
+				el("p", { class: "sp-muted" }, "Choose a country and products to see delivery options."),
+			);
+			return;
+		}
+		this.receipt.replaceChildren(el("p", { class: "sp-muted" }, "Calculating delivery…"));
+		try {
+			const { result } = await this.call("try_order", {
+				draft: JSON.stringify(this.draft),
+				order: JSON.stringify(this.sample),
+			});
+			if (seq !== this.pricing) return;
+			this.receipt.replaceChildren();
+			if (!result.offered) {
+				this.receipt.append(el("p", { class: "sp-blocked" }, result.message || "Delivery is not offered."));
+				return;
+			}
+			for (const offer of result.offers) {
+				const part = el(
+					"section",
+					{ class: "sp-offer" },
+					el(
+						"div",
+						{ class: "sp-offer-title" },
+						el("strong", {}, offer.name),
+						el("strong", { class: "sp-price" }, money(offer.amount)),
+					),
+				);
+				if (offer.provider)
+					part.append(
+						el(
+							"small",
+							{ class: "sp-muted" },
+							offer.provider + (offer.estimated_days ? " · " + offer.estimated_days + " days" : ""),
+						),
+					);
+				for (const line of offer.trace || [])
+					part.append(
+						el("div", { class: "sp-share" }, el("span", {}, line.text), el("span", {}, money(line.amount))),
+					);
+				this.receipt.append(part);
+			}
+			const warnings = [...new Set(result.shipments.flatMap((s) => s.warnings || []))];
+			for (const t of warnings) this.receipt.append(el("p", { class: "sp-muted" }, t));
+			if (result.preview_note) this.receipt.append(el("small", { class: "sp-muted" }, result.preview_note));
+		} catch {
+			if (seq === this.pricing)
+				this.receipt.replaceChildren(
+					el(
+						"p",
+						{ role: "alert" },
+						"Could not price this preview. For live quotes, enter a valid destination city.",
+					),
+				);
+		}
+	}
+	async checkWorks() {
+		if (!this.sample.items.length || !this.sample.country_code || !this.sample.city) {
+			this.dialog(
+				"Check it works",
+				el("p", {}, "Choose products, a country and a city in Try an order first."),
+			);
+			return;
+		}
+		const body = el("div", {}, el("p", {}, "Checking the ERP, providers, and website…"));
+		this.dialog("Check it works", body);
+		try {
+			const result = await this.call("test_integration", {
+				order: JSON.stringify(this.sample.items.length ? this.sample : {}),
+			});
+			body.replaceChildren(
+				...result.checks.map((c) =>
+					el(
+						"section",
+						{ class: "sp-check-result" },
+						el("strong", {}, c.name.replaceAll("_", " ") + " · " + (c.ok ? "Passed" : "Needs attention")),
+						el("p", {}, c.summary),
+					),
+				),
+			);
+		} catch {
+			body.replaceChildren(el("p", {}, "The integration checks could not finish."));
+		}
 	}
 };

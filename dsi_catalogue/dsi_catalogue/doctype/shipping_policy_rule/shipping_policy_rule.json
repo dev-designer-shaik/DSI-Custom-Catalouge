@@ -6,149 +6,71 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "enabled",
-  "label",
   "zone",
   "item_set",
+  "services",
   "method",
-  "formula",
-  "round_up",
-  "sec_bands",
-  "min_order_value",
-  "max_order_value",
-  "col_weight",
-  "min_weight_kg",
-  "max_weight_kg",
-  "col_volume",
-  "min_volume_l",
-  "max_volume_l"
+  "price_table",
+  "label",
+  "days",
+  "formula"
  ],
  "fields": [
   {
-   "columns": 1,
-   "default": "0",
-   "fieldname": "enabled",
-   "fieldtype": "Check",
-   "in_list_view": 1,
-   "label": "Enabled"
-  },
-  {
-   "columns": 2,
-   "description": "Optional. A short name for the rule.",
-   "fieldname": "label",
-   "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "Label"
-  },
-  {
-   "columns": 2,
    "fieldname": "zone",
    "fieldtype": "Link",
-   "in_list_view": 1,
-   "label": "Zone",
+   "label": "Country group",
    "options": "Shipping Zone",
-   "reqd": 1
+   "in_list_view": 1
   },
   {
-   "columns": 2,
-   "description": "* A rule for selected items applies only when every item in the order is one of them. A rule for every item applies to every order.",
    "fieldname": "item_set",
    "fieldtype": "Link",
-   "in_list_view": 1,
-   "label": "Item set*",
-   "options": "Shipping Item Set"
+   "label": "Product group",
+   "options": "Shipping Item Set",
+   "in_list_view": 1
   },
   {
-   "columns": 2,
-   "default": "Carrier price",
+   "fieldname": "services",
+   "fieldtype": "Code",
+   "label": "Services",
+   "options": "JSON"
+  },
+  {
    "fieldname": "method",
    "fieldtype": "Select",
-   "in_list_view": 1,
-   "label": "Charge",
-   "options": "Carrier price\nFree\nCustom formula"
+   "label": "Price",
+   "options": "Weight table\nCarrier price\nFormula",
+   "default": "Weight table",
+   "in_list_view": 1
   },
   {
-   "depends_on": "eval:doc.method == 'Custom formula'",
-   "description": "Names: carrier_price, order_value, weight_kg, volume_l, boxes, item_count. Functions: min, max, round, ceil, floor, abs. Example: max(carrier_price * 1.1, 45)",
+   "fieldname": "price_table",
+   "fieldtype": "Code",
+   "label": "Weight table",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "label": "Name shown at checkout"
+  },
+  {
+   "fieldname": "days",
+   "fieldtype": "Int",
+   "label": "Days",
+   "non_negative": 1
+  },
+  {
    "fieldname": "formula",
    "fieldtype": "Small Text",
    "label": "Formula",
-   "mandatory_depends_on": "eval:doc.method == 'Custom formula'"
-  },
-  {
-   "columns": 1,
-   "depends_on": "eval:doc.method != 'Free'",
-   "description": "Round the price up to the next whole dollar.",
-   "fieldname": "round_up",
-   "fieldtype": "Check",
-   "in_list_view": 1,
-   "label": "Round up"
-  },
-  {
-   "fieldname": "sec_bands",
-   "fieldtype": "Section Break",
-   "label": "Only when (optional)"
-  },
-  {
-   "description": "'From' includes the number and 'up to' does not: from 0 up to 500 means 0 to 499.99.",
-   "fieldname": "min_order_value",
-   "fieldtype": "Float",
-   "label": "Order value from (USD)",
-   "non_negative": 1,
-   "precision": "2"
-  },
-  {
-   "description": "Leave at 0 for no limit.",
-   "fieldname": "max_order_value",
-   "fieldtype": "Float",
-   "label": "Order value up to (USD)",
-   "non_negative": 1,
-   "precision": "2"
-  },
-  {
-   "fieldname": "col_weight",
-   "fieldtype": "Column Break"
-  },
-  {
-   "description": "The total weight of the packed cartons.",
-   "fieldname": "min_weight_kg",
-   "fieldtype": "Float",
-   "label": "Weight from (kg)",
-   "non_negative": 1,
-   "precision": "3"
-  },
-  {
-   "description": "Leave at 0 for no limit.",
-   "fieldname": "max_weight_kg",
-   "fieldtype": "Float",
-   "label": "Weight up to (kg)",
-   "non_negative": 1,
-   "precision": "3"
-  },
-  {
-   "fieldname": "col_volume",
-   "fieldtype": "Column Break"
-  },
-  {
-   "description": "The total volume of the packed cartons.",
-   "fieldname": "min_volume_l",
-   "fieldtype": "Float",
-   "label": "Volume from (litres)",
-   "non_negative": 1,
-   "precision": "3"
-  },
-  {
-   "description": "Leave at 0 for no limit.",
-   "fieldname": "max_volume_l",
-   "fieldtype": "Float",
-   "label": "Volume up to (litres)",
-   "non_negative": 1,
-   "precision": "3"
+   "depends_on": "eval:doc.method == 'Formula'"
   }
  ],
  "istable": 1,
  "links": [],
- "modified": "2026-10-22 00:00:00.000000",
+ "modified": "2026-10-25 15:00:00.000000",
  "modified_by": "Administrator",
  "module": "dsi_catalogue",
  "name": "Shipping Policy Rule",

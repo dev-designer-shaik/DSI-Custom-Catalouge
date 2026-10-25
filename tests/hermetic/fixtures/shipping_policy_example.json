@@ -1,118 +1,42 @@
 {
-	"active": true,
-	"price_source": "carrier",
-	"rate_card": null,
-	"not_covered": "pass_through",
-	"default_fallback": {"method": "no_delivery", "amount": 0.0},
-	"zones": [
-		{
-			"name": "Bahrain",
-			"enabled": true,
-			"countries": ["BH"],
-			"not_shipped": false,
-			"everywhere_else": false,
-			"customer_line": "Free delivery in Bahrain.",
-			"not_offered_message": "",
-			"fallback": {"method": "policy_default", "amount": 0.0}
-		},
-		{
-			"name": "GCC",
-			"enabled": true,
-			"countries": ["AE", "SA", "KW", "OM", "QA"],
-			"not_shipped": false,
-			"everywhere_else": false,
-			"customer_line": "Gulf delivery, priced by the carrier. Watches ship free.",
-			"not_offered_message": "",
-			"fallback": {"method": "fixed", "amount": 35.0}
-		},
-		{
-			"name": "Rest of world",
-			"enabled": true,
-			"countries": [],
-			"not_shipped": false,
-			"everywhere_else": true,
-			"customer_line": "International delivery, priced at checkout.",
-			"not_offered_message": "",
-			"fallback": {"method": "policy_default", "amount": 0.0}
-		},
-		{
-			"name": "Not shipped",
-			"enabled": true,
-			"countries": ["RU", "BY"],
-			"not_shipped": true,
-			"everywhere_else": false,
-			"customer_line": "We do not deliver to these countries.",
-			"not_offered_message": "We don't deliver to this country.",
-			"fallback": {"method": "policy_default", "amount": 0.0}
-		}
-	],
-	"item_sets": [
-		{"name": "Watches", "item_groups": ["Watches"], "items": []}
-	],
-	"rules": [
-		{
-			"name": null,
-			"enabled": true,
-			"label": "Free in Bahrain",
-			"zone": "Bahrain",
-			"item_set": null,
-			"min_order_value": 0.0,
-			"max_order_value": 0.0,
-			"min_weight_kg": 0.0,
-			"max_weight_kg": 0.0,
-			"min_volume_l": 0.0,
-			"max_volume_l": 0.0,
-			"method": "free",
-			"formula": "",
-			"round_up": false
-		},
-		{
-			"name": null,
-			"enabled": true,
-			"label": "Free watches in the Gulf",
-			"zone": "GCC",
-			"item_set": "Watches",
-			"min_order_value": 0.0,
-			"max_order_value": 0.0,
-			"min_weight_kg": 0.0,
-			"max_weight_kg": 0.0,
-			"min_volume_l": 0.0,
-			"max_volume_l": 0.0,
-			"method": "free",
-			"formula": "",
-			"round_up": false
-		},
-		{
-			"name": null,
-			"enabled": true,
-			"label": "Gulf at the carrier price",
-			"zone": "GCC",
-			"item_set": null,
-			"min_order_value": 0.0,
-			"max_order_value": 0.0,
-			"min_weight_kg": 0.0,
-			"max_weight_kg": 0.0,
-			"min_volume_l": 0.0,
-			"max_volume_l": 0.0,
-			"method": "carrier_price",
-			"formula": "",
-			"round_up": true
-		},
-		{
-			"name": null,
-			"enabled": true,
-			"label": "International with a minimum",
-			"zone": "Rest of world",
-			"item_set": null,
-			"min_order_value": 0.0,
-			"max_order_value": 0.0,
-			"min_weight_kg": 0.0,
-			"max_weight_kg": 0.0,
-			"min_volume_l": 0.0,
-			"max_volume_l": 0.0,
-			"method": "formula",
-			"formula": "max(carrier_price * 1.1, 45)",
-			"round_up": true
-		}
-	]
+  "active": false,
+  "fallback": {
+    "method": "no_delivery",
+    "amount": 0
+  },
+  "zones": [
+    {
+      "name": "Sample country group",
+      "enabled": true,
+      "countries": [
+        "US"
+      ],
+      "not_shipped": false,
+      "customer_line": "",
+      "not_offered_message": ""
+    }
+  ],
+  "item_sets": [],
+  "rules": [
+    {
+      "name": null,
+      "zone": "Sample country group",
+      "item_set": null,
+      "services": [],
+      "method": "table",
+      "formula": "",
+      "price_table": [
+        {
+          "up_to_lb": 1,
+          "price": 7.25
+        },
+        {
+          "up_to_lb": null,
+          "price": 11.5
+        }
+      ],
+      "label": "Delivery",
+      "days": 4
+    }
+  ]
 }
