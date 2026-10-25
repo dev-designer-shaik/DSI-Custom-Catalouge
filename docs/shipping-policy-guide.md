@@ -1,70 +1,77 @@
-# Shipping policy
+# Shipping Policy: how delivery prices are set
 
-Configure it in the ERP desk at `/desk/shipping-policy-wizard`. System Manager or Website Manager access is required.
+Document type: standard operating procedure for the ERP assistant and the team. Folder: Website.
 
-## Start with your own policy
+The Shipping Policy decides what a customer pays for delivery at checkout. It is managed on ONE page in the ERP desk: `/desk/shipping-policy-wizard`. Only users with the Website Manager or System Manager role can open it. To give someone access, open their User record and tick Website Manager under Roles (they must be a System User).
 
-This is one page. A product group contains delivery rows: **Country group**, **Delivered by**, **Customer pays**. There is no separate rate card or price-source switch. The Helper can convert an uploaded Shopify shipping file into ordinary editable groups and rows. Nothing in the price engine depends on Shopify profiles or a particular provider.
+## The pieces
 
-A new policy starts off. While it is off, customers pay the carrier's own price. Tick **Active** and save to put it into use; untick it and save to return to the carrier's price at once.
+- **Product group** (record: Shipping Item Set). The products that travel together as one shipment: explicit products, item groups, and code patterns that follow new products automatically.
+- **Country group** (record: Shipping Zone). A reusable list of countries from the ERP's Country list. One country group holds the countries that are not delivered to.
+- **Delivery row.** Inside a product group: Country group, Delivered by, Customer pays.
+- **Delivered by.** The forwarding services. Every provider and service comes from the ERP's Shipping Provider and Shipping Service records; disabled services are shown as disabled.
+- **The policy** (single record: Shipping Policy). Active, the one fallback, and all the rows.
 
-1. Add a product group and choose products. Search updates while you type; narrow by ERP item group, code pattern, or published products. Tick individual results, or select the results shown.
-2. To include future products automatically, choose one item group or one code pattern and click **Follow this filter**. Combined filters and text searches produce a fixed selection. A group's explicit products, item groups and patterns are combined with OR.
-3. Add a country group row. Country groups are reusable lists. **Everywhere else** covers destinations without a specific row in that product group.
-4. Choose forwarding services and the price customers pay. All providers and services come from ERP records. Disabled services are shown as disabled.
-5. Try an order using actual ERP products and a destination. City and, where required, postcode are used for provider quotes. The preview uses the current draft even while the saved policy is off.
-6. **Review and save** stores the whole policy atomically. The save bar only appears when there are edits. An old browser draft can be continued or discarded. Another user's save requires reloading before saving yours.
+## How do I change the shipping policy?
 
-## Build from an uploaded file
-
-Attach the Shopify shipping CSV (or a single-sheet XLSX with the same columns) to the ERP Helper and ask: **Build a shipping policy from this file.** Attach the not-delivered countries file too if you have one. The Helper reads the complete file and opens an unsaved proposal on this page. Review the product filters, countries, prices and forwarding services, then Review and save when ready. The proposal starts off; uploading a file does not enable it. Existing saved not-delivered countries are preserved when no replacement exclusion file is supplied.
-
-There is no Import Shopify button on the policy page. Missing ERP countries are reported and must be resolved before saving. If you already have unsaved edits, the page asks before replacing those edits with the proposal.
-
-An empty draft has no delivery rows, so Try an order cannot offer delivery. Start with your own rows or **Start with the carrier’s own prices**. The preview now explains the missing product group or destination row.
+1. Open `/desk/shipping-policy-wizard`.
+2. **To add or change a product group:** add a group and choose its products. Search updates while you type; narrow by ERP item group, code pattern, or published products. Tick individual results or select all shown. To include future products automatically, choose one item group or one code pattern and click **Follow this filter**. Combined filters and text searches make a fixed selection. A group's explicit products, item groups and patterns are combined with OR.
+3. **To add or change a delivery row:** pick the Country group (or **Everywhere else**, which covers every destination without a specific row in that group), choose the forwarding services, and set Customer pays (below).
+4. **To change a country group:** edit the list of countries. A country may appear in different product groups but only once within one group's specific rows. The not-delivered group always wins.
+5. **Try an order.** Choose real ERP products and a destination (city and, where required, postcode). The preview uses your current draft, even when the saved policy is off, and says which group and row priced each shipment and why.
+6. **Review and save.** The save bar appears when there are edits. Saving writes the whole policy in one step or nothing. If another user saved first, reload and redo your edit. An unsaved browser draft can be continued or discarded.
+7. **Switch it on or off.** Tick **Active** and save to put the policy into use. Untick it and save to return to the carrier's own price immediately. While the policy is off, or if the ERP does not answer within 4 seconds, customers pay the carrier's own price.
 
 ## Customer pays
 
-| Choice | What happens |
+| Choice | What the customer is charged |
 |---|---|
-| Free | An explicit zero customer charge. |
-| One price | Your fixed USD charge for this product group's shipment. |
-| By weight | Your USD price tiers, using item weights and quantities. Bounds are in pounds. A blank final bound means “and above.” Above a bounded final tier, delivery is refused. |
-| Carrier's price | Every eligible service keeps its own API quote. With no services selected, every available API service is offered. |
-| Formula | The expression runs separately over each eligible service's API quote. Every successful service remains an option with its own price. |
+| Free | An explicit zero. |
+| One price | Your fixed USD charge for the group's shipment. |
+| By weight | Your USD price tiers from item weights and quantities. Bounds are in pounds; a blank final bound means "and above". Above a bounded final tier, delivery is refused. |
+| Carrier's price | Each eligible service keeps its own live quote. With no services selected, every available service is offered. |
+| Formula | An expression run separately over each eligible service's quote. Every successful service stays an option with its own price. |
 
-For example, `carrier_price * 1.1 + 5` adds 10% and USD 5 to each service's quote. This is an example, not an installed pricing rule. Expressions also support `order_value`, `weight_kg`, `volume_l`, `boxes`, `item_count`, and the functions `min`, `max`, `round`, `ceil`, `floor`, `abs`. Expressions are validated by a restricted evaluator; arbitrary Python cannot run. Formula rows request provider quotes, including when the expression does not mention `carrier_price`.
+Formula example: `carrier_price * 1.1 + 5` adds 10% and USD 5 to each service's quote. Variables: `carrier_price`, `order_value`, `weight_kg`, `volume_l`, `boxes`, `item_count`. Functions: `min`, `max`, `round`, `ceil`, `floor`, `abs`. Also arithmetic, comparisons, `and`, `or`, `not` and `a if condition else b`. The page validates the formula as you type; arbitrary code cannot run. Formula rows always request carrier quotes.
 
-For free, fixed and weight prices, select services to carry your price while retaining the provider needed for booking. Leaving the services empty means a plain delivery arranged manually. For carrier/formula rows, an empty service selection means **all eligible API services**; selecting some restricts the offers to those services.
+For Free, One price and By weight, select services to attach your price to a provider, so the shipment books through it. With no service selected the delivery is plain and staff arrange it by hand. For Carrier's price and Formula, an empty selection means all eligible services and a selection restricts the offers. If the selected services cannot serve a shipment, it becomes a plain delivery and the preview warns you.
 
-A manual row whose selected services cannot serve the shipment becomes a plain delivery, with a warning in the preview. Plain deliveries carry no provider and require manual fulfilment. If automatic forwarding is required, check that the preview names the intended service for every destination.
+## How a price is decided
 
-## Matching and delivery boundaries
+1. The not-delivered country group is checked first; those countries get no delivery.
+2. Each product belongs to the first product group that claims it, in the order shown on the page. A group with no delivery rows still owns its products and refuses their delivery; they never fall into a later group. An optional **Everything else** group handles unclaimed products.
+3. Each product group is one shipment with its own price. A mixed cart adds the shipment prices. Put products that ship together in the same group.
+4. In each group the row for the destination applies, else **Everywhere else**.
+5. Free, One price and By weight finish inside the ERP. Carrier's price and Formula need the carrier: the ERP names the shipments to quote, the website packs and quotes them, and the ERP finishes from the quotes. If the policy, cart or provider list changes meanwhile, the website asks again once.
+6. The customer picks a service every shipment can use. The payment step prices the order again by the same rules. The offer keeps the provider, booking code, service, price and estimated days; quote-based offers keep the carrier's collection and delivery dates.
+7. If no service is common to all shipments, carrier-priced orders are refused; orders priced entirely by rows are offered as one plain delivery.
 
-Product groups claim products in the order shown. A group with no delivery rows still owns its products and refuses their delivery; they cannot fall through into a later group's prices. An empty named group owns no products. The optional **Everything else** card handles unclaimed products.
+## Refusals and the fallback
 
-Each group forms its own shipment. A mixed cart adds the shipment prices. This can mean more than one carrier quote when products are in separate groups. Group together products intended to travel in the same shipment.
+These refuse delivery and never use the fallback:
+- no product group claims the product;
+- the group has no row for the destination;
+- the destination is in the not-delivered group;
+- the carrier does not serve the destination;
+- the weight is above the last tier.
 
-A country may appear in different product groups, but only once within one group's specific delivery rows. Not-delivered country groups always win. A product with no matching delivery row, a blocked country, an unsupported carrier destination, or an order above the last weight tier is refused. These cases never use the carrier-failure fallback.
+The single **fallback** covers only a provider or formula that returns no usable price. Choose to refuse delivery or to charge a flat amount (zero means free). It prices only the failed shipments; the others keep their prices. A fallback order is a plain delivery fulfilled by hand.
 
-The single fallback covers a provider or formula that gives no usable price. It can refuse delivery or charge your chosen flat amount (zero deliberately means free). It prices only failed shipments; successfully priced shipments keep their charges. A fallback order is a plain delivery that needs manual fulfilment.
+## How do I build a policy from the Shopify shipping file?
 
-For a combined order the customer chooses a service usable by every shipment. If no common service exists, carrier-priced orders are refused; entirely manual-priced orders can be offered as one plain delivery. Partial carton quotes are never used as complete shipment prices.
+Attach the Shopify shipping CSV (or a single-sheet XLSX with the same columns) to the ERP Helper and ask: **Build a shipping policy from this file.** Attach the not-delivered countries file too if you have one. The Helper reads the whole file and opens an unsaved proposal on the policy page as ordinary product groups and delivery rows. Review the product filters, countries, prices and services, edit what you need, then Review and save. The proposal arrives with the policy off; switch it on yourself. Existing not-delivered countries are kept when you supply no replacement file.
 
-## Provider API and checkout
+Countries in the file that the ERP's Country list lacks are reported. Resolve each one before saving; none are dropped silently. If you already have unsaved edits, the page asks before replacing them.
 
-The website first asks ERP to resolve the policy. Manual prices can finish immediately. For carrier/formula rows, ERP returns only the shipments needing quotes and an opaque plan token. The website packs and quotes those shipments, then asks ERP to calculate the final offers. A changed policy/cart/directory makes the plan stale and triggers one fresh round.
+An empty policy has no rows and offers no delivery. Start with your own rows, or use **Start with the carrier's own prices**.
 
-Checkout receives every resulting offer, its provider, booking code, service, price, and estimated days. Quote-based offers retain the API's collection/delivery dates when supplied. The payment route runs the same calculation again. Unknown/missing booking codes are not replaced with an Aramex constant.
+## Weights, prices and quotes
 
-Policy off or ERP unavailable uses the existing carrier path. There is no cache in the price path. Nothing is booked, paid, or shipped by the preview or integration checks.
+- Weights: the item's weight per unit is read as kilograms; bounds in By weight rows are pounds (1 kg = 2.20462 lb). An item with no weight counts as 0.35 kg per unit and is flagged in the preview. Keep weights and package dimensions correct for accurate carrier quotes.
+- Prices come from the ERP's USD online price list.
+- A quote that arrives incomplete, missing or unusable never becomes a free or underpriced delivery.
+- **Check it works** tests the ERP endpoint, the carrier API and the website named in Storefront Settings with the products and address in Try an order. A Storefront Settings website that reads a different ERP says nothing about this ERP's policy.
 
-## Checks
+## What the website receives
 
-**Try an order** prices real ERP products to a real destination with the current draft, even while the saved policy is off. Offers marked as simulated come from a carrier running in simulation mode; turn simulation off in the provider's settings to see real quotes.
-
-**Check it works** uses the products and address in Try an order. It checks the ERP endpoint, the carrier API and the website configured in Storefront Settings. If Storefront Settings names a website that reads a different ERP, that check says nothing about this ERP's policy.
-
-Missing item weights use a 0.35 kg fallback per unit and are flagged in the preview. Prices come from the ERP's USD online price list. Fix product weights and package dimensions for accurate carrier pricing.
-
-A Shopify import reports countries missing from the ERP's Country list. Resolve those countries before saving; the importer never silently removes them.
+At checkout the website asks the ERP for the price. The ERP answers either with final offers or with the shipments that need carrier quotes and an opaque plan token. The website returns the carton quotes with the token. Every resulting offer carries its provider, booking code, service, price and estimated days. Nothing is cached in the price path. Nothing is booked, paid or shipped by the preview.
