@@ -1,12 +1,12 @@
 # Shipping policy
 
-Updated 25 October 2026. Configure the sandbox at https://erp2.shaik.net/desk/shipping-policy-wizard. System Manager or Website Manager access is required.
+Configure it in the ERP desk at `/desk/shipping-policy-wizard`. System Manager or Website Manager access is required.
 
 ## Start with your own policy
 
 This is one page. A product group contains delivery rows: **Country group**, **Delivered by**, **Customer pays**. There is no separate rate card or price-source switch. The Helper can convert an uploaded Shopify shipping file into ordinary editable groups and rows. Nothing in the price engine depends on Shopify profiles or a particular provider.
 
-The sandbox policy is off. The live website and live ERP have not been changed by this build. Website integration changes are local and must be deployed with the ERP before the live checkout can use the new policy.
+A new policy starts off. While it is off, customers pay the carrier's own price. Tick **Active** and save to put it into use; untick it and save to return to the carrier's price at once.
 
 1. Add a product group and choose products. Search updates while you type; narrow by ERP item group, code pattern, or published products. Tick individual results, or select the results shown.
 2. To include future products automatically, choose one item group or one code pattern and click **Follow this filter**. Combined filters and text searches produce a fixed selection. A group's explicit products, item groups and patterns are combined with OR.
@@ -59,12 +59,12 @@ Checkout receives every resulting offer, its provider, booking code, service, pr
 
 Policy off or ERP unavailable uses the existing carrier path. There is no cache in the price path. Nothing is booked, paid, or shipped by the preview or integration checks.
 
-## Sandbox notes and checks
+## Checks
 
-Erp2 currently has carrier simulation enabled in its existing configuration. The preview identifies simulated prices. A separate read-only check with simulation disabled for that process returned real carrier quotes; it did not change the site configuration. Provider/service availability and item facts differ between erp2 and live, so their offers need not be identical.
+**Try an order** prices real ERP products to a real destination with the current draft, even while the saved policy is off. Offers marked as simulated come from a carrier running in simulation mode; turn simulation off in the provider's settings to see real quotes.
 
-**Check it works** uses the products and address in Try an order. It checks the ERP endpoint, the carrier API and the website configured in Storefront Settings. A website pointing at a different ERP is not proof that the sandbox policy is deployed there.
+**Check it works** uses the products and address in Try an order. It checks the ERP endpoint, the carrier API and the website configured in Storefront Settings. If Storefront Settings names a website that reads a different ERP, that check says nothing about this ERP's policy.
 
-Missing item weights use the existing 0.35 kg fallback and are flagged in the preview. Prices come from the ERP's USD online price list. Fix product weights and package dimensions for accurate carrier pricing.
+Missing item weights use a 0.35 kg fallback per unit and are flagged in the preview. Prices come from the ERP's USD online price list. Fix product weights and package dimensions for accurate carrier pricing.
 
-Shopify imports report countries missing from ERP's Country list. Resolve those countries explicitly before saving; the importer does not silently remove them. The original rates and source files remain private, outside the public repository.
+A Shopify import reports countries missing from the ERP's Country list. Resolve those countries before saving; the importer never silently removes them.
