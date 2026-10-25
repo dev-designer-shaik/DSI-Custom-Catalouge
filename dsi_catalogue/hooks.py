@@ -134,3 +134,9 @@ fixtures = [
 has_permission = {dt: "dsi_catalogue.website_item_review.has_permission" for dt in ("Website Item", "Storefront Review", "Storefront Settings")}
 
 override_doctype_class = {"Website Item": "dsi_catalogue.website_item_controller.ReviewedWebsiteItem"}
+
+# Tools for the Frappe Assistant Core MCP server (read-only shipping policy and simulation).
+assistant_tools = [
+	"dsi_catalogue.assistant_tools.shipping.GetShippingPolicy",
+	"dsi_catalogue.assistant_tools.shipping.SimulateShipping",
+]
