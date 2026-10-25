@@ -174,7 +174,7 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 				el(
 					"p",
 					{ class: "sp-muted" },
-					`${service.label} is required for matching ${service.restricted_item_group} products. Other services and manual fallback cannot replace it.`,
+					`${service.label} is required for matching ${service.restricted_item_group} products${service.requirement_scope === "International only" ? " on international deliveries. Domestic deliveries use the usual services" : ""}. Other services and manual fallback cannot replace it where required.`,
 				),
 			);
 		}

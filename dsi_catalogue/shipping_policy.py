@@ -226,7 +226,7 @@ def services_directory():
 	}
 	extra_fields = []
 	if frappe.get_meta("Shipping Service").has_field("restricted_item_group"):
-		extra_fields = ["restricted_item_group", "required_for_group", "live_rates_only"]
+		extra_fields = ["restricted_item_group", "required_for_group", "live_rates_only", "requirement_scope"]
 	services = frappe.get_all(
 		"Shipping Service",
 		fields=[
@@ -274,7 +274,7 @@ def build_order(country_code, items):
 		except ImportError:
 			pass  # Older shipping installations have no product restrictions.
 		else:
-			access = restriction_context(items)
+			access = restriction_context(items, normalize_country(country_code))
 	if access is not None:
 		directory = [s for s in directory if s["name"] in access["allowed_services"]]
 	return {

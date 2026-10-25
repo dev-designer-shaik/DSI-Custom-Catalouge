@@ -74,7 +74,7 @@ An empty policy has no rows and offers no delivery. Start with your own rows, or
 
 ## Product forwarding restrictions
 
-A Shipping Service can be limited to an ERP Item Group and its descendants, with individual products excluded. **Require this service for these products** makes matching orders use that service, including mixed orders. For example, a perfume group can require DGG while other products keep their normal options. These settings live on the Shipping Service form and apply independently of the pricing policy.
+A Shipping Service can be limited to an ERP Item Group and its descendants, with individual products excluded. **Require this service for these products** makes matching orders use that service, including mixed orders. For example, a perfume group can require DGG while other products keep their normal options. These settings live on the Shipping Service form and apply independently of the pricing policy. **Require for: International only** exempts domestic deliveries within the provider account country. For Bahrain-origin perfume orders, DGG is required internationally while Bahrain deliveries use the normal domestic services. An unsupported international destination still refuses delivery; it is not treated as a domestic exception.
 
 Manual, free, weight, carrier and formula prices still work. A required forwarding service cannot be replaced by an ordinary service or manual fallback. If the required service is disabled, does not cover the destination, or cannot provide a required quote, delivery is refused. The policy page identifies these restrictions beside the service choices.
 

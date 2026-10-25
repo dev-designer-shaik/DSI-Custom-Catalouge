@@ -42,7 +42,10 @@ Object.assign(dsi_catalogue.ShippingPolicyWizard.prototype, {
 							" countries" +
 							(!service.enabled ? " · Disabled" : "") +
 							(service.required_for_group
-								? " · Required for matching " + service.restricted_item_group + " products"
+								? " · Required for matching " +
+									service.restricted_item_group +
+									" products" +
+									(service.requirement_scope === "International only" ? " internationally" : "")
 								: ""),
 						row.services.includes(service.name),
 						(v) => {
