@@ -39,7 +39,7 @@ def test_only_current_fields_and_options_are_stored():
 def test_manager_permissions_and_child_doctype():
 	for name in ("shipping_policy", "shipping_zone", "shipping_item_set"):
 		doc = json.loads((DT / name / (name + ".json")).read_text())
-		assert {p["role"] for p in doc["permissions"]} == {"System Manager", "Website Manager"}
+		assert {p["role"] for p in doc["permissions"]} == {"System Manager", "Website Manager", "Sales User"}
 	child = json.loads((DT / "shipping_item_set_pattern/shipping_item_set_pattern.json").read_text())
 	assert child["istable"] == 1 and child["fields"][0]["fieldname"] == "pattern"
 

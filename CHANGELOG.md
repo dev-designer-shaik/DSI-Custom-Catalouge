@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-25 — Every Sales User may manage the Shipping Policy
+- The wizard page, its nine methods and the three record types (Shipping Zone,
+  Shipping Item Set, Shipping Policy) are open to System Manager, Website Manager
+  **and Sales User** (previously the first two). One list, `MANAGER_ROLES` in
+  `shipping_policy_wizard.py`; the page and doctype JSON name the same roles and a
+  hermetic test fails when they stop agreeing. Guest and every other role stay
+  refused. Needs `reload-doc` of the three doctypes and the page on a site that
+  already has the policy, and a worker reload for the Python change; the four JSON
+  files carry a new `modified` stamp so reload-doc does not skip them.
+
 ## 2026-10-25 — Website Manager may manage the Shipping Policy
 - The wizard page, its seven methods and the three record types (Shipping Zone,
   Shipping Item Set, Shipping Policy) are open to System Manager **and Website

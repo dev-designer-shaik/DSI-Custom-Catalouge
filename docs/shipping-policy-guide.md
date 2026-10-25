@@ -2,7 +2,7 @@
 
 Document type: standard operating procedure for the ERP assistant and the team. Folder: Website.
 
-The Shipping Policy decides what a customer pays for delivery at checkout. It is managed on ONE page in the ERP desk: `/desk/shipping-policy-wizard`. Only users with the Website Manager or System Manager role can open it. To give someone access, open their User record and tick Website Manager under Roles (they must be a System User).
+The Shipping Policy decides what a customer pays for delivery at checkout. It is managed on ONE page in the ERP desk: `/desk/shipping-policy-wizard`. Every user with the Sales User, Website Manager or System Manager role can open and edit it; nobody else can. To give someone else access, open their User record and tick Sales User (or Website Manager) under Roles; they must be a System User.
 
 ## The pieces
 

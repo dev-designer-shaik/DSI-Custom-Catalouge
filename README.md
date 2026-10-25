@@ -45,7 +45,7 @@ Read-only, ungated: `get_published_website_items`, `get_website_item_by_index_ke
 `shipping_policy.public_summary`, `shipping_policy.delivery_services`.
 Token-gated (`X-DSI-Token`): `sync_product_catalogue`, `receive_publish_callback`,
 `receive_generation_callback`.
-System Manager or Website Manager only: the nine `shipping_policy_wizard` methods (`wizard_state`,
+System Manager, Website Manager or Sales User only: the nine `shipping_policy_wizard` methods (`wizard_state`,
 `search_products`, `count_products`, `check_formula`, `preview_changes`, `apply_policy`,
 `import_shopify`, `try_order`, `test_integration`; `apply_policy`, `try_order` and
 `test_integration` take POST only).
@@ -65,7 +65,7 @@ must go through `index_key.get_product_grouping_key`.
 
 ## Shipping Policy
 What customers pay for delivery, set in the ERP on ONE page, `/desk/shipping-policy-wizard`
-(System Manager or Website Manager only). User guide: `docs/shipping-policy-guide.md`;
+(System Manager, Website Manager or Sales User only). User guide: `docs/shipping-policy-guide.md`;
 deployment record and rollback: `docs/shipping-policy-deployment.md`; design history in
 `docs/superpowers/` (the one-page spec and plan are background, the guide and the code win).
 

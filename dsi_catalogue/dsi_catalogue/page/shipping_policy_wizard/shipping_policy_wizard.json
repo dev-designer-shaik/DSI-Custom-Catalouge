@@ -4,7 +4,7 @@
  "docstatus": 0,
  "doctype": "Page",
  "idx": 0,
- "modified": "2026-10-25 12:30:00.000000",
+ "modified": "2026-10-25 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "dsi_catalogue",
  "name": "shipping-policy-wizard",
@@ -16,6 +16,9 @@
   },
   {
    "role": "Website Manager"
+  },
+  {
+   "role": "Sales User"
   }
  ],
  "script": null,
