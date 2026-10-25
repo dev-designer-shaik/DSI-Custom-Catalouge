@@ -22,6 +22,7 @@ from dsi_catalogue.shipping_engine import (
 	number,
 	pattern_matches,
 	policy_warnings,
+	preview_coverage_message,
 	resolve,
 	validate_policy,
 )
@@ -319,6 +320,8 @@ def try_order(draft, order):
 			+ city
 			+ "."
 		)
+	if result.get("reason") == "not_covered":
+		result["message"] = preview_coverage_message(policy, sample)
 	return {"result": result}
 
 

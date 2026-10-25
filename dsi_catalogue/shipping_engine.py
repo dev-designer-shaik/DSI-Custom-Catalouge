@@ -440,3 +440,24 @@ def policy_warnings(policy):
 		if not z.get("countries"):
 			warnings.append(z["name"] + " has no countries.")
 	return warnings
+
+
+def preview_coverage_message(policy, order):
+	"""Manager-only explanation; customer answers never disclose group configuration."""
+	if not policy.get("rules"):
+		return "No delivery rows have been configured yet. Add a product group and a delivery row, or start with the carrier's own prices."
+	country = normalize_country(order.get("country_code"))
+	groups = {g["name"]: g for g in policy["item_sets"]}
+	keys = list(groups) + ([""] if any(not r.get("item_set") for r in policy["rules"]) else [])
+	zones = {z["name"]: z for z in policy["zones"] if z.get("enabled", True)}
+	for item in order.get("items", []):
+		key = next((k for k in keys if not k or item_in_set(item, groups[k])), None)
+		if key is None:
+			return f"Product {item['item_code']} is not included in any product group. Edit products to include it, or add an Everything else group."
+		rows = [r for r in policy["rules"] if (r.get("item_set") or "") == key]
+		if not any(
+			not r.get("zone") or (r["zone"] in zones and country in zones[r["zone"]]["countries"])
+			for r in rows
+		):
+			return f"{key or 'Everything else'} has no delivery row for {country}. Add that destination to a country group for these products."
+	return "These product groups do not share an available delivery service. Choose a service that can carry every part of this order."

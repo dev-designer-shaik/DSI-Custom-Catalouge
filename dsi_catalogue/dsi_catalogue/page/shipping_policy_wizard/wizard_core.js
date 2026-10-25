@@ -62,8 +62,56 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 			);
 		}
 	}
+	async receiveHelperDraft(proposal) {
+		const latest = await this.call("wizard_state");
+		if (proposal.expected_version !== latest.version)
+			throw new Error("The saved policy changed. Ask the Helper to rebuild the proposal before applying it.");
+		const use = () => {
+			this.state = latest;
+			this.original = clone(latest.policy);
+			this.version = latest.version;
+			this.draft = clone(proposal.draft);
+			this.openRow = null;
+			this.closeDialog();
+			this.render();
+			this.changed();
+			const details = [...(proposal.notes || []), ...(proposal.problems || [])];
+			const body = el(
+				"div",
+				{},
+				el(
+					"p",
+					{},
+					"The Helper filled an unsaved policy from your file. Check the products, country groups and prices, then use Review and save.",
+				),
+			);
+			if (details.length)
+				body.append(
+					el(
+						"ul",
+						{},
+						details.map((t) => el("li", {}, t)),
+					),
+				);
+			this.dialog("Policy prepared from your file", body, [
+				button("Review the policy", () => this.closeDialog(), "sp-primary"),
+			]);
+		};
+		if (this.dirty) {
+			this.dialog(
+				"Replace your unsaved edits?",
+				el(
+					"p",
+					{},
+					"You have unsaved changes on this page. Use the Helper's proposal only if you want to replace those edits. The saved policy will not change.",
+				),
+				[button("Use Helper proposal", use, "sp-primary")],
+			);
+		} else use();
+	}
+
 	onShow() {
-		if (this.state && !this.dirty) this.reload(false);
+		if (this.state && !this.dirty) this.ready = this.reload(false);
 	}
 	get dirty() {
 		return JSON.stringify(this.draft) !== JSON.stringify(this.original);
@@ -109,7 +157,6 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 			el(
 				"div",
 				{ class: "sp-actions" },
-				button("Import Shopify rates", () => this.importDialog()),
 				button("Check it works", () => this.checkWorks()),
 			),
 		);
@@ -189,7 +236,6 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 						},
 						"sp-primary",
 					),
-					button("Import Shopify rates", () => this.importDialog()),
 				),
 			);
 			return;

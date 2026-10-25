@@ -248,3 +248,16 @@ def test_off_returns_inactive():
 	p = policy()
 	p["active"] = False
 	assert resolve(p, order())["policy_active"] is False
+
+
+def test_preview_explains_missing_configuration_without_changing_customer_refusal():
+	from dsi_catalogue.shipping_engine import preview_coverage_message
+
+	p = policy()
+	p["rules"] = []
+	assert "No delivery rows" in preview_coverage_message(p, order())
+	assert resolve(p, order())["message"] == "These products are not available for delivery to this country."
+	p = policy()
+	p["rules"] = p["rules"][:2]
+	assert "not included in any product group" in preview_coverage_message(p, order(item("UNLISTED")))
+	assert "Petite has no delivery row for BH" in preview_coverage_message(p, order(country="BH"))

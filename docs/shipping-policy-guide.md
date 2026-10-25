@@ -4,7 +4,7 @@ Updated 25 October 2026. Configure the sandbox at https://erp2.shaik.net/desk/sh
 
 ## Start with your own policy
 
-This is one page. A product group contains delivery rows: **Country group**, **Delivered by**, **Customer pays**. There is no separate rate card or price-source switch. The optional Shopify import converts the old CSV into ordinary editable groups and rows. Nothing in the price engine depends on Shopify profiles or a particular provider.
+This is one page. A product group contains delivery rows: **Country group**, **Delivered by**, **Customer pays**. There is no separate rate card or price-source switch. The Helper can convert an uploaded Shopify shipping file into ordinary editable groups and rows. Nothing in the price engine depends on Shopify profiles or a particular provider.
 
 The sandbox policy is off. The live website and live ERP have not been changed by this build. Website integration changes are local and must be deployed with the ERP before the live checkout can use the new policy.
 
@@ -14,6 +14,14 @@ The sandbox policy is off. The live website and live ERP have not been changed b
 4. Choose forwarding services and the price customers pay. All providers and services come from ERP records. Disabled services are shown as disabled.
 5. Try an order using actual ERP products and a destination. City and, where required, postcode are used for provider quotes. The preview uses the current draft even while the saved policy is off.
 6. **Review and save** stores the whole policy atomically. The save bar only appears when there are edits. An old browser draft can be continued or discarded. Another user's save requires reloading before saving yours.
+
+## Build from an uploaded file
+
+Attach the Shopify shipping CSV (or a single-sheet XLSX with the same columns) to the ERP Helper and ask: **Build a shipping policy from this file.** Attach the not-delivered countries file too if you have one. The Helper reads the complete file and opens an unsaved proposal on this page. Review the product filters, countries, prices and forwarding services, then Review and save when ready. The proposal starts off; uploading a file does not enable it. Existing saved not-delivered countries are preserved when no replacement exclusion file is supplied.
+
+There is no Import Shopify button on the policy page. Missing ERP countries are reported and must be resolved before saving. If you already have unsaved edits, the page asks before replacing those edits with the proposal.
+
+An empty draft has no delivery rows, so Try an order cannot offer delivery. Start with your own rows or **Start with the carrier’s own prices**. The preview now explains the missing product group or destination row.
 
 ## Customer pays
 
