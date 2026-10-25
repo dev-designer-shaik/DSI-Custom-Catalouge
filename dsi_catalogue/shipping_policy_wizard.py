@@ -44,7 +44,7 @@ from dsi_catalogue.shipping_policy_data import (
 )
 from dsi_catalogue.shipping_shopify_import import RateCardError, policy_from_export
 
-MANAGER_ROLES = ("System Manager", "Website Manager")
+MANAGER_ROLES = ("System Manager", "Website Manager", "Sales User")
 POLICY, ZONE, ITEM_SET = "Shipping Policy", "Shipping Zone", "Shipping Item Set"
 APPLY_LOCK, APPLY_LOCK_SECONDS, _SAVEPOINT = "shipping_policy_apply", 30, "shipping_policy_apply"
 _CHILD_TABLES = {
