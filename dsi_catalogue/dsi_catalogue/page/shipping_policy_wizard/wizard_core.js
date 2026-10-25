@@ -97,7 +97,11 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 				button("Review the policy", () => this.closeDialog(), "sp-primary"),
 			]);
 		};
-		if (this.dirty) {
+		let storedDraft;
+		try {
+			storedDraft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+		} catch {}
+		if (this.dirty || (storedDraft?.user === frappe.session.user && storedDraft?.draft)) {
 			this.dialog(
 				"Replace your unsaved edits?",
 				el(
