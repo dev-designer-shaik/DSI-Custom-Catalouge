@@ -66,3 +66,19 @@ def test_the_email_names_the_customer_and_escapes_what_they_typed():
 	assert "Sapphire No.77" in subject and "Jane Doe" in subject
 	assert "+97312345678" in html and "CRM-LEAD-1" in html
 	assert "<b>hi</b>" not in html and "&lt;b&gt;hi&lt;/b&gt;" in html
+
+
+def test_a_request_id_is_kept_and_a_malformed_one_is_refused():
+	assert refill.clean_request({**GOOD, "request_id": "0b9e6f1c-aaaa-4bbb-8ccc-123456789abc"})["request_id"].startswith("0b9e6f1c")
+	assert refill.clean_request(GOOD)["request_id"] == ""
+	with pytest.raises(ValueError) as bad:
+		refill.clean_request({**GOOD, "request_id": "x; drop"})
+	assert str(bad.value) == "request_id"
+
+
+def test_the_marker_a_retry_is_recognised_by():
+	assert refill.ref_marker("abc-12345678") == "[ref abc-12345678]"
+
+
+def test_the_role_that_is_told_is_sales_manager():
+	assert refill.ROLE == "Sales Manager"

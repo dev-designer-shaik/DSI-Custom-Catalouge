@@ -2,7 +2,7 @@
 
 A refill is arranged by hand, not bought at checkout. The website's Refill
 Service form calls `request_refill`: the request becomes (or is added to) a Lead
-and every enabled System User holding the Sales User role is emailed what they
+and every enabled System User holding the Sales Manager role is emailed what they
 need to follow up. The ERP decides who is told, so adding or removing a person
 from the role is the only change ever needed.
 """
@@ -13,7 +13,8 @@ import frappe
 from frappe import _
 from frappe.utils import escape_html, now_datetime
 
-ROLE = "Sales User"
+ROLE = "Sales Manager"
+REQUEST_ID = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
@@ -33,13 +34,21 @@ def clean_request(payload) -> dict:
 		"product_name": text("product_name", 200),
 		"item_code": text("item_code", 140),
 		"message": text("message", 5000),
+		"request_id": text("request_id", 64),
 	}
 	for key in ("first_name", "last_name", "email", "phone", "product_name", "message"):
 		if not request[key]:
 			raise ValueError(key)
 	if not EMAIL.match(request["email"]):
 		raise ValueError("email")
+	if request["request_id"] and not REQUEST_ID.match(request["request_id"]):
+		raise ValueError("request_id")
 	return request
+
+
+def ref_marker(request_id: str) -> str:
+	"""The text a request leaves on its Lead so a retry of it can be recognised."""
+	return f"[ref {request_id}]"
 
 
 def sales_recipients(users) -> list[str]:
@@ -79,7 +88,11 @@ def render_email(request: dict, lead: str) -> tuple[str, str]:
 
 @frappe.whitelist(methods=["POST"])
 def request_refill(payload):
-	"""Record a refill request as a Lead and email every Sales User.
+	"""Record a refill request as a Lead and email every Sales Manager.
+
+	The website retries a request until the ERP confirms it, so a request that
+	carries a `request_id` is recorded once: a repeat is answered with the same
+	Lead and no second email.
 
 	Returns {"lead": name, "emailed": count}. A request that nobody could be
 	emailed about is still recorded, and the gap is written to the Error Log so
@@ -92,6 +105,15 @@ def request_refill(payload):
 	except ValueError as bad:
 		frappe.throw(_("Missing or invalid: {0}").format(bad), frappe.ValidationError)
 
+	if request["request_id"]:
+		done = frappe.db.get_value(
+			"Comment",
+			{"reference_doctype": "Lead", "comment_type": "Comment", "content": ["like", f"%{ref_marker(request['request_id'])}%"]},
+			"reference_name",
+		)
+		if done:
+			return {"lead": done, "emailed": 0, "duplicate": True}
+
 	lead = _record_lead(request)
 
 	holders = frappe.get_all("Has Role", filters={"role": ROLE, "parenttype": "User"}, pluck="parent")
@@ -102,7 +124,7 @@ def request_refill(payload):
 	)
 	recipients = sales_recipients(users)
 	if not recipients:
-		frappe.log_error(f"Refill request {lead} has no Sales User with an email to notify.", "Refill request")
+		frappe.log_error(f"Refill request {lead} has no Sales Manager with an email to notify.", "Refill request")
 		return {"lead": lead, "emailed": 0}
 
 	subject, html = render_email(request, lead)
@@ -119,7 +141,8 @@ def request_refill(payload):
 
 def _record_lead(request: dict) -> str:
 	"""Reuse the Lead with this email (Lead emails are unique) or create one."""
-	note = f"Refill request for {request['product_name']} ({request['item_code'] or 'no item code'}), {now_datetime():%Y-%m-%d %H:%M}:\n{request['message']}"
+	marker = f" {ref_marker(request['request_id'])}" if request["request_id"] else ""
+	note = f"Refill request{marker} for {request['product_name']} ({request['item_code'] or 'no item code'}), {now_datetime():%Y-%m-%d %H:%M}:\n{request['message']}"
 	name = frappe.db.get_value("Lead", {"email_id": request["email"]}, "name")
 	if name:
 		lead = frappe.get_doc("Lead", name)
