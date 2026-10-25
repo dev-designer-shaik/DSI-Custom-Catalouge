@@ -35,3 +35,9 @@ The production promotion script is prepared locally and remains guarded by its p
 ERP2 was left with no product rules, its existing not-delivered country group, and the policy off. The manager can create a policy or import the old CSV. Import validation reports `AC`, `AN`, `TA`, `XK` as missing from ERP2's Country list; no country was silently removed and no new policy was activated.
 
 The updated two-page PDF/HTML guide and helper Markdown are local under `~/Downloads/shipping-policy-erp2/`. The prior guide is archived as `user-guide-before-one-page`. The helper source was regenerated but not uploaded to Drive or synced to another service.
+
+## Production integration, 25 October 2026
+
+The production rollout merges this work with the current catalogue main and the website's refill changes. The shipping app incorporates configurable product forwarding restrictions on top of the production collection calendar and delivery-date code. DGG and DGX are alternative configured international perfume services; the provider account country remains domestic. Existing domestic enablement is preserved. Services and destination lists are database configuration, never repository fixtures.
+
+The rollout leaves the new pricing policy off and empty for the manager to configure. Matching website code must be live before product restrictions are enabled. Deployment backs up the production database and changed source files, reloads only the new/extended shipping and policy doctypes, preserves unrelated production changes, and verifies every deployed file across backend and workers. Rate and browser checks create no bookings or payments.
