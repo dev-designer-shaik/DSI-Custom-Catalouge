@@ -22,14 +22,12 @@ from dsi_catalogue import shipping_integration_check as integration
 from dsi_catalogue.shipping_integration_check import (
 	CHECK_NAMES,
 	check_website_url,
-	pick_sample_order,
-	rate_card_amount,
+	policy_amount,
 	sanitize_detail,
 	summarize_carrier_response,
 	summarize_policy_response,
 	summarize_website_response,
 	unexpected_failure,
-	verdict_for,
 	website_not_asked,
 )
 
@@ -214,120 +212,6 @@ def test_the_module_is_pure_python_with_no_frappe_and_no_http_library():
 
 def test_the_three_checks_have_fixed_names_in_a_fixed_order():
 	assert CHECK_NAMES == ("erp_price_api", "carrier", "website")
-
-
-# ---------------------------------------------------------------- the sample order
-def test_the_sample_order_is_the_first_full_size_fragrance_and_the_first_watch_by_name():
-	order = pick_sample_order(WEB_ITEMS)
-	assert order == {
-		"country_code": "US",
-		"country": "United States",
-		"city": "New York",
-		"items": [{"item_code": "10005020", "qty": 1}, {"item_code": "10000097", "qty": 1}],
-		"note": "",
-	}
-
-
-def test_the_sample_order_does_not_depend_on_the_order_the_rows_come_in():
-	assert pick_sample_order(list(reversed(WEB_ITEMS))) == pick_sample_order(WEB_ITEMS)
-	original = json.dumps(WEB_ITEMS)
-	pick_sample_order(WEB_ITEMS)
-	assert json.dumps(WEB_ITEMS) == original, "the rows are not changed"
-
-
-@pytest.mark.parametrize(
-	("key", "is_full_size_fragrance"),
-	[
-		("{F-CR-OSA-M-40}", True),
-		("F-CR-OSA-M-40", True),
-		("{f-cr-osa-m-40}", True),
-		(" {F-CR-OSA-M-40} ", True),
-		("{{F-CR-XYZ-IGS}}", True),
-		("{F-CR-OSA-RF-40-W}", True),  # RF in the middle of a key is not a refill
-		("{F-CR-OSA-M-PT}", False),  # petite
-		("{F-CR-OSA-M-100-RF}", False),  # refill
-		("{F-CR-PC-PTT-01C}", False),  # petite collection
-		("{S-AB-CD}", False),
-		("{FX-1}", False),
-		("", False),
-		(None, False),
-		(5, False),
-	],
-)
-def test_which_index_keys_count_as_a_full_size_fragrance(key, is_full_size_fragrance):
-	rows = [row("A", "1", key), row("B", "2", "{P-DQ-BP-RR}")]
-	order = pick_sample_order(rows)
-	assert (order["note"] == "") is is_full_size_fragrance, order
-	assert order["items"][0]["item_code"] == ("1" if is_full_size_fragrance else "2")
-
-
-@pytest.mark.parametrize(
-	("key", "is_watch"),
-	[
-		("{P-DQ-BP-RR}", True),
-		("P-DQ-BP-RR", True),
-		("{p-x}", True),
-		("{S-P-X}", False),
-		("{PX-1}", False),
-		(None, False),
-	],
-)
-def test_which_index_keys_count_as_a_watch(key, is_watch):
-	rows = [row("A", "1", "{F-CR-OSA-M-40}"), row("B", "2", key)]
-	order = pick_sample_order(rows)
-	assert (order["note"] == "") is is_watch, order
-
-
-def test_unpublished_items_are_not_preferred():
-	order = pick_sample_order([row("A", "1", "{F-CR-OSA-M-40}", published=0), *WEB_ITEMS[:5]])
-	assert [item["item_code"] for item in order["items"]] == ["10005020", "10000097"]
-	assert order["note"] == ""
-
-
-def test_other_items_stand_in_when_there_is_no_published_fragrance_or_no_watch_and_the_note_says_so():
-	no_watch = [r for r in WEB_ITEMS if not r["index_key"].startswith("{P-")]
-	order = pick_sample_order(no_watch)
-	assert order["items"][0] == {"item_code": "10005020", "qty": 1}, "the fragrance is still the first"
-	assert len(order["items"]) == 2
-	assert order["items"][1]["item_code"] != "10005020"
-	assert "watch" in order["note"] and order["note"].endswith(".")
-	no_fragrance = [r for r in WEB_ITEMS if not r["index_key"].startswith("{F-CR-OSA-M-40")]
-	order = pick_sample_order([r for r in no_fragrance if r["index_key"] != "{F-CR-OSA-W-40}"])
-	assert "fragrance" in order["note"] and order["note"].endswith(".")
-	assert order["items"][0] == {"item_code": "10000097", "qty": 1}, (
-		"the watch comes first when there is no fragrance"
-	)
-	assert len(order["items"]) == 2
-
-
-def test_with_no_published_items_any_two_website_items_are_used_and_the_note_says_so():
-	unpublished = [dict(r, published=0) for r in WEB_ITEMS]
-	order = pick_sample_order(unpublished)
-	assert [item["item_code"] for item in order["items"]] == ["10009999", "10009998"], "the first two by name"
-	assert order["note"] and order["note"].endswith(".")
-	assert (order["country_code"], order["city"]) == ("US", "New York")
-
-
-def test_a_site_with_no_website_items_gets_a_sample_order_with_no_items_and_a_note():
-	for rows in ([], None, "nope", [None, 5, "x", {}]):
-		order = pick_sample_order(rows)
-		assert order["items"] == [] and order["note"].endswith("."), rows
-		assert order["country_code"] == "US"
-
-
-def test_one_item_is_not_picked_twice_and_odd_rows_are_skipped():
-	rows = [
-		row("A", "10005020", "{F-CR-OSA-M-40}"),
-		row("B", "10005020", "{P-DQ-BP-RR}"),  # the same item code under another Website Item
-		{"name": "C", "item_code": "", "index_key": "{P-X}", "published": 1},
-		{"name": "D", "item_code": None, "index_key": "{P-X}", "published": 1},
-		{"name": "E", "index_key": "{P-X}", "published": 1},
-		None,
-		7,
-	]
-	order = pick_sample_order(rows)
-	codes = [item["item_code"] for item in order["items"]]
-	assert codes == ["10005020"] and len(set(codes)) == len(codes)
 
 
 # ---------------------------------------------------------------- the guard on the website's address
@@ -865,9 +749,7 @@ def test_the_erp_check_says_what_the_example_says_when_the_policy_prices_the_ord
 	check = summarize_policy_response(200, 180, policy_body(), 100.0)
 	assert_check(check, "erp_price_api")
 	assert check["ok"] is True and check["status"] == 200 and check["ms"] == 180
-	assert (
-		check["summary"] == "The ERP answered in 180 ms: policy ON, price source rate card, 1 offer, $100.00."
-	)
+	assert check["summary"] == "The ERP answered in 180 ms: policy ON, 1 offer, $100.00."
 	assert check["detail"]["message"]["offers"][0]["amount"] == 100.0
 	assert check["detail"]["message"]["price_source"] == "rate_card"
 
@@ -907,9 +789,7 @@ def test_the_erp_check_describes_a_refusal_an_off_policy_and_several_offers():
 		None,
 	)
 	assert refused["ok"] is True, "the endpoint works and agrees with the policy"
-	assert refused["summary"] == (
-		"The ERP answered in 12 ms: policy ON, price source rate card, no delivery offered (not covered)."
-	)
+	assert refused["summary"] == ("The ERP answered in 12 ms: policy ON, no delivery offered (not covered).")
 	too_heavy = summarize_policy_response(
 		200, 12, policy_body(offered=False, reason="too_heavy", offers=[]), None
 	)
@@ -922,7 +802,7 @@ def test_the_erp_check_describes_a_refusal_an_off_policy_and_several_offers():
 	carrier = summarize_policy_response(
 		200, 30, policy_body(price_source="carrier", reason="fallback_offer"), 100.0
 	)
-	assert "policy ON, price source carrier" in carrier["summary"]
+	assert "policy ON" in carrier["summary"]
 	two = [{**OFFER, "amount": 38.2}, {**OFFER, "amount": 44.0, "service_id": "b"}]
 	several = summarize_policy_response(200, 30, policy_body(price_source="carrier", offers=two), 38.2)
 	assert several["summary"].endswith("2 offers, the first $38.20.")
@@ -1010,15 +890,13 @@ def test_the_erp_checks_detail_is_the_answer_cut_and_cleaned():
 
 
 # ---------------------------------------------------------------- the rate-card amount a later check compares with
-def test_the_rate_card_amount_is_there_only_when_the_policy_is_on_with_the_rate_card_and_offers_delivery():
-	assert rate_card_amount(erp_check()) == 100.0
-	assert rate_card_amount(erp_check(price_source="carrier")) is None
-	assert rate_card_amount(erp_check(policy_active=False)) is None
-	assert rate_card_amount(erp_check(offered=False, reason="too_heavy", offers=[])) is None
-	assert rate_card_amount(summarize_policy_response(200, 1, policy_body(), 90.0)) is None, (
-		"the check failed"
-	)
-	assert rate_card_amount(summarize_policy_response(None, 1, None, None, problem="timeout")) is None
+def test_the_policy_amount_is_there_only_when_the_policy_is_on_with_the_rate_card_and_offers_delivery():
+	assert policy_amount(erp_check()) == 100.0
+	assert policy_amount(erp_check(price_source="carrier")) == 100.0
+	assert policy_amount(erp_check(policy_active=False)) is None
+	assert policy_amount(erp_check(offered=False, reason="too_heavy", offers=[])) is None
+	assert policy_amount(summarize_policy_response(200, 1, policy_body(), 90.0)) is None, "the check failed"
+	assert policy_amount(summarize_policy_response(None, 1, None, None, problem="timeout")) is None
 	for junk in (
 		None,
 		{},
@@ -1028,7 +906,7 @@ def test_the_rate_card_amount_is_there_only_when_the_policy_is_on_with_the_rate_
 		{"ok": True, "detail": {"message": 3}},
 		{"ok": True, "detail": {"message": {"offers": [5]}}},
 	):
-		assert rate_card_amount(junk) is None
+		assert policy_amount(junk) is None
 
 
 # ---------------------------------------------------------------- the second check: the carrier
@@ -1392,281 +1270,6 @@ def test_the_website_checks_detail_is_the_answer_cut_and_cleaned():
 	assert check["detail"]["packingPlan"] == "rate-card"
 
 
-# ---------------------------------------------------------------- the verdict
-AGREE = (
-	"The ERP price API and the website agree: customers are charged $100.00 from the rate card, "
-	"and the carrier is not asked."
-)
-STILL_THE_CARRIER = (
-	"The website still asks the carrier: it returned the carrier's methods, not the rate card's."
-)
-NO_RATES_ON_THE_CARRIER = (
-	"The carrier returns no rates, so while the price source is Carrier customers see no delivery method."
-)
-# Ruling P100 (final review I1): the website prices from the ERP's answer only when the policy is on with the rate
-# card as the price source; with the carrier it charges the carrier's own prices, whatever the policy says.
-CARRIER_PRICES = (
-	"The price source is the carrier, so customers pay the carrier's own prices: for now the website applies the "
-	"policy only with the rate card as the price source."
-)
-
-
-def test_the_verdict_when_the_erp_and_the_website_agree():
-	assert verdict_for([erp_check(), carrier_check(), website_check()]) == AGREE
-	# The carrier does not matter to a rate-card policy: it may be blocked.
-	blocked = summarize_carrier_response({"success": True, "rates": []})
-	assert verdict_for([erp_check(), blocked, website_check()]) == AGREE
-
-
-def test_the_verdict_when_the_website_still_asks_the_carrier():
-	carrier_methods = site_body(site_method("Aramex BH GCC PPX", "Aramex BH GCC PPX", 38.2), plan="single")
-	site = summarize_website_response(200, 640, carrier_methods, 100.0)
-	assert site["ok"] is False, "its first amount is not the ERP's"
-	assert verdict_for([erp_check(), carrier_check(), site]) == STILL_THE_CARRIER
-	# Even for an order the rate card would not deliver.
-	refused = erp_check(offered=False, reason="not_covered", offers=[])
-	site = summarize_website_response(200, 640, carrier_methods, None)
-	assert verdict_for([refused, carrier_check(), site]) == STILL_THE_CARRIER
-
-
-CARRIER_PLAN = "volume_desc|min_delta_chargeable|lowest_chargeable"
-STILL_THE_CARRIER_AND_NOTHING = (
-	"The website still asks the carrier, and the carrier gave it no delivery method, so customers see none."
-)
-
-
-def test_the_verdict_when_the_website_still_asks_the_carrier_and_the_carrier_gives_it_nothing():
-	# What the deployed website answers while the Aramex account is blocked: HTTP 200, no methods, and the
-	# packing plan of the carrier path (the rate card's path says "rate-card").
-	body = {**site_body(plan=CARRIER_PLAN), "package": {"total_units": 2, "total_boxes": 2, "boxes": []}}
-	site = summarize_website_response(200, 8503, body, 100.0)
-	assert site["ok"] is False and "no delivery methods" in site["summary"]
-	assert verdict_for([erp_check(), carrier_check(), site]) == STILL_THE_CARRIER_AND_NOTHING
-	# Whatever the rate card would offer: the website is not using it.
-	refused = erp_check(offered=False, reason="not_covered", offers=[])
-	assert verdict_for([refused, carrier_check(), summarize_website_response(200, 5, body, None)]) == (
-		STILL_THE_CARRIER_AND_NOTHING
-	)
-
-
-@pytest.mark.parametrize(
-	("status", "body"),
-	[
-		(200, site_body(plan="rate-card")),  # the rate card's own path, and it found nothing to offer
-		(200, site_body(plan="")),
-		(200, site_body(plan=None)),
-		(200, site_body(plan=5)),
-		(200, {"success": True, "methods": []}),  # no plan at all
-		(400, {"success": False, "error": "Cart is empty", "packingPlan": CARRIER_PLAN}),
-		(500, {"packingPlan": CARRIER_PLAN, "methods": []}),
-	],
-)
-def test_an_empty_answer_is_not_the_carriers_unless_it_says_so_and_was_a_success(status, body):
-	site = summarize_website_response(status, 5, body, 100.0)
-	verdict = verdict_for([erp_check(), carrier_check(), site])
-	assert verdict != STILL_THE_CARRIER_AND_NOTHING
-	assert verdict.startswith(
-		"The ERP price API charges $100.00 from the rate card, but the website did not give"
-	)
-
-
-def test_the_verdict_when_the_website_charges_the_rate_card_but_another_amount():
-	site = summarize_website_response(200, 640, site_body(site_method(amount=90)), 100.0)
-	assert verdict_for([erp_check(), carrier_check(), site]) == (
-		"The website charges $90.00 but the ERP price API charges $100.00 from the rate card: they disagree."
-	)
-
-
-def test_the_verdict_when_the_website_is_limiting_requests():
-	site = summarize_website_response(429, 120, None, 100.0)
-	assert verdict_for([erp_check(), carrier_check(), site]) == (
-		"The ERP price API charges $100.00 from the rate card, but the website limits this check to "
-		"10 requests a minute, so run it again in a minute."
-	)
-
-
-def test_the_verdict_when_the_website_gave_no_usable_answer():
-	for site in (
-		summarize_website_response(None, 15000, None, 100.0, problem="timeout"),
-		summarize_website_response(None, 5, None, 100.0, problem="unreachable"),
-		summarize_website_response(200, 5, None, 100.0, problem="unreadable"),
-		summarize_website_response(200, 5, None, 100.0, problem="too_large"),
-		summarize_website_response(500, 5, {"error": "Failed to fetch shipping rates"}, 100.0),
-		summarize_website_response(302, 5, None, 100.0),
-		unexpected_failure("website", 5),
-		summarize_website_response(200, 5, {"success": True, "methods": []}, 100.0),
-	):
-		assert verdict_for([erp_check(), carrier_check(), site]) == (
-			"The ERP price API charges $100.00 from the rate card, but the website did not give a usable "
-			"answer (see the third check)."
-		), site["summary"]
-
-
-def test_the_verdict_when_the_website_was_not_asked():
-	site = website_not_asked("No website address is set in Storefront Settings.")
-	assert verdict_for([erp_check(), carrier_check(), site]) == (
-		"The ERP price API charges $100.00 from the rate card; the website was not asked because its "
-		"address is not usable (see the third check)."
-	)
-
-
-def test_the_verdict_when_the_rate_card_offers_no_delivery_for_the_sample_order():
-	refused = erp_check(offered=False, reason="too_heavy", offers=[])
-	site = summarize_website_response(
-		400, 90, {"success": False, "error": "This order is heavier than our delivery rates cover."}, None
-	)
-	assert verdict_for([refused, carrier_check(), site]) == (
-		"The rate card offers no delivery for the sample order (too heavy), so customers see no delivery method for it."
-	)
-	not_covered = erp_check(offered=False, reason="not_covered", offers=[])
-	assert "(not covered)" in verdict_for([not_covered, carrier_check(), site])
-	no_reason = erp_check(offered=False, reason=None, offers=[])
-	assert verdict_for([no_reason, carrier_check(), site]).startswith(
-		"The rate card offers no delivery for the sample order, so"
-	)
-
-
-def test_the_verdict_when_the_erp_price_api_is_the_problem():
-	unusable = "The ERP price API did not give a usable answer, so the website cannot get delivery prices from the policy (see the first check)."
-	for erp in (
-		summarize_policy_response(None, 15000, None, None, problem="timeout"),
-		summarize_policy_response(500, 5, None, None),
-		summarize_policy_response(200, 5, {"message": "x"}, None),
-		unexpected_failure("erp_price_api", 5),
-	):
-		assert verdict_for([erp, carrier_check(), website_check()]) == unusable, erp["summary"]
-	disagree = summarize_policy_response(200, 5, policy_body(), 90.0)
-	assert verdict_for([disagree, carrier_check(), website_check()]) == (
-		"The public ERP endpoint and the policy disagree about the price of the sample order, so fix that "
-		"before trusting the website (see the first check)."
-	)
-
-
-def test_the_verdict_when_the_policy_is_off():
-	off = erp_check(policy_active=False, price_source="carrier", offered=False, offers=[], reason=None)
-	assert verdict_for([off, carrier_check(), website_check(None, erp_amount=None)]) == (
-		"The shipping policy is switched off, so customers pay the carrier's own prices."
-	)
-	none = summarize_carrier_response({"success": True, "rates": []})
-	assert verdict_for([off, none, website_check(None, erp_amount=None)]) == (
-		"The shipping policy is switched off and the carrier returns no rates, so customers see no delivery method."
-	)
-
-
-def test_the_verdict_when_the_price_source_is_the_carrier():
-	carrier_mode = erp_check(price_source="carrier", reason="fallback_offer")
-	verdict = verdict_for([carrier_mode, carrier_check(), website_check(None, erp_amount=None)])
-	assert verdict == CARRIER_PRICES
-	assert "rules" not in verdict, "it never says customers pay through the policy's rules"
-	none = summarize_carrier_response({"success": True, "rates": []})
-	assert verdict_for([carrier_mode, none, website_check(None, erp_amount=None)]) == NO_RATES_ON_THE_CARRIER
-	blocked = summarize_carrier_response(RuntimeError("Account is blocked"))
-	assert (
-		verdict_for([carrier_mode, blocked, website_check(None, erp_amount=None)]) == NO_RATES_ON_THE_CARRIER
-	)
-
-
-def website_troubles():
-	"""Website checks that did not work out, and none of them a 429: nothing came back, nonsense came back, an
-	error status, a redirect, no method at all, and a check that stopped on an error."""
-	return {
-		"no answer": summarize_website_response(None, 15000, None, None, problem="timeout"),
-		"unreachable": summarize_website_response(None, 5, None, None, problem="unreachable"),
-		"unreadable": summarize_website_response(200, 5, None, None, problem="unreadable"),
-		"too large": summarize_website_response(200, 5, None, None, problem="too_large"),
-		"an error status": summarize_website_response(
-			500, 5, {"error": "Failed to fetch shipping rates"}, None
-		),
-		"a refusal": summarize_website_response(400, 5, {"success": False, "error": "Cart is empty"}, None),
-		"a redirect": summarize_website_response(302, 5, None, None),
-		"no methods": summarize_website_response(200, 5, {"success": True, "methods": []}, None),
-		"an unexpected failure": unexpected_failure("website", 5),
-	}
-
-
-def carrier_mode_checks():
-	"""The ERP's check for a policy that is off, and for one that is on with the carrier as its price source."""
-	off = erp_check(policy_active=False, price_source="carrier", offered=False, offers=[], reason=None)
-	carrier_source = erp_check(price_source="carrier", reason="fallback_offer")
-	return {
-		"off": (off, "The shipping policy is switched off, so customers pay the carrier's own prices."),
-		"carrier": (carrier_source, CARRIER_PRICES),
-	}
-
-
-@pytest.mark.parametrize("mode", ["off", "carrier"])
-def test_the_verdict_names_a_website_that_did_not_work_out_when_the_carrier_prices_the_order(mode):
-	erp, said = carrier_mode_checks()[mode]
-	for what, site in website_troubles().items():
-		assert verdict_for([erp, carrier_check(), site]) == (
-			f"{said[:-1]}, but the website did not give a usable answer (see the third check)."
-		), what
-	not_asked = website_not_asked("The website address has to start with https://.")
-	assert verdict_for([erp, carrier_check(), not_asked]) == (
-		f"{said[:-1]}; the website was not asked because its address is not usable (see the third check)."
-	)
-
-
-@pytest.mark.parametrize("mode", ["off", "carrier"])
-def test_the_verdict_for_a_carrier_priced_order_is_what_it_was_when_the_website_is_no_trouble(mode):
-	erp, said = carrier_mode_checks()[mode]
-	assert verdict_for([erp, carrier_check(), website_check(None, erp_amount=None)]) == said
-	# A 429 is the site limiting how often the check may be made: it says nothing about the website.
-	limited = summarize_website_response(429, 120, {"error": "Too many requests"}, None)
-	assert verdict_for([erp, carrier_check(), limited]) == said
-	# Without rates from the carrier it is the carrier that is the trouble, whatever the website did.
-	none = summarize_carrier_response({"success": True, "rates": []})
-	expected = (
-		"The shipping policy is switched off and the carrier returns no rates, so customers see no delivery "
-		"method."
-		if mode == "off"
-		else NO_RATES_ON_THE_CARRIER
-	)
-	for site in (*website_troubles().values(), limited, website_check(None, erp_amount=None)):
-		assert verdict_for([erp, none, site]) == expected
-
-
-def test_the_verdict_does_not_depend_on_the_order_of_the_checks_and_survives_missing_ones():
-	checks = [erp_check(), carrier_check(), website_check()]
-	assert verdict_for(list(reversed(checks))) == AGREE
-	for partial in ([], checks[:2], checks[1:], [checks[0]]):
-		verdict = verdict_for(partial)
-		assert isinstance(verdict, str) and verdict.endswith("."), partial
-		assert "did not all run" in verdict
-
-
-def test_the_verdict_never_raises_and_is_always_one_plain_sentence_for_hostile_checks():
-	junk = [
-		None,
-		5,
-		"x",
-		{},
-		{"name": "website"},
-		{"name": "website", "ok": True, "detail": 7},
-		{
-			"name": "erp_price_api",
-			"ok": True,
-			"status": 200,
-			"detail": {"message": {"offers": [{"amount": "x"}]}},
-		},
-		{"name": "website", "ok": True, "status": 200, "detail": {"methods": [5, None, {"id": 3}]}},
-		{"name": "carrier", "ok": "yes", "detail": None},
-	]
-	for one in junk:
-		for checks in (
-			[one],
-			[one, one, one],
-			[erp_check(), one, one],
-			[erp_check(), carrier_check(), one],
-			[one, carrier_check(), website_check()],
-		):
-			verdict = verdict_for(checks)
-			assert isinstance(verdict, str) and verdict.endswith(".")
-	assert isinstance(verdict_for(None), str)
-	assert isinstance(verdict_for("abc"), str)
-	assert isinstance(verdict_for({"erp_price_api": 1}), str)
-
-
 # ---------------------------------------------------------------- hygiene over everything
 def test_no_secret_in_any_input_reaches_any_output():
 	hostile_policy = policy_body()
@@ -1690,8 +1293,6 @@ def test_no_secret_in_any_input_reaches_any_output():
 	]
 	for check in outputs:
 		assert SECRET not in json.dumps(check)
-	checks = [outputs[0], outputs[2], outputs[5]]
-	assert SECRET not in verdict_for(checks)
 
 
 def test_every_summary_and_verdict_is_plain_text_without_markup_or_a_traceback():
@@ -1709,6 +1310,3 @@ def test_every_summary_and_verdict_is_plain_text_without_markup_or_a_traceback()
 	for check in checks:
 		for word in ("Traceback", "<", ">", "{", "}", "None", "nan"):
 			assert word not in check["summary"], (word, check["summary"])
-	verdict = verdict_for([erp_check(), carrier_check(), website_check()])
-	for word in ("Traceback", "<", ">", "{", "}", "None"):
-		assert word not in verdict

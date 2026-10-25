@@ -1,20 +1,11 @@
-# The files tools/erp2_push.sh copies to the erp2 sandbox (~/dsi_catalogue_dev on the host), one path
-# relative to the repository root per line. Blank lines and lines starting with # are ignored.
-#
-# The script refuses any path outside its allow-list: dsi_catalogue/shipping_*, the shipping_* doctype
-# folders, the shipping_policy_wizard page folder, and the example-policy fixture. List every new file of
-# the Shipping Policy here; tests/hermetic/test_shipping_doctypes.py fails if the list and the tree differ.
-
-# Pure modules (the native tests import them inside the erp2 container), the loader and the wizard's methods
+# One-page shipping policy deployment manifest. ERP2 only.
 dsi_catalogue/shipping_engine.py
 dsi_catalogue/shipping_formula.py
 dsi_catalogue/shipping_integration_check.py
 dsi_catalogue/shipping_policy.py
 dsi_catalogue/shipping_policy_data.py
 dsi_catalogue/shipping_policy_wizard.py
-dsi_catalogue/shipping_rate_card.py
-
-# Doctypes: the JSON that bench reload-doc loads, the controllers, the native tests, the form script
+dsi_catalogue/shipping_shopify_import.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_item_set/__init__.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_item_set/shipping_item_set.json
 dsi_catalogue/dsi_catalogue/doctype/shipping_item_set/shipping_item_set.py
@@ -25,12 +16,14 @@ dsi_catalogue/dsi_catalogue/doctype/shipping_item_set_group/shipping_item_set_gr
 dsi_catalogue/dsi_catalogue/doctype/shipping_item_set_item/__init__.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_item_set_item/shipping_item_set_item.json
 dsi_catalogue/dsi_catalogue/doctype/shipping_item_set_item/shipping_item_set_item.py
+dsi_catalogue/dsi_catalogue/doctype/shipping_item_set_pattern/__init__.py
+dsi_catalogue/dsi_catalogue/doctype/shipping_item_set_pattern/shipping_item_set_pattern.json
+dsi_catalogue/dsi_catalogue/doctype/shipping_item_set_pattern/shipping_item_set_pattern.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/__init__.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.js
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.json
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/shipping_policy.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy.py
-dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy_ratecard.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy/test_shipping_policy_wizard.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy_rule/__init__.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_policy_rule/shipping_policy_rule.json
@@ -42,33 +35,14 @@ dsi_catalogue/dsi_catalogue/doctype/shipping_zone/test_shipping_zone.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_zone_country/__init__.py
 dsi_catalogue/dsi_catalogue/doctype/shipping_zone_country/shipping_zone_country.json
 dsi_catalogue/dsi_catalogue/doctype/shipping_zone_country/shipping_zone_country.py
-
-# The wizard page: bench reload-doc loads the JSON; the desk reads the script and the style from the folder,
-# and stitches the part files (wizard_*.js, step_*.js) into the script where its include lines name them
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/__init__.py
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.css
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.json
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/shipping_policy_wizard.py
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_fallback.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_rates.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_review.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_rules.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_test.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/step_zones.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_chips.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_core.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_country_picker.js
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_editors.js
 dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_helpers.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_itemset_editor.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_policy_words.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rate_card.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rates_card.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rates_import.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rates_zone.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_card.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_rule_words.js
-dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_tape.js
-
-# The example policy the native tests seed (it is also the hermetic tests' fixture)
+dsi_catalogue/dsi_catalogue/page/shipping_policy_wizard/wizard_products.js
 tests/hermetic/fixtures/shipping_policy_example.json

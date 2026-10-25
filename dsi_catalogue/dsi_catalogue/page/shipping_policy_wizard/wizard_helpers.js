@@ -74,96 +74,77 @@ const sp = (dsi_catalogue.sp = {
 	is_record(value) {
 		return value !== null && typeof value === "object" && !Array.isArray(value);
 	},
-
-	// A new zone, rule and item set for the draft, with the server's keys in the server's order (as
-	// wizard_state gives them: shipping_policy_data.policy_from_rows builds them so). The draft is dirty when
-	// its JSON differs from the saved policy's, so an entry with its keys in another order would leave the
-	// draft dirty even when it equals a saved one. A new rule is enabled: one added in the wizard is meant to
-	// apply, and nothing goes live before Apply (the doctype's own new rows start disabled because they go
-	// live on save).
-	new_zone(name) {
-		return {
-			name,
-			enabled: true,
-			countries: [],
-			not_shipped: false,
-			everywhere_else: false,
-			customer_line: "",
-			not_offered_message: "",
-			fallback: { method: "policy_default", amount: 0 },
-		};
-	},
-
-	new_rule(zone) {
-		return {
-			name: null,
-			enabled: true,
-			label: "",
-			zone,
-			item_set: null,
-			min_order_value: 0,
-			max_order_value: 0,
-			min_weight_kg: 0,
-			max_weight_kg: 0,
-			min_volume_l: 0,
-			max_volume_l: 0,
-			method: "carrier_price",
-			formula: "",
-			round_up: false,
-		};
-	},
-
-	new_item_set(name) {
-		return { name, item_groups: [], items: [] };
-	},
-
-	// The sentences of a refusal that came through Frappe's message path, each as plain text: the server escapes
-	// what people typed in them (the desk shows them as HTML), so each is read with frappe.utils.html2text. A
-	// message is one sentence, a list of them (as_list) or a table (as_table), and a <br> in it starts a new line.
-	// `response` is what Frappe hands an error callback: the answer, or for a code it has no handler for, the
-	// request (its responseJSON).
-	refusal_lines(response) {
-		let answer = response;
-		if (answer && typeof answer.getResponseHeader === "function") {
-			try {
-				answer = answer.responseJSON || JSON.parse(answer.responseText);
-			} catch (error) {
-				answer = null;
-			}
-		}
-		let messages = [];
-		try {
-			messages = JSON.parse(answer?._server_messages || "[]");
-		} catch (error) {
-			messages = [];
-		}
-		const lines = [];
-		const add = (value) => {
-			if (Array.isArray(value)) value.forEach(add);
-			else if (value !== null && value !== undefined && value !== "") {
-				// Frappe joins the sentences of one message with <br>: each is a line of its own
-				for (const part of String(value).split(/<br\s*\/?>/i)) {
-					const text = frappe.utils.html2text(part).trim();
-					if (text) lines.push(text);
-				}
-			}
-		};
-		for (const entry of Array.isArray(messages) ? messages : []) {
-			let message = entry;
-			try {
-				message = JSON.parse(entry);
-			} catch (error) {
-				message = entry; // a sentence sent as it is
-			}
-			add(sp.is_record(message) ? message.message : message);
-		}
-		return lines;
-	},
 });
-const el = sp.el;
-
-// The sentences of an error that came through Frappe's message path, as plain text.
-function problem_text(response) {
-	const text = sp.refusal_lines(response).join(" ");
-	return text || __("The server did not answer. Check the connection and try again.");
+const { el, clone, money } = sp;
+function button(text, click, cls = "") {
+	return el("button", { type: "button", class: "sp-button " + cls, onclick: click }, text);
+}
+let fieldId = 0;
+function field(label, control) {
+	const id = "sp-field-" + ++fieldId;
+	const title = el("span", { id }, label);
+	if (control.matches("input,select,textarea")) control.setAttribute("aria-labelledby", id);
+	else {
+		control.setAttribute("role", "group");
+		control.setAttribute("aria-labelledby", id);
+	}
+	return el("div", { class: "sp-field" }, title, control);
+}
+function input(value, change, attrs = {}) {
+	const node = el("input", { class: "sp-input", ...attrs });
+	node.value = value ?? "";
+	node.addEventListener("input", () => change(node.value));
+	return node;
+}
+function newRow(group, zone = "") {
+	return {
+		name: null,
+		item_set: group || null,
+		zone,
+		services: [],
+		method: "table",
+		price_table: [{ up_to_lb: null, price: 0 }],
+		formula: "",
+		label: "Delivery",
+		days: null,
+	};
+}
+function newGroup(name) {
+	return { name, items: [], item_groups: [], patterns: [] };
+}
+function newZone(name) {
+	return {
+		name,
+		enabled: true,
+		countries: [],
+		not_shipped: false,
+		customer_line: "",
+		not_offered_message: "",
+	};
+}
+function select(options, value, change) {
+	const node = el(
+		"select",
+		{ class: "sp-input" },
+		options.map(([v, t]) => el("option", { value: v }, t)),
+	);
+	node.value = value;
+	node.addEventListener("change", () => change(node.value));
+	return node;
+}
+function check(label, value, change, disabled = false) {
+	const node = el("input", { type: "checkbox", disabled });
+	node.checked = !!value;
+	node.addEventListener("change", () => change(node.checked));
+	return el("label", { class: "sp-check" }, node, el("span", {}, label));
+}
+function numberInput(value, change, attrs = {}) {
+	return input(
+		value,
+		(v) => {
+			const n = sp.read_number(v);
+			change(n.ok ? n.value : v);
+		},
+		{ type: "text", inputmode: "decimal", ...attrs },
+	);
 }

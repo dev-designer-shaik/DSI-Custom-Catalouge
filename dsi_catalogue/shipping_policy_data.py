@@ -1,38 +1,4 @@
-"""Shaping the data around the shipping policy: what a guest posts, what the database holds, what a
-customer may see, and what a draft would change.
-
-Pure Python with no Frappe import, so it is tested standalone. The ERP layer reads rows and request
-arguments and hands them to these functions; `shipping_engine` prices an order from the plain dicts
-that come out. The only thing taken from the engine is `LABELS`, the Select strings the doctypes store.
-The policy shape is the one `shipping_engine` documents. The rows are the doctypes' own fields:
-
-	policy row = {"active", "price_source", "rate_card", "not_covered", "default_fallback_method",
-	              "default_fallback_amount",
-	              "rules": [{"name"?, "enabled", "label", "zone", "item_set", "min_order_value",
-	                         "max_order_value", "min_weight_kg", "max_weight_kg", "min_volume_l",
-	                         "max_volume_l", "method", "formula", "round_up"}]}
-	zone row   = {"zone_name", "enabled", "not_shipped", "everywhere_else", "countries": [{"country"}],
-	              "customer_line", "not_offered_message", "fallback_method", "fallback_amount"}
-	set row    = {"set_name", "item_groups": [{"item_group"}], "items": [{"item"}]}
-
-Four jobs:
-
-1. `clean_items`, `clean_boxes` and `clean_quotes` check what a guest posts. They return plain data with
-   plain floats, or raise `InputError` with a sentence that is safe to show in a customer's browser (it
-   names the field and never repeats what was sent). Nothing else is allowed through: unknown keys are
-   dropped, a number that is negative, not finite or above a billion is refused, and so is an id or a name
-   that is not plain text (a control character, NUL or a lone surrogate: JSON can carry them, but nothing
-   downstream can write them).
-2. `policy_from_rows` and `rows_from_policy` turn database rows into the policy and back. Select labels
-   become the engine's codes (an unknown label passes through unchanged, for the engine to fail closed
-   on and `validate_policy` to report), Country names become upper-case ISO codes, and the rate card is
-   kept as JSON text in its row and is a dict in the policy. Neither raises on odd content: it is read as
-   empty (a card that is not JSON is no card), or left for `validate_policy` to report.
-3. `public_summary_from` and `response_from` shape what a customer is told: the zones, and the answer to
-   one order. Both build their output field by field, so nothing else can reach a customer, and nothing
-   of the rate card does: only the price it gave.
-4. `snapshot_version` names a policy's content, and `diff_policy` lists what a draft would change.
-"""
+"""Input bounds, storage mapping and public responses for one-page shipping."""
 
 import copy
 import hashlib
@@ -42,26 +8,8 @@ from decimal import Decimal
 
 from dsi_catalogue.shipping_engine import LABELS
 
-MAX_ITEMS = 200
-MAX_BOXES = 50
-MAX_QUOTES = 20
-MAX_NUMBER = 10**9  # the most a guest may post for a quantity, a weight, a volume or an amount
-MAX_TEXT = 140  # the longest item code, service id or service name
-
-_LIMITS = (
-	"min_order_value",
-	"max_order_value",
-	"min_weight_kg",
-	"max_weight_kg",
-	"min_volume_l",
-	"max_volume_l",
-)
-_OFFER_KEYS = ("service_id", "name", "amount", "source", "reason", "estimated_days")
-# in alphabetical order, as they are reported
-_SETTINGS = ("active", "default_fallback", "not_covered", "price_source", "rate_card")
-
-# The code behind each Select label, the other way round.
-_LABEL_OF_CODE = {kind: {code: label for label, code in labels.items()} for kind, labels in LABELS.items()}
+MAX_ITEMS, MAX_BOXES, MAX_QUOTES, MAX_NUMBER, MAX_TEXT = 200, 50, 20, 10**9, 140
+_LABEL_OF_CODE = {k: {v: label for label, v in values.items()} for k, values in LABELS.items()}
 
 
 class InputError(ValueError):
@@ -353,365 +301,191 @@ def read_json(text):
 	return json.loads(text, parse_constant=_no_json_word, parse_float=_finite_float)
 
 
-def _card_from(value):
-	"""The rate card of a row: the dict that a Code field's JSON text holds, or a dict already. Text that is
-	not JSON (`read_json`: NaN and the infinities are not), JSON that is not an object, and anything else are
-	no card (None)."""
-	try:
-		if isinstance(value, dict):
-			return copy.deepcopy(value)
-		if not isinstance(value, str) or not value.strip():
-			return None
-		card = read_json(value)
-	except (ValueError, RecursionError, TypeError):
-		# not JSON (NaN included), an integer of over 4300 digits, nesting too deep, or a dict that cannot be
-		# copied
-		return None
-	return card if isinstance(card, dict) else None
-
-
 def _upper_keys(names):
 	"""A map of code to Country name, keyed by upper-case code: the ERP stores country codes in lower case."""
 	return {_text(code).upper(): name for code, name in _dict(names).items()}
 
 
-# ---------------------------------------------------------------- database rows -> policy
-def _code_of(country, codes):
-	"""The upper-case ISO code of a Country name, or "" when the map does not give one."""
-	code = codes.get(country)
-	return _text(code).strip().upper() if code else ""
+def _json_list(value):
+	try:
+		value = read_json(value) if isinstance(value, str) else value
+	except (ValueError, TypeError, RecursionError):
+		return []
+	return value if isinstance(value, list) else []
 
 
-def _zone_from_row(row, codes):
-	countries = (_code_of(country, codes) for country in _column(row.get("countries"), "country"))
-	return {
-		"name": _text(row.get("zone_name")),
-		"enabled": _flag(row.get("enabled")),
-		"countries": [code for code in countries if code],
-		"not_shipped": _flag(row.get("not_shipped")),
-		"everywhere_else": _flag(row.get("everywhere_else")),
-		"customer_line": _text(row.get("customer_line")),
-		"not_offered_message": _text(row.get("not_offered_message")),
-		"fallback": {
-			"method": _to_code("zone_fallback", row.get("fallback_method")),
-			"amount": _float(row.get("fallback_amount")),
-		},
-	}
-
-
-def _set_from_row(row):
-	return {
-		"name": _text(row.get("set_name")),
-		"item_groups": _column(row.get("item_groups"), "item_group"),
-		"items": _column(row.get("items"), "item"),
-	}
-
-
-def _rule_from_row(row):
-	return {
-		"name": _text(row.get("name")) or None,
-		"enabled": _flag(row.get("enabled")),
-		"label": _text(row.get("label")),
-		"zone": _text(row.get("zone")),
-		"item_set": _text(row.get("item_set")) or None,
-		**{key: _float(row.get(key)) for key in _LIMITS},
-		"method": _to_code("method", row.get("method")),
-		"formula": _text(row.get("formula")),
-		"round_up": _flag(row.get("round_up")),
-	}
-
-
-def policy_from_rows(
-	policy_row: dict, zone_rows: list[dict], set_rows: list[dict], country_codes: dict[str, str]
-) -> dict:
-	"""The policy (in the shape `shipping_engine` documents) from the rows of the three doctypes.
-
-	`policy_row` is the Shipping Policy single with its `rules` rows, `zone_rows` the Shipping Zones with
-	their `countries` rows, `set_rows` the Shipping Item Sets with their `item_groups` and `items` rows,
-	all in the order they are to be kept. `country_codes` maps a Country name to its ISO code; the codes
-	in the policy are upper case, and a Country name the map has no code for is left out of its zone.
-
-	Flags become bools, an empty number 0.0, an empty text "", and an empty `item_set` None. A rule keeps
-	its row `name` (None when it has none). Select labels become codes; a label that is not one of the
-	doctype's passes through unchanged. The row's `rate_card` text becomes the card (a dict), or None when
-	there is none or the text is not a JSON object. It does not raise on odd content.
-	"""
-	policy_row, codes = _dict(policy_row), _dict(country_codes)
+def policy_from_rows(policy_row, zone_rows, set_rows, country_codes):
 	return {
 		"active": _flag(policy_row.get("active")),
-		"price_source": _to_code("price_source", policy_row.get("price_source")),
-		"rate_card": _card_from(policy_row.get("rate_card")),
-		"not_covered": _to_code("not_covered", policy_row.get("not_covered")),
-		"default_fallback": {
-			"method": _to_code("default_fallback", policy_row.get("default_fallback_method")),
-			"amount": _float(policy_row.get("default_fallback_amount")),
+		"fallback": {
+			"method": _to_code("fallback", policy_row.get("fallback_method") or "Don't offer delivery"),
+			"amount": _float(policy_row.get("fallback_amount")),
 		},
-		"zones": [_zone_from_row(row, codes) for row in _list(zone_rows) if isinstance(row, dict)],
-		"item_sets": [_set_from_row(row) for row in _list(set_rows) if isinstance(row, dict)],
-		"rules": [_rule_from_row(row) for row in _list(policy_row.get("rules")) if isinstance(row, dict)],
-	}
-
-
-# ---------------------------------------------------------------- policy -> database rows
-def _zone_row(zone, names):
-	fallback = _dict(zone.get("fallback"))
-	return {
-		"zone_name": _text(zone.get("name")),
-		"enabled": _check(zone.get("enabled")),
-		"not_shipped": _check(zone.get("not_shipped")),
-		"everywhere_else": _check(zone.get("everywhere_else")),
-		"countries": [{"country": names.get(code, code)} for code in _codes(zone.get("countries"))],
-		"customer_line": _text(zone.get("customer_line")),
-		"not_offered_message": _text(zone.get("not_offered_message")),
-		"fallback_method": _to_label("zone_fallback", fallback.get("method")),
-		"fallback_amount": _float(fallback.get("amount")),
-	}
-
-
-def _set_row(item_set):
-	return {
-		"set_name": _text(item_set.get("name")),
-		"item_groups": [{"item_group": group} for group in _texts(_list(item_set.get("item_groups")))],
-		"items": [{"item": code} for code in _texts(_list(item_set.get("items")))],
-	}
-
-
-def _rule_row(rule):
-	row = {
-		"enabled": _check(rule.get("enabled")),
-		"label": _text(rule.get("label")),
-		"zone": _text(rule.get("zone")),
-		"item_set": _text(rule.get("item_set")) or None,
-		**{key: _float(rule.get(key)) for key in _LIMITS},
-		"method": _to_label("method", rule.get("method")),
-		"formula": _text(rule.get("formula")),
-		"round_up": _check(rule.get("round_up")),
-	}
-	name = _text(rule.get("name"))
-	return {"name": name, **row} if name else row
-
-
-def _card_text(card):
-	"""The rate card as the JSON text its field holds, written to be read in the form: indented, keys in
-	order, letters as they are. No card, and a value that is not a card, are "". A card JSON cannot hold (a
-	loop, keys of two kinds, a NaN or an infinity, which Python would write as words that are not JSON and a
-	browser refuses) is "" too, so that writing never raises."""
-	if not isinstance(card, dict):
-		return ""
-	try:
-		return json.dumps(card, ensure_ascii=False, sort_keys=True, indent=1, default=str, allow_nan=False)
-	except (TypeError, ValueError, RecursionError):
-		return ""
-
-
-def rows_from_policy(policy: dict, country_names: dict[str, str]) -> dict:
-	"""The rows of the three doctypes for a policy: {"policy": policy row (with its `rules` rows),
-	"zones": [zone row], "item_sets": [set row]}. The exact inverse of `policy_from_rows`.
-
-	`country_names` maps an ISO code (in either case) to its Country name; a code it has no name for is
-	written as the code, so that saving the row fails loudly rather than the country being lost quietly.
-	Flags become the 1 and 0 a database holds, read as the engine reads them (anything Python counts as true
-	is 1), Select codes become their labels (a code that has no label is written as it is), the rate card
-	becomes JSON text, and a rule row has a `name` only when the rule has one. It does not raise on odd
-	content.
-	"""
-	policy, names = _dict(policy), _upper_keys(country_names)
-	fallback = _dict(policy.get("default_fallback"))
-	return {
-		"policy": {
-			"active": _check(policy.get("active")),
-			"price_source": _to_label("price_source", policy.get("price_source")),
-			"rate_card": _card_text(policy.get("rate_card")),
-			"not_covered": _to_label("not_covered", policy.get("not_covered")),
-			"default_fallback_method": _to_label("default_fallback", fallback.get("method")),
-			"default_fallback_amount": _float(fallback.get("amount")),
-			"rules": [_rule_row(rule) for rule in _list(policy.get("rules")) if isinstance(rule, dict)],
-		},
-		"zones": [_zone_row(zone, names) for zone in _list(policy.get("zones")) if isinstance(zone, dict)],
-		"item_sets": [_set_row(entry) for entry in _list(policy.get("item_sets")) if isinstance(entry, dict)],
-	}
-
-
-# ---------------------------------------------------------------- what a customer is told
-def _say(text, translate):
-	"""`text` in the customer's language, or "" when there is nothing to say."""
-	text = _text(text)
-	return translate(text) if text.strip() else ""
-
-
-def public_summary_from(policy: dict, country_names: dict[str, str], translate) -> dict:
-	"""What the FAQ and the Shipping page may show (the website does not call this yet): {"active": False,
-	"zones": []} while the policy is off, otherwise {"active": True, "zones": [{"name", "countries":
-	[{"code", "name"}], "customer_line", "delivers"}]}.
-
-	Only enabled zones are listed, in the policy's order. `delivers` is False for a Not shipped zone. An
-	Everywhere-else zone lists no countries. `country_names` maps a code to its Country name (the code
-	itself is shown when there is none) and `translate(text)` puts a customer line in the customer's
-	language. No rule, formula, fallback, amount or message is part of it: each field is picked by name.
-	"""
-	policy = _dict(policy)
-	if not policy.get("active"):  # as `resolve` reads it
-		return {"active": False, "zones": []}
-	names = _upper_keys(country_names)
-	zones = []
-	for zone in _list(policy.get("zones")):
-		if not isinstance(zone, dict) or not zone.get("enabled"):
-			continue
-		codes = [] if zone.get("everywhere_else") else _codes(zone.get("countries"))
-		zones.append(
+		"zones": [
 			{
-				"name": _text(zone.get("name")),
-				"countries": [{"code": code, "name": names.get(code, code)} for code in codes],
-				"customer_line": _say(zone.get("customer_line"), translate),
-				"delivers": not zone.get("not_shipped"),
+				"name": z.get("zone_name") or z.get("name"),
+				"enabled": _flag(z.get("enabled")),
+				"countries": [country_codes.get(c["country"], "").upper() for c in z.get("countries", [])],
+				"not_shipped": _flag(z.get("not_shipped")),
+				"customer_line": z.get("customer_line") or "",
+				"not_offered_message": z.get("not_offered_message") or "",
 			}
-		)
-	return {"active": True, "zones": zones}
-
-
-def response_from(result: dict, translate) -> dict:
-	"""What a guest is told about one order, from the engine's result: {"policy_active", "price_source",
-	"zone", "offered", "reason", "message", "offers": [{"service_id", "name", "amount", "source", "reason",
-	"estimated_days"}]}.
-
-	`price_source` is "rate_card" or "carrier" (the carrier for anything else). `message` is put through
-	`translate(text)` when there is one. The result's `rule` position and each offer's `trace` are not copied:
-	they hold formulas, the lines of the rate card and the policy's inner workings. Each field is picked by
-	name, so nothing else can reach the guest, and nothing of the rate card but the price it gave.
-	"""
-	result = _dict(result)
-	return {
-		"policy_active": bool(result.get("policy_active")),
-		"price_source": "rate_card" if result.get("price_source") == "rate_card" else "carrier",
-		"zone": result.get("zone"),
-		"offered": bool(result.get("offered")),
-		"reason": result.get("reason"),
-		"message": _say(result.get("message"), translate),
-		"offers": [
-			{key: offer.get(key) for key in _OFFER_KEYS}
-			for offer in _list(result.get("offers"))
-			if isinstance(offer, dict)
+			for z in zone_rows
+		],
+		"item_sets": [
+			{
+				"name": g.get("set_name") or g.get("name"),
+				"item_groups": _column(g.get("item_groups"), "item_group"),
+				"items": _column(g.get("items"), "item"),
+				"patterns": _column(g.get("patterns"), "pattern"),
+			}
+			for g in set_rows
+		],
+		"rules": [
+			{
+				"name": r.get("name"),
+				"zone": r.get("zone") or "",
+				"item_set": r.get("item_set") or None,
+				"services": _json_list(r.get("services")),
+				"method": _to_code("method", r.get("method")),
+				"formula": r.get("formula") or "",
+				"price_table": _json_list(r.get("price_table")),
+				"label": r.get("label") or "",
+				"days": r.get("days") or None,
+			}
+			for r in policy_row.get("rules", [])
 		],
 	}
 
 
-# ---------------------------------------------------------------- versions and changes
-def snapshot_version(policy: dict) -> str:
-	"""A name for the policy's content: the first 16 hex characters of the SHA-256 of its compact JSON with
-	sorted keys. The order of the keys does not matter; the order of a list does (rules are ordered)."""
-	text = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
-	return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-def _by_name(entries):
-	"""The dict entries of a list by name (the first when a name is repeated; a missing name is "")."""
-	named = {}
-	for entry in _list(entries):
-		if isinstance(entry, dict):
-			named.setdefault(_text(entry.get("name")), entry)
-	return named
-
-
-def _diff_named(current, draft):
-	before, after = _by_name(current), _by_name(draft)
+def rows_from_policy(policy, country_names):
+	names = _upper_keys(country_names)
 	return {
-		"added": sorted(after.keys() - before.keys()),
-		"removed": sorted(before.keys() - after.keys()),
-		"changed": sorted(name for name in before.keys() & after.keys() if before[name] != after[name]),
+		"policy": {
+			"active": int(bool(policy.get("active"))),
+			"fallback_method": _to_label("fallback", policy["fallback"]["method"]),
+			"fallback_amount": policy["fallback"].get("amount", 0),
+			"rules": [
+				{
+					**{k: r.get(k) for k in ("name", "zone", "item_set", "label", "days", "formula")},
+					"method": _to_label("method", r["method"]),
+					"services": json.dumps(r.get("services", [])),
+					"price_table": json.dumps(r.get("price_table", [])),
+				}
+				for r in policy["rules"]
+			],
+		},
+		"zones": [
+			{
+				"zone_name": z["name"],
+				"enabled": int(z.get("enabled", True)),
+				"countries": [{"country": names.get(c.upper(), c)} for c in z["countries"]],
+				"not_shipped": int(bool(z.get("not_shipped"))),
+				"customer_line": z.get("customer_line", ""),
+				"not_offered_message": z.get("not_offered_message", ""),
+			}
+			for z in policy["zones"]
+		],
+		"item_sets": [
+			{
+				"set_name": g["name"],
+				"priority": position,
+				"item_groups": [{"item_group": v} for v in g.get("item_groups", [])],
+				"items": [{"item": v} for v in g.get("items", [])],
+				"patterns": [{"pattern": v} for v in g.get("patterns", [])],
+			}
+			for position, g in enumerate(policy["item_sets"])
+		],
 	}
 
 
-def _rule_entry(position, rule):
-	return {
-		"index": position,
-		"name": _text(rule.get("name")) or None,
-		"label": _text(rule.get("label")),
-		"zone": _text(rule.get("zone")),
-	}
-
-
-def _is_the_rule(old, new):
-	"""Is `old`, a rule of the current policy, the rule `new` of the draft? A named rule is the one with the
-	same name. A rule with no name has no identity: only an identical rule with no name is the same."""
-	name = _text(new.get("name"))
-	return _text(old.get("name")) == name if name else old == new
-
-
-def _diff_rules(current, draft):
-	unpaired = {position: rule for position, rule in enumerate(_list(current)) if isinstance(rule, dict)}
-	paired = []  # (position in the current policy, position in the draft) of each rule found in both
-	added, changed = [], []
-	for position, rule in enumerate(_list(draft)):
-		if not isinstance(rule, dict):
-			continue
-		old = next((place for place, candidate in unpaired.items() if _is_the_rule(candidate, rule)), None)
-		if old is None:
-			added.append(_rule_entry(position, rule))
-			continue
-		paired.append((old, position))
-		if unpaired.pop(old) != rule:
-			changed.append(_rule_entry(position, rule))
-	removed = [_rule_entry(position, rule) for position, rule in unpaired.items()]
-	# where the rules found in both sit in the draft, listed in the order they have in the current policy
-	order = [new for _, new in sorted(paired)]
-	return {"added": added, "removed": removed, "changed": changed, "order_changed": order != sorted(order)}
-
-
-def _setting(policy, key):
-	if key == "active":
-		return bool(policy.get(key))
-	if key == "price_source":  # a policy that does not say prices from the carrier, as the engine reads it
-		value = policy.get(key)
-		return "carrier" if value is None or value == "" else value
-	if key == "rate_card":  # what is not a card is no card
-		card = policy.get(key)
-		return card if isinstance(card, dict) else None
-	return policy.get(key)
-
-
-def _diff_card(current, draft):
-	"""The rate card's profiles that a draft adds, removes and changes, by name."""
-	return _diff_named(
-		_dict(current.get("rate_card")).get("profiles"), _dict(draft.get("rate_card")).get("profiles")
+def response_from(result, translate):
+	keys = (
+		"service_id",
+		"name",
+		"amount",
+		"source",
+		"reason",
+		"estimated_days",
+		"provider",
+		"carrier_code",
+		"scope",
 	)
-
-
-def diff_policy(current: dict, draft: dict) -> dict:
-	"""What applying `draft` over `current` would change. Neither is altered. The result is
-
-		{"zones":     {"added": [name], "removed": [name], "changed": [name]},
-		 "item_sets": {"added": [name], "removed": [name], "changed": [name]},
-		 "rules":     {"added": [entry], "removed": [entry], "changed": [entry], "order_changed": bool},
-		 "rate_card": {"added": [name], "removed": [name], "changed": [name]},
-		 "settings":  [key]}
-
-	Zones and item sets are identified by `name`; the name lists are sorted. "Changed" means the same
-	name with different content (the order of the countries or items counts), so a rename is one removed
-	and one added.
-
-	Rules are identified by `name` (the rule row's name in the database). Each rule entry is
-	{"index": int, "name": str | None, "label": str, "zone": str}, listed in order of `index`. `index` is
-	the rule's position (from 0) in the draft for added and changed rules, and in the current policy for
-	removed ones. A rule whose name is missing or not in the current policy counts as added; so does a
-	second rule with a name already taken. The exception is a rule with no name that is identical to a
-	rule with no name in the current policy: it is the same rule (one for one). "Changed" means the
-	same name with different content. `order_changed` is True when the rules present in both sit in a
-	different relative order; adding, removing or editing rules does not change it.
-
-	The rate card's profiles are identified by `name`, like zones: `rate_card` lists, sorted, the profiles the
-	draft's card adds and removes, and those it changes (the same name with other patterns, zones or tiers).
-	A card that is missing or not a card has no profiles. What the lists cannot show, such as the profiles
-	trading places (the first one that matches an item takes it), is in `settings`.
-
-	`settings` lists, sorted, the top-level settings among `active`, `default_fallback`, `not_covered`,
-	`price_source` and `rate_card` whose value differs; a policy that does not say what its price source is
-	prices from the carrier. Identical policies give empty lists and False.
-	"""
-	current, draft = _dict(current), _dict(draft)
 	return {
-		"zones": _diff_named(current.get("zones"), draft.get("zones")),
-		"item_sets": _diff_named(current.get("item_sets"), draft.get("item_sets")),
-		"rules": _diff_rules(current.get("rules"), draft.get("rules")),
-		"rate_card": _diff_card(current, draft),
-		"settings": [key for key in _SETTINGS if _setting(current, key) != _setting(draft, key)],
+		"policy_active": bool(result.get("policy_active")),
+		"offered": bool(result.get("offered")),
+		"reason": result.get("reason"),
+		"message": translate(result.get("message") or ""),
+		"needs_quotes": bool(result.get("needs_quotes")),
+		"shipments": [
+			{k: s.get(k) for k in ("index", "items", "services", "quote")}
+			for s in result.get("shipments", [])
+			if s.get("quote")
+		]
+		if result.get("needs_quotes")
+		else [],
+		"offers": [{k: o.get(k) for k in keys} for o in result.get("offers", [])],
 	}
+
+
+def public_summary_from(policy, country_names, translate):
+	return {
+		"active": bool(policy.get("active")),
+		"zones": [
+			{
+				"name": z["name"],
+				"countries": [{"code": c, "name": country_names.get(c, c)} for c in z["countries"]],
+				"customer_line": translate(z.get("customer_line") or ""),
+				"delivers": not z.get("not_shipped"),
+			}
+			for z in policy.get("zones", [])
+			if policy.get("active") and z.get("enabled", True)
+		],
+	}
+
+
+def snapshot_version(policy):
+	return hashlib.sha256(
+		json.dumps(policy, sort_keys=True, separators=(",", ":"), default=str).encode()
+	).hexdigest()[:24]
+
+
+def diff_policy(current, draft):
+	changes = []
+	for key, label in (("zones", "Country group"), ("item_sets", "Product group")):
+		before = {x["name"]: x for x in current.get(key, [])}
+		after = {x["name"]: x for x in draft.get(key, [])}
+		for n in after.keys() - before.keys():
+			changes.append(f"Add {label.lower()}: {n}")
+		for n in before.keys() - after.keys():
+			changes.append(f"Remove {label.lower()}: {n}")
+		for n in before.keys() & after.keys():
+			if before[n] != after[n]:
+				changes.append(f"Change {label.lower()}: {n}")
+	if current.get("rules") != draft.get("rules"):
+		changes.append(f"Update delivery rows ({len(draft.get('rules', []))} rows)")
+	if current.get("active") != draft.get("active"):
+		changes.append(
+			"Use this policy at checkout" if draft.get("active") else "Switch off this policy at checkout"
+		)
+	if current.get("fallback") != draft.get("fallback"):
+		changes.append("Change what happens if the carrier gives no price")
+	return changes
+
+
+def clean_shipment_quotes(value):
+	value = parse_json_arg(value, {})
+	if not isinstance(value, dict) or len(value) > 10:
+		raise InputError("At most 10 shipment quotes are allowed.")
+	out = {}
+	for key, data in value.items():
+		if not isinstance(key, str) or not key.isdigit() or len(key) > 2 or not isinstance(data, dict):
+			raise InputError("Invalid shipment index.")
+		boxes = clean_boxes(data.get("boxes"))
+		quotes = clean_quotes(data.get("quotes"))
+		if len({q["service_id"] for q in quotes}) != len(quotes):
+			raise InputError("A service may quote a shipment only once.")
+		out[key] = {"boxes": boxes, "quotes": quotes}
+	if sum(len(d["boxes"]) for d in out.values()) > 50:
+		raise InputError("At most 50 cartons are allowed.")
+	return out

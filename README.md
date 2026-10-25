@@ -17,7 +17,7 @@ since 2026-09-11.
 | `i18n.py` + `website_item_events.py` | authored translations, variant content sync, publish gate, gallery gender stamp |
 | `data_completion.py` | L2↔L3 content fill engine (dry-run by default) |
 | `maintenance.py` | bench-executable one-offs (`backfill_precompute_fields`) |
-| `shipping_policy.py` + `shipping_policy_wizard.py`, on the pure `shipping_engine.py`, `shipping_formula.py`, `shipping_rate_card.py`, `shipping_policy_data.py`, `shipping_integration_check.py` | the Shipping Policy: what customers pay for delivery (zones, item sets, rules or the interim rate card, fallbacks), its two guest methods and the wizard's seven (see [Shipping Policy](#shipping-policy)) |
+| `shipping_policy.py` + `shipping_policy_wizard.py`, on the pure `shipping_engine.py`, `shipping_formula.py`, `shipping_shopify_import.py`, `shipping_policy_data.py`, `shipping_integration_check.py` | the Shipping Policy: what customers pay for delivery (one page of product groups with delivery rows, provider services, weight tables, formulas, one fallback), its three guest methods and the page's nine (see [Shipping Policy](#shipping-policy)) |
 
 ## Install
 ```bash
@@ -35,20 +35,20 @@ bench --site <site> migrate   # fixtures: precompute + Lead custom fields
 | `erp_company` / `erp_customer_group` | order path | SO provisioning |
 | `tap_mode_of_payment` / `tap_receiving_account` | payment pair | Payment Entry on captured Tap charges |
 
-The Shipping Policy adds no key (its Test tab reaches the site's own API at
+The Shipping Policy adds no key (its Check it works reaches the site's own API at
 Frappe's standard `host_name`).
 
 ## Public API surface (guest)
 Read-only, ungated: `get_published_website_items`, `get_website_item_by_index_key`,
 `get_product_gallery`, `get_shop_filters`, `storefront.get_pdp_bundle`,
 `storefront.get_shop_listing`, `shipping_policy.price_delivery`,
-`shipping_policy.public_summary`.
+`shipping_policy.public_summary`, `shipping_policy.delivery_services`.
 Token-gated (`X-DSI-Token`): `sync_product_catalogue`, `receive_publish_callback`,
 `receive_generation_callback`.
-System Manager or Website Manager only: the seven `shipping_policy_wizard` methods (`wizard_state`,
-`try_order`, `check_formula`, `preview_changes`, `apply_policy`, `import_rate_card`,
-`test_integration`; `apply_policy`, `try_order` and `test_integration` take POST
-only).
+System Manager or Website Manager only: the nine `shipping_policy_wizard` methods (`wizard_state`,
+`search_products`, `count_products`, `check_formula`, `preview_changes`, `apply_policy`,
+`import_shopify`, `try_order`, `test_integration`; `apply_policy`, `try_order` and
+`test_integration` take POST only).
 Session-required: everything else (publish flow, `create_order_atomic`,
 `capture_web_lead`, gallery write, data_completion).
 
@@ -64,99 +64,75 @@ Group membership is `custom_grouping_key` EQUALITY, never an index-key prefix
 must go through `index_key.get_product_grouping_key`.
 
 ## Shipping Policy
-What customers pay for delivery, set in the ERP (spec and plan in
-`docs/superpowers/`). Its doctypes, System Manager or Website Manager only and version-tracked:
-Shipping Zone (countries from the ERP's Country list, Not shipped, Everywhere
-else, a line for customers, what to do when the carrier can't quote), Shipping
-Item Set (item groups, with the groups beneath them, and items), and the single
-Shipping Policy (Active, the price source, the rate card, Anything not covered,
-the default fallback, and the rules: the first that holds wins, and a rule for an
-item set holds only when every item in the order is in the set). The policy ships
-**off**; while it is off, `price_delivery` returns the carrier's quotes exactly as
-they were posted.
+What customers pay for delivery, set in the ERP on ONE page, `/desk/shipping-policy-wizard`
+(System Manager or Website Manager only). User guide: `docs/shipping-policy-guide.md`;
+deployment record and rollback: `docs/shipping-policy-deployment.md`; design history in
+`docs/superpowers/` (the one-page spec and plan are background, the guide and the code win).
 
-**The wizard.** The **Open the wizard** button on the Shipping Policy form opens
-the page `/desk/shipping-policy-wizard` (System Manager or Website Manager only). Six tabs: Zones,
-Rates, Rules, If the carrier can't quote, Review, and Test. It edits a draft kept
-in the browser and writes nothing until **Apply** on Review, which writes the whole
-draft in one transaction or nothing, and refuses when someone changed the policy
-after the wizard loaded it. A Try an order tape beside every step prices a sample
-order with the draft. Rates holds the price source: Carrier (the default: the
-carrier's price, shaped by the rules; for now the website applies the policy only
-with the rate card as the price source, so with Carrier customers still pay the
-carrier's own prices, on or off, and the rules only show in Try an order) or Rate
-card (the interim Shopify weight-tier card: once the policy is on, customers pay
-from it and the carrier is not asked, until the carrier integration is shown
-again). The card is imported from the Shopify CSV export (the rates file and the
-countries not delivered, chosen as files or pasted), shown with what it holds and
-what stops it, edited there, and applied with the rest. Test ("Test the
-integration") runs three read-only checks of what is live: the ERP's own
-`price_delivery` over HTTP, the carrier, and the website named in Storefront
-Settings.
+**Model.** Records, version-tracked: Shipping Zone (a reusable country group, including
+the not-delivered group), Shipping Item Set (a product group: explicit items, item
+groups, code patterns that follow new products) and the single Shipping Policy
+(Active, the fallback, and the delivery rows: product group, country group, services,
+customer price). The policy ships **off**; while it is off, `price_delivery` returns the
+carrier's quotes as posted. The customer price of a row is Free, One price, By weight
+(tiers in pounds), the carrier's price, or a Formula run over each service's quote.
+There is no price-source switch and no rate-card module; the Shopify CSV is only an
+input (`shipping_shopify_import.py`) that the ERP Helper or `import_shopify` turns into
+ordinary editable groups and rows. Provider services come from the ERP's Shipping
+Provider and Shipping Service records, never from constants in the engine.
 
-**Formulas.** A rule can charge a formula over `carrier_price`, `order_value`,
-`weight_kg`, `volume_l`, `boxes` and `item_count`, with `min`, `max`, `round`,
-`ceil`, `floor`, `abs`, arithmetic, comparisons, `and`/`or`/`not` and
-`a if condition else b` (no power operator; parsed and whitelisted, never `eval`).
-round() rounds halves away from zero (2.5 is 3, -2.5 is -3), like the cents
-rounding. A formula that fails for an order sends it to the fallback, never to
-0, and is noted in the Error Log as "Shipping policy formula error", at most once
-per rule in 10 minutes.
+**The page.** It edits a draft kept in the browser and writes nothing until **Review and
+save**, which writes the whole draft in one transaction or nothing, and refuses when
+someone changed the policy after the page loaded. Try an order prices a real cart (ERP
+items, destination, city/postcode) with the draft, even while the saved policy is off.
+Check it works runs the read-only checks of the ERP endpoint, the carrier and the
+website named in Storefront Settings.
+
+**Formulas.** A formula can use `carrier_price`, `order_value`, `weight_kg`, `volume_l`,
+`boxes` and `item_count`, with `min`, `max`, `round`, `ceil`, `floor`, `abs`,
+arithmetic, comparisons, `and`/`or`/`not` and `a if condition else b` (no power
+operator; parsed and whitelisted, never `eval`). `round()` rounds halves away from
+zero. A formula that fails for a service drops that service's offer; if none is left
+the fallback applies, never a zero price.
 
 **Guest methods**, read-only, read the policy afresh on every call (nothing is
-cached): `price_delivery(country_code, items, boxes, quotes, language)` says
-whether the policy is on, its price source, the zone, whether delivery is
-offered, a reason code and a customer-facing message, and one offer per delivery
-method (amount, source, reason, estimated days); `public_summary(language)` lists
-the enabled zones with their countries and customer lines while the policy is on,
-and nothing while it is off. Neither returns a rule, a formula, a trace or a line
-of the rate card.
+cached): `price_delivery(country_code, items, shipment_quotes, plan_token, language)`
+is two-step for carrier-priced rows: the first answer may be `needs_quotes` with the
+shipments to quote and a `plan_token`; the website returns the carton quotes with the
+token and gets the offers (provider, booking code, service, price, days). A changed
+policy, cart or provider directory makes the token stale. `delivery_services()` returns
+only the public booking identity (name, provider, carrier code) of each service.
+`public_summary(language)` lists the enabled zones with their countries and customer
+lines while the policy is on. None returns a rule, a formula or a trace.
+
+**Refusals and the fallback.** `not_covered`, `too_heavy`, `not_served` and `not_shipped`
+never reach the fallback; the single fallback (refuse, or charge a flat amount) covers
+only a provider or formula that gives no usable price.
 
 ### Promotion
-Push the live host's unpushed catalogue commits first (`6a39d3e` review approval
-fix and `702a036` workspace rename; this branch starts from them), then
-`bench migrate`: it adds the doctypes and the page, and the policy arrives **off
-and empty**. This app, with `price_delivery`, goes on the live ERP **before** the
-website change is pushed (the website falls back to the carrier path while the
-method is missing). No new `site_config` keys, no new roles, no Custom DocPerm and
-no customisation (Custom Field, Property Setter, Client or Server Script); the new
-doctypes and the page carry their own System Manager and Website Manager permissions, and `hooks.py`
-is unchanged. Then:
-- [ ] Packing and the outbox, on a site that has `dsi_shipping.packing` and
-  `dsi_core` (erp2 has neither; the native tests use stand-ins): Try an order with
-  real items, and one Apply, which leaves an outbox row "website-revalidate"
-  tagged "shipping-policy".
-- [ ] The wizard's native tests on a replica with the live app set (erp1, the
-  nightly replica): another app's `doc_events` committing inside `save` would
-  break Apply's all-or-nothing. Record the live MariaDB version and
-  `innodb_snapshot_isolation` (erp2: MariaDB 11.8.8, snapshot isolation on).
-- [ ] On the live ERP, look for the `employee_self_service` catch-all hook (on
-  erp2 it runs on every Error Log insert and can recurse) and nginx's body limit
-  (erp2: 50 MB; the real export and a draft holding its card are well under
-  100 KB).
-- [ ] Before a policy goes on where rules are already stored, re-check every
-  stored formula under the stricter checks (open the policy in the wizard and
-  read Review). Neither erp2 nor the live ERP stores one today.
-- [ ] Until the website is updated to apply rules over the carrier's quotes, only
-  the Rate card price source changes what customers pay: with Carrier the website
-  charges the carrier's own prices whether the policy is on or off (the wizard's
-  Rates, Review and Test say so).
-- [ ] After the website deploy, run the Test tab once on the live ERP with the
-  policy on and the rate card as the price source: its verdict should say the site
-  uses the policy (until then it says the site still asks the carrier; with the
-  policy off it says customers pay the carrier's own prices).
+`~/erp-live-fix/shipping-policy/promote.sh prod` (check) then `--apply`: additive first
+installation of the listed files (`tools/shipping_policy_files.txt`: 46 app files and
+one safe fixture; a hermetic test keeps the list equal to the tree), with a database
+backup, exact-path copies, children-first reload, no migrate, no restart, no new key,
+role, Custom DocPerm or customisation. The policy arrives **off and empty**. It is not
+a conversion of an existing active legacy policy. Deploy the matching website change
+after the ERP part. On a site whose shipping app lacks the carton packer or the
+postcode-aware rate method, install that support first (see the deployment record).
+- [ ] Native tests on a replica with the live app set: another app's `doc_events`
+  committing inside `save` would break Apply's all-or-nothing. Record the MariaDB
+  version and `innodb_snapshot_isolation`.
+- [ ] Look for the `employee_self_service` catch-all hook and nginx's body limit.
+- [ ] Resolve countries missing from the live Country list when importing the file.
+- [ ] After the website deploy, build the policy, run Check it works with the policy on,
+  and try a real checkout. Emergency switch-off: untick Active and save.
 
 ## Tests
 Hermetic (no bench): `python3 -m pytest tests/hermetic -q`
 Frappe-native: `bench --site <site> run-tests --app dsi_catalogue`
-The Shipping Policy's five native modules (`--module
-dsi_catalogue.dsi_catalogue.doctype.<module>`: `shipping_zone.test_shipping_zone`,
-`shipping_item_set.test_shipping_item_set`, `shipping_policy.test_shipping_policy`,
-`shipping_policy.test_shipping_policy_ratecard`,
-`shipping_policy.test_shipping_policy_wizard`) reset the policy, and refuse to run
-on a site that holds one (zones, item sets, rules, or the policy on): run them on
-erp2, one at a time, after `tools/erp2_push.sh --restart`. The promotion proof
-(policy off: the posted quotes come back unchanged, a partial quote among them) is
-`TestGuestMethods.test_policy_off_returns_the_quotes_unchanged`.
+The Shipping Policy's native modules (`--module
+dsi_catalogue.dsi_catalogue.doctype.<module>`; list them with `ls
+dsi_catalogue/dsi_catalogue/doctype/shipping_*/test_*.py`) roll back their writes and
+refuse to run on a site that holds a policy: run them on erp2, one at a time, after
+`tools/erp2_push.sh --restart`.
 Browser, erp2 only: `tests/browser/shipping_policy_wizard.mjs` (the command is in
 its header; it needs a System Manager user on erp2).

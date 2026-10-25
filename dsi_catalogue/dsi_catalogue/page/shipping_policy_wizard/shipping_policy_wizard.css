@@ -1,2692 +1,616 @@
-/* Shipping policy wizard.
- *
- * The desk adds a page's style to the whole session, so every rule is scoped to .sp-wizard. Surfaces, text,
- * borders and radius are the desk's own variables, in light and dark. Three accents only, each with one
- * meaning and always said in words as well: brass for what the customer pays, sage for free, brick for not
- * shipped or not offered. The price tape is a receipt: the order on top, a tear line, the engine's workings,
- * a double rule, then "Customer pays" in brass. Everything around it stays quiet.
- */
-
-/* Contents: each section runs from its banner to the line before the next one.
- *   78-91      focus
- *   92-123     the draft banner
- *   124-199    the steps
- *   200-424    the tape
- *   425-595    the receipt
- *   596-633    the tape beside the steps
- *   634-1293   the Zones and Rules steps
- *   1294-1712  the Fallback and Review steps
- *   1713-2680  the Rates step and the Test tab
- *   2681-2691  less motion
- */
-
-.sp-wizard {
-	--sp-brass: #9A7116;
-	--sp-sage: #2B7A57;
-	--sp-brick: #A8473A;
-	--sp-rule: var(--outline-gray-3, var(--dark-border-color));
-	--sp-rule-strong: var(--outline-gray-4, var(--text-light));
-	--sp-edge: var(--border-color);
-	--sp-chip-hover: var(--control-bg-on-gray, var(--fg-hover-color));
-	--sp-tape-width: 360px;
-	--sp-head: var(--page-head-height, 48px);
-
-	/* the layout follows the room the wizard has, not the window: the desk's sidebar takes some of it */
-	container: sp-wizard / inline-size;
-	/* the bottom leaves room to scroll the tape's last line clear of the desk's floating buttons */
-	padding: 8px 16px 96px;
+.sp-page {
+	--sp-brass: var(--yellow-700, #9a7029);
+	--sp-sage: var(--green-700, #37755b);
+	--sp-brick: var(--red-600, #ad4c43);
 	color: var(--text-color);
+	padding: 12px 4px 90px;
+	font-size: 13px;
+	line-height: 1.5;
 }
-
-/* Narrow first: the steps, then the tape under them. */
-.sp-wizard .sp-layout {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr);
-	grid-template-areas:
-		"banner"
-		"tabs"
-		"step"
-		"tape";
-	column-gap: 32px;
-	align-items: start;
+.sp-page h2 {
+	font-size: 25px;
+	letter-spacing: -0.6px;
+	margin: 4px 0 8px;
+	font-weight: 600;
 }
-
-[data-theme="dark"] .sp-wizard {
-	/* the desk's own border is nearly the colour of its dark surface: the tape's edge needs a lighter rule */
-	--sp-edge: var(--outline-gray-3, var(--dark-border-color));
-	/* the desk's dark field tint has no darker step for a hover: the subtle surface is one */
-	--sp-chip-hover: var(--subtle-fg, var(--fg-hover-color));
-	--sp-brass: #D8B259;
-	--sp-sage: #74C9A0;
-	--sp-brick: #E5907F;
-}
-
-.sp-wizard [hidden] {
-	display: none !important;
-}
-
-.sp-wizard p {
+.sp-page h3,
+.sp-dialog h3 {
+	font-size: 16px;
+	font-weight: 600;
 	margin: 0;
 }
-
-.sp-wizard .sp-loading,
-.sp-wizard > .sp-problem {
-	padding: 16px 0;
+.sp-page h4 {
+	font-size: 14px;
+}
+.sp-muted {
 	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.6;
 }
-
-/* ---------------------------------------------------------------- focus */
-.sp-wizard button:focus-visible,
-.sp-wizard [role="tab"]:focus-visible,
-.sp-wizard [role="tabpanel"]:focus-visible,
-.sp-wizard input[type="checkbox"]:focus-visible,
-.sp-wizard input[type="radio"]:focus-visible,
-.sp-wizard .sp-title-input:focus-visible,
-.sp-wizard .sp-review-title:focus-visible,
-.sp-wizard .sp-apply-done-title:focus-visible {
-	outline: 2px solid var(--text-color);
-	outline-offset: 2px;
-	box-shadow: none;
+.sp-eyebrow {
+	font-size: 10px;
+	letter-spacing: 1.8px;
+	color: var(--text-muted);
+	font-weight: 600;
+	margin: 0;
 }
-
-/* ---------------------------------------------------------------- the draft banner */
-.sp-wizard .sp-banner {
-	grid-area: banner;
-	margin: 4px 0 12px;
-	padding: 6px 0 6px 12px;
-	border-left: 2px solid var(--sp-rule-strong);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-banner-line {
+.sp-header {
 	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 2px 16px;
-}
-
-.sp-wizard .sp-link {
-	appearance: none;
-	padding: 0;
-	border: 0;
-	background: none;
-	color: var(--text-color);
-	font: inherit;
-	text-decoration: underline;
-	text-underline-offset: 2px;
-	cursor: pointer;
-}
-
-.sp-wizard .sp-link:hover {
-	color: var(--heading-color);
-}
-
-/* ---------------------------------------------------------------- the steps */
-.sp-wizard .sp-tabs {
-	grid-area: tabs;
-	display: flex;
-	flex-wrap: wrap;
-	column-gap: 24px;
-	margin-bottom: 24px;
-	border-bottom: 1px solid var(--border-color);
-}
-
-.sp-wizard .sp-tab {
-	position: relative;
-	display: inline-flex;
-	flex-direction: column;
+	gap: 20px;
 	align-items: center;
-	margin: 0 0 -1px;
-	padding: 10px 0 8px;
-	border: 0;
-	border-bottom: 2px solid transparent;
-	background: none;
-	color: var(--text-muted);
-	font: inherit;
-	font-size: var(--text-base);
-	line-height: 1.4;
-	white-space: nowrap;
-	cursor: pointer;
-}
-
-/* the selected tab is semibold; this keeps every tab as wide as its semibold self, so nothing shifts */
-.sp-wizard .sp-tab::after {
-	content: attr(data-label);
-	height: 0;
-	overflow: hidden;
-	visibility: hidden;
-	font-weight: 600;
-}
-
-.sp-wizard .sp-tab:hover {
-	color: var(--text-color);
-}
-
-.sp-wizard .sp-tab[aria-selected="true"] {
-	border-bottom-color: var(--heading-color);
-	color: var(--heading-color);
-	font-weight: 600;
-}
-
-/* Test checks what is live, not the draft: it sits at the end of the row, after a hairline */
-.sp-wizard .sp-tab-apart {
-	margin-left: auto;
-}
-
-.sp-wizard .sp-tab-apart::before {
-	content: "";
-	position: absolute;
-	top: 12px;
-	bottom: 12px;
-	left: -12px;
-	border-left: 1px solid var(--border-color);
-}
-
-.sp-wizard .sp-step {
-	grid-area: step;
-	min-width: 0;
-}
-
-.sp-wizard .sp-panel {
-	border-radius: var(--border-radius-tiny, 4px);
-}
-
-.sp-wizard .sp-placeholder {
-	max-width: 60ch;
-	padding: 4px 0;
-	color: var(--text-muted);
-}
-
-/* ---------------------------------------------------------------- the tape */
-.sp-wizard .sp-tape {
-	grid-area: tape;
-	margin-top: 32px;
-	padding: 16px 16px 18px;
-	border: 1px solid var(--sp-edge);
-	border-radius: var(--border-radius-md, 10px);
-	background: var(--fg-color);
-}
-
-.sp-wizard .sp-tape-head {
-	display: flex;
-	align-items: baseline;
 	justify-content: space-between;
-	gap: 12px;
-	margin-bottom: 14px;
+	margin-bottom: 22px;
 }
-
-.sp-wizard .sp-tape-title {
-	margin: 0;
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-	line-height: 1.3;
-}
-
-.sp-wizard .sp-tape-status {
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-}
-
-.sp-wizard .sp-tape-order,
-.sp-wizard .sp-tape-carrier {
-	display: grid;
-	gap: 12px;
-}
-
-.sp-wizard .sp-tape-carrier {
-	margin-top: 12px;
-}
-
-.sp-wizard .sp-field {
-	display: grid;
-	gap: 4px;
-	min-width: 0;
-}
-
-.sp-wizard .sp-label {
-	margin: 0;
-	padding: 0;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	font-weight: 400;
-	line-height: 1.3;
-}
-
-.sp-wizard .sp-input {
-	width: 100%;
-	min-width: 0;
-}
-
-.sp-wizard .sp-input[inputmode="decimal"] {
-	font-variant-numeric: tabular-nums;
-}
-
-.sp-wizard .sp-input:disabled {
-	opacity: 0.6;
-}
-
-.sp-wizard .sp-hint {
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-	line-height: 1.35;
-}
-
-.sp-wizard .sp-hint:empty {
-	display: none;
-}
-
-.sp-wizard .sp-row {
-	display: grid;
-	gap: 8px;
-	align-items: start;
-}
-
-.sp-wizard .sp-row-3 {
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.sp-wizard .sp-row-ask {
-	grid-template-columns: minmax(0, 1fr) auto;
-	align-items: end;
-}
-
-.sp-wizard .sp-ask {
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-ask.disabled {
-	cursor: not-allowed;
-}
-
-.sp-wizard .sp-check {
+.sp-actions,
+.sp-card-tools {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	margin: 0;
-	color: var(--text-color);
-	font-size: var(--text-sm);
-	font-weight: 400;
-	cursor: pointer;
 }
-
-.sp-wizard .sp-check input[type="checkbox"] {
-	flex: none;
-	margin: 0 !important;
+.sp-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 300px;
+	gap: 26px;
+	margin-top: 24px;
+	align-items: start;
 }
-
-/* the country field: a combobox that looks like the desk's own dropdowns */
-.sp-wizard .sp-combo {
-	position: relative;
+.sp-main {
+	min-width: 0;
 }
-
-.sp-wizard .sp-combo-list {
-	position: absolute;
-	z-index: 4;
-	top: calc(100% + 4px);
-	right: 0;
-	left: 0;
-	max-height: min(60vh, 280px);
-	margin: 0;
-	padding: 4px;
-	overflow-y: auto;
+.sp-card {
 	border: 1px solid var(--border-color);
-	border-radius: var(--border-radius);
-	background: var(--bg-color);
-	box-shadow: var(--shadow-md);
-	list-style: none;
+	border-radius: 10px;
+	background: var(--card-bg);
+	margin-bottom: 16px;
+	overflow: visible;
 }
-
-.sp-wizard .sp-combo-option,
-.sp-wizard .sp-combo-none {
-	padding: 6px 8px;
-	border-radius: var(--border-radius-tiny, 4px);
-	color: var(--text-color);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-combo-option {
-	cursor: pointer;
-}
-
-.sp-wizard .sp-combo-option:hover,
-.sp-wizard .sp-combo-option[aria-selected="true"] {
-	background: var(--fg-hover-color);
-}
-
-.sp-wizard .sp-combo-none {
-	color: var(--text-muted);
-}
-
-/* the items: the desk's own Link field, then a line per item */
-.sp-wizard .sp-item-picker .form-group,
-.sp-wizard .sp-item-picker .frappe-control {
-	margin: 0;
-}
-
-.sp-wizard .sp-items {
-	display: grid;
-	gap: 4px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.sp-wizard .sp-items:empty {
-	display: none;
-}
-
-.sp-wizard .sp-item {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) 56px auto;
-	align-items: center;
-	gap: 8px;
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-item-name {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-qty {
-	text-align: right;
-}
-
-.sp-wizard .sp-remove {
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-}
-
-.sp-wizard .sp-services {
-	display: grid;
-	gap: 2px;
-	margin: 2px 0 0;
-	padding: 0;
-	list-style: none;
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-}
-
-.sp-wizard .sp-service {
-	display: flex;
-	justify-content: space-between;
-	gap: 8px;
-}
-
-.sp-wizard .sp-money,
-.sp-wizard .sp-line-amount,
-.sp-wizard .sp-total-amount {
-	font-variant-numeric: tabular-nums lining-nums;
-	white-space: nowrap;
-}
-
-/* ---------------------------------------------------------------- the receipt */
-.sp-wizard .sp-receipt {
-	margin-top: 16px;
-	padding-top: 14px;
-	border-top: 1px dashed var(--sp-rule);
-}
-
-/* the printed part (lines, total, what follows) dims while a price is on its way */
-.sp-wizard .sp-printed {
-	transition: opacity 120ms ease-out;
-}
-
-.sp-wizard .sp-tape.is-pricing .sp-printed {
-	opacity: 0.55;
-}
-
-.sp-wizard .sp-receipt-lines {
-	display: grid;
-	gap: 8px;
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-receipt-lines:empty {
-	display: none;
-}
-
-/* a note about the whole policy (it is off, or the website does not apply it yet), set apart from how this one
- * order was priced */
-.sp-wizard .sp-note {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-	color: var(--text-color);
-}
-
-.sp-wizard .sp-statement,
-.sp-wizard .sp-empty {
-	color: var(--text-muted);
-}
-
-.sp-wizard .sp-headline {
-	color: var(--sp-brick);
-	font-weight: 600;
-}
-
-.sp-wizard .sp-message {
-	color: var(--sp-brick);
-}
-
-.sp-wizard .sp-receipt-lines .sp-hint {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-problem {
-	color: var(--text-color);
-}
-
-.sp-wizard .sp-offer-name {
-	color: var(--heading-color);
-	font-weight: 600;
-}
-
-.sp-wizard .sp-lines {
-	display: grid;
-	gap: 6px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.sp-wizard .sp-line {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	align-items: baseline;
-	column-gap: 16px;
-}
-
-.sp-wizard .sp-line-text {
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-line-amount {
-	color: var(--text-color);
-}
-
-.sp-wizard .sp-total {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 4px 16px;
-	margin-top: 14px;
-	padding-top: 10px;
-	border-top: 3px double var(--sp-rule-strong);
-}
-
-.sp-wizard .sp-total-label {
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-}
-
-.sp-wizard .sp-total-amount {
-	margin-left: auto;
-	color: var(--sp-brass);
-	font-size: var(--text-6xl, 32px);
-	font-weight: 600;
-	line-height: 1.1;
-	letter-spacing: -0.01em;
-}
-
-.sp-wizard .sp-total-amount.is-free {
-	color: var(--sp-sage);
-}
-
-.sp-wizard .sp-total-amount.is-not-offered {
-	color: var(--sp-brick);
-	font-size: var(--text-2xl, 20px);
-}
-
-.sp-wizard .sp-total-amount.is-pending {
-	color: var(--text-muted);
-	font-size: var(--text-base);
-	font-weight: 400;
-	letter-spacing: 0;
-}
-
-.sp-wizard .sp-after-total {
-	margin-top: 2px;
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-	text-align: right;
-}
-
-/* the other delivery methods: a quiet row each, so the total above stays the one loud figure */
-.sp-wizard .sp-more {
-	display: grid;
-	gap: 6px;
-	margin-top: 16px;
-	padding-top: 12px;
-	border-top: 1px dashed var(--sp-rule);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-more-title {
-	margin: 0;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	font-weight: 400;
-}
-
-.sp-wizard .sp-more-list {
-	display: grid;
-	gap: 2px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.sp-wizard .sp-more-row {
+.sp-card-header {
 	display: flex;
 	justify-content: space-between;
 	gap: 16px;
-	color: var(--text-color);
+	padding: 20px 20px 12px;
+	align-items: flex-start;
 }
-
-.sp-wizard .sp-money.is-free {
-	color: var(--sp-sage);
+.sp-card-header h3 {
+	font-size: 17px;
+	margin-bottom: 8px;
 }
-
-/* ---------------------------------------------------------------- the tape beside the steps */
-/* Once the wizard leaves the steps about 460 px beside the tape, the tape stands on the right and stays in
- * view as the page scrolls. It is never taller than the window below it (it scrolls inside; the tape
- * measures that room, --sp-tape-room, in wizard_tape.js), and its total stays at its foot. Every browser the
- * desk supports has container queries, so the layout is written once, here. */
-@container sp-wizard (min-width: 860px) {
-	.sp-wizard .sp-layout {
-		grid-template-columns: minmax(0, 1fr) var(--sp-tape-width);
-		grid-template-areas:
-			"banner banner"
-			"tabs tabs"
-			"step tape";
-	}
-
-	.sp-wizard .sp-tape {
-		position: sticky;
-		top: calc(var(--sp-head) + 17px);
-		max-height: var(--sp-tape-room, calc(100vh - var(--sp-head) - 105px));
-		margin-top: 0;
-		padding-bottom: 0; /* the space below is a spacer that scrolls: nothing shows under the total */
-		overflow-y: auto;
-	}
-
-	.sp-wizard .sp-tape::after {
-		content: "";
-		display: block;
-		height: 18px;
-	}
-
-	.sp-wizard .sp-total {
-		position: sticky;
-		z-index: 1;
-		bottom: 0;
-		padding-bottom: 12px;
-		background: var(--fg-color);
-	}
-}
-
-/* ---------------------------------------------------------------- the Zones and Rules steps */
-/* Zones and rules are flat cards on the desk's surface. A rule reads as a clause with its blanks filled in:
- * the joining words are muted, each value is a chip (the desk's own field tint over a baseline rule, so it
- * looks like something to fill in), and what the rule charges the tape's order sits on the right like a
- * receipt line, brass only when it is what the customer pays. Countries, item groups and items are tokens. */
-.sp-wizard .sp-step-intro {
-	max-width: 72ch;
-	margin-bottom: 16px;
-	color: var(--text-muted);
-}
-
-.sp-wizard .sp-empty-state {
-	padding: 4px 0 8px;
-	color: var(--text-muted);
-}
-
-.sp-wizard .sp-add {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 12px;
-	margin-top: 16px;
-}
-
-.sp-wizard .sp-add .btn[aria-disabled="true"] {
-	opacity: 0.6;
-	cursor: not-allowed;
-}
-
-.sp-wizard .sp-sr-only {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	margin: -1px;
-	padding: 0;
-	overflow: hidden;
-	clip: rect(0 0 0 0);
-	white-space: nowrap;
-	border: 0;
-}
-
-.sp-wizard .sp-zones,
-.sp-wizard .sp-rules {
-	display: grid;
-	gap: 14px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.sp-wizard .sp-zone,
-.sp-wizard .sp-rule {
-	position: relative;
-	display: grid;
-	gap: 12px;
-	min-width: 0;
-	padding: 12px 16px 14px;
-	border: 1px solid var(--sp-edge);
-	border-radius: var(--border-radius-md, 10px);
-	background: var(--fg-color);
-}
-
-.sp-wizard .sp-card-head {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	justify-content: space-between;
-	gap: 6px 16px;
-}
-
-.sp-wizard .sp-card-title {
-	display: flex;
-	flex: 1 1 260px;
-	align-items: center;
-	gap: 8px;
-	min-width: 0;
-}
-
-.sp-wizard .sp-card-actions {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 14px;
-}
-
-/* a name that is edited where it is shown: it looks like the card's title until it is pointed at */
-.sp-wizard .sp-title-input {
-	flex: 1 1 auto;
-	width: 100%;
-	min-width: 0;
-	max-width: 38ch;
-	margin: 0 0 0 -7px;
-	padding: 2px 6px;
-	border: 1px solid transparent;
-	border-radius: var(--border-radius-sm, 6px);
-	background: transparent;
-	color: var(--heading-color);
-	font: inherit;
-	font-size: var(--text-lg);
-	font-weight: 600;
-	line-height: 1.4;
-}
-
-.sp-wizard .sp-title-input::placeholder {
-	color: var(--text-light);
-	font-weight: 400;
-}
-
-.sp-wizard .sp-title-input:hover {
-	border-color: var(--border-color);
-}
-
-.sp-wizard .sp-title-input:focus {
-	border-color: var(--sp-rule-strong);
-	background: var(--control-bg);
-}
-
-/* as wide as the name (or the placeholder), where the browser can, so the words after it stay close */
-@supports (field-sizing: content) {
-	.sp-wizard .sp-title-input {
-		flex: 0 1 auto;
-		width: auto;
-		min-width: 8ch;
-		field-sizing: content;
-	}
-}
-
-/* a word about the whole card: Off, Not shipped, Everywhere else */
-.sp-wizard .sp-states {
-	display: inline-flex;
-	flex-wrap: wrap;
-	gap: 4px;
-}
-
-.sp-wizard .sp-state:not(:empty) {
-	flex: none;
-	padding: 0 7px;
-	border: 1px solid var(--sp-rule);
-	border-radius: 999px;
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-	line-height: 18px;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-state.is-not-shipped {
-	border-color: currentColor;
-	color: var(--sp-brick);
-}
-
-.sp-wizard .sp-quiet {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-quiet:hover {
-	color: var(--text-color);
-}
-
-.sp-wizard .sp-problems {
-	display: grid;
-	gap: 4px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-	color: var(--text-color);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-problems:empty,
-.sp-wizard .sp-zone .sp-problem:empty,
-.sp-wizard .sp-editor .sp-problem:empty {
-	display: none;
-}
-
-.sp-wizard .sp-problems li,
-.sp-wizard .sp-zone .sp-problem,
-.sp-wizard .sp-editor .sp-problem {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-	font-size: var(--text-sm);
-}
-
-/* delivery that is not offered: the countries no carrier serves */
-.sp-wizard .sp-warning {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-brick);
-	color: var(--sp-brick);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-/* ---- tokens: the countries of a zone, the groups and items of a set */
-.sp-wizard .sp-token-box:empty {
-	display: none;
-}
-
-.sp-wizard .sp-tokens {
+.sp-chips {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
 }
-
-.sp-wizard .sp-token {
-	display: inline-flex;
-	align-items: center;
-	gap: 2px;
+.sp-chip {
+	font-size: 11px;
+	border: 1px solid var(--border-color);
+	background: var(--subtle-fg);
+	border-radius: 5px;
+	padding: 3px 7px;
 	max-width: 100%;
-	padding: 1px 2px 1px 10px;
-	border-radius: 999px;
-	background: var(--control-bg);
-	color: var(--text-color);
-	font-size: var(--text-sm);
-	line-height: 22px;
-}
-
-.sp-wizard .sp-token-text {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-token-remove {
-	appearance: none;
-	display: inline-grid;
-	flex: none;
-	place-items: center;
-	width: 22px;
-	height: 22px;
-	padding: 0;
-	border: 0;
-	border-radius: 50%;
-	background: none;
-	color: var(--text-muted);
-	font-size: 15px;
-	line-height: 1;
-	cursor: pointer;
-}
-
-.sp-wizard .sp-token-remove:hover {
-	background: var(--sp-chip-hover);
-	color: var(--text-color);
-}
-
-/* ---- a zone; what its switches and texts mean is said once, in the step's legend */
-.sp-wizard .sp-legend {
-	display: grid;
-	gap: 2px;
-	max-width: 80ch;
-	margin: -8px 0 16px;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-legend-entry {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0 6px;
-}
-
-.sp-wizard .sp-legend dt {
-	margin: 0;
-	color: var(--text-color);
-	font-weight: 500;
-}
-
-.sp-wizard .sp-legend dt::after {
-	content: ":";
-}
-
-.sp-wizard .sp-legend dd {
-	margin: 0;
-}
-
-.sp-wizard .sp-countries .sp-combo {
-	max-width: 360px;
-}
-
-.sp-wizard .sp-switches {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px 28px;
-}
-
-.sp-wizard .sp-usage {
-	margin-top: -4px;
-}
-
-.sp-wizard .sp-zone.is-off .sp-title-input {
-	color: var(--text-muted);
-}
-
-/* ---- a rule */
-.sp-wizard .sp-grip {
-	flex: none;
-	width: 10px;
-	height: 16px;
-	border-right: 2px dotted var(--text-light);
-	border-left: 2px dotted var(--text-light);
-	cursor: grab;
-	touch-action: none;
-	user-select: none;
-}
-
-.sp-wizard .sp-grip:hover {
-	border-color: var(--text-muted);
-}
-
-.sp-wizard .sp-rule-number {
-	flex: none;
-	color: var(--heading-color);
-	font-weight: 600;
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-rule-label {
-	margin-left: 0;
-	color: var(--text-color);
-	font-size: var(--text-base);
-	font-weight: 400;
-}
-
-.sp-wizard .sp-moves {
-	display: inline-flex;
-	gap: 2px;
-}
-
-.sp-wizard .sp-icon-button {
-	appearance: none;
-	display: inline-grid;
-	place-items: center;
-	width: 28px;
-	height: 28px;
-	padding: 0;
-	border: 0;
-	border-radius: var(--border-radius-sm, 6px);
-	background: none;
-	color: var(--text-muted);
-	font: inherit;
-	font-size: var(--text-base);
-	cursor: pointer;
-}
-
-.sp-wizard .sp-icon-button:hover {
-	background: var(--fg-hover-color);
-	color: var(--text-color);
-}
-
-.sp-wizard .sp-icon-button[aria-disabled="true"] {
-	opacity: 0.4;
-	cursor: default;
-}
-
-.sp-wizard .sp-icon-button[aria-disabled="true"]:hover {
-	background: none;
-}
-
-/* the sentence, and what the rule charges on the right */
-.sp-wizard .sp-rule-line {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	align-items: start;
-	column-gap: 24px;
-}
-
-.sp-wizard .sp-sentence {
-	color: var(--text-color);
-	font-size: var(--text-lg);
-	line-height: 2;
 	overflow-wrap: anywhere;
 }
-
-.sp-wizard .sp-words {
-	color: var(--text-muted);
+.sp-edit-products {
+	margin: 0 20px 14px;
 }
-
-.sp-wizard .sp-chip {
-	appearance: none;
-	display: inline;
-	margin: 0;
-	padding: 2px 7px 1px;
-	border: 0;
-	border-bottom: 2px solid var(--sp-rule-strong);
-	border-radius: var(--border-radius-tiny, 4px) var(--border-radius-tiny, 4px) 0 0;
+.sp-button {
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	padding: 7px 11px;
 	background: var(--control-bg);
-	color: var(--heading-color);
-	font: inherit;
-	font-weight: 500;
-	line-height: 1.5;
-	text-align: start;
+	color: var(--text-color);
+	font-size: 12px;
+	line-height: 1.4;
+	cursor: pointer;
 	white-space: normal;
-	overflow-wrap: anywhere;
-	cursor: pointer;
-	box-decoration-break: clone;
-	-webkit-box-decoration-break: clone;
-	transition: background-color 120ms ease-out, border-color 120ms ease-out;
-}
-
-.sp-wizard .sp-chip:hover {
-	border-bottom-color: var(--text-color);
-	background: var(--sp-chip-hover);
-}
-
-/* the chip whose editor is open: the same mark as the selected tab */
-.sp-wizard .sp-chip[aria-expanded="true"] {
-	border-bottom-color: var(--heading-color);
-	background: var(--sp-chip-hover);
-}
-
-.sp-wizard .sp-asterisk {
-	margin-left: 1px;
-	color: var(--text-muted);
-	font-weight: 400;
-}
-
-.sp-wizard .sp-rule-price {
-	min-width: 7ch;
-	text-align: right;
-	transition: opacity 120ms ease-out;
-}
-
-/* waiting for the answer to a change, as the tape's receipt does */
-.sp-wizard .sp-rule-price.is-stale {
-	opacity: 0.55;
-}
-
-.sp-wizard .sp-rule-amount {
-	display: block;
-	color: var(--text-muted);
-	font-size: var(--text-2xl, 20px);
-	font-weight: 600;
-	font-variant-numeric: tabular-nums lining-nums;
-	line-height: 32px;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-rule-amount.is-paid {
-	color: var(--sp-brass);
-}
-
-.sp-wizard .sp-rule-amount.is-free {
-	color: var(--sp-sage);
-}
-
-.sp-wizard .sp-rule-reason {
-	display: block;
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-	line-height: 1.35;
-}
-
-/* a rule that does not price the order: its reason alone, level with the sentence's first line */
-.sp-wizard .sp-rule-reason:only-child {
-	font-size: var(--text-sm);
-	line-height: 32px;
-}
-
-.sp-wizard .sp-only-when {
-	margin-top: -6px;
-	font-size: var(--text-sm);
-	line-height: 2;
-}
-
-.sp-wizard .sp-rule.is-off .sp-sentence,
-.sp-wizard .sp-rule.is-off .sp-chip {
-	color: var(--text-muted);
-}
-
-/* moving a rule with the mouse: a line shows where it lands */
-.sp-wizard .sp-rules.is-reordering {
-	user-select: none;
-}
-
-.sp-wizard .sp-rule.is-dragging {
-	z-index: 2;
-	border-color: var(--sp-rule-strong);
-	cursor: grabbing;
-}
-
-.sp-wizard .sp-rule.is-drop-before::before,
-.sp-wizard .sp-rule.is-drop-after::after {
-	content: "";
-	position: absolute;
-	right: 0;
-	left: 0;
-	height: 2px;
-	border-radius: 1px;
-	background: var(--heading-color);
-}
-
-.sp-wizard .sp-rule.is-drop-before::before {
-	top: -9px;
-}
-
-.sp-wizard .sp-rule.is-drop-after::after {
-	bottom: -9px;
-}
-
-.sp-wizard .sp-rules-note {
-	max-width: 72ch;
-	margin-top: 20px;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	line-height: 1.5;
-}
-
-/* ---- the editor a chip opens, under the line of its chip: a ruled region on the card's own surface, so the
- * fields in it keep the desk's field tint */
-.sp-wizard .sp-editor {
-	display: grid;
-	gap: 12px;
-	margin-top: -4px;
-	padding: 12px 14px;
-	border: 1px solid var(--sp-rule);
-	border-radius: var(--border-radius, 8px);
-	background: var(--fg-color);
-	font-size: var(--text-base);
-}
-
-.sp-wizard .sp-editor-title {
-	margin: 0 0 6px;
-	padding: 0;
-	color: var(--heading-color);
-	font-size: var(--text-sm);
-	font-weight: 600;
-}
-
-.sp-wizard .sp-editor-actions {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px;
-}
-
-.sp-wizard .sp-choices {
-	display: grid;
-	gap: 2px;
-	min-width: 0;
-	margin: 0;
-	padding: 0;
-	border: 0;
-}
-
-.sp-wizard .sp-option-row {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 2px 14px;
-}
-
-.sp-wizard .sp-option {
-	display: flex;
-	flex: 1 1 220px;
-	align-items: baseline;
-	gap: 8px;
-	min-width: 0;
-	margin: 0;
-	padding: 4px 8px;
-	border-radius: var(--border-radius-sm, 6px);
-	color: var(--text-color);
-	font-weight: 400;
-	cursor: pointer;
-}
-
-.sp-wizard .sp-option:hover {
-	background: var(--fg-hover-color);
-}
-
-.sp-wizard .sp-option input[type="radio"] {
-	flex: none;
-	margin: 0;
-	transform: translateY(1px);
-}
-
-.sp-wizard .sp-option-text {
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-option-note {
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-}
-
-.sp-wizard .sp-formula-field {
-	max-width: 560px;
-}
-
-.sp-wizard .sp-formula-error {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-	color: var(--text-color);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-formula-error:empty {
-	display: none;
-}
-
-.sp-wizard .sp-limits {
-	display: grid;
-	gap: 8px;
-}
-
-.sp-wizard .sp-limit-row {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 8px;
-}
-
-.sp-wizard .sp-limit-label {
-	flex: 0 0 9.5em;
-	color: var(--text-color);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-limit-word {
-	margin: 0;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	font-weight: 400;
-}
-
-.sp-wizard .sp-limit {
-	width: 8em;
-	text-align: right;
-}
-
-.sp-wizard .sp-limit::placeholder {
 	text-align: left;
 }
-
-.sp-wizard .sp-set-editor {
-	display: grid;
-	gap: 12px;
+.sp-button:hover {
+	background: var(--btn-default-hover-bg, var(--subtle-fg));
 }
-
-.sp-wizard .sp-set-editor .sp-input,
-.sp-wizard .sp-set-editor .sp-combo,
-.sp-wizard .sp-set-editor .sp-item-picker {
-	max-width: 360px;
-}
-
-/* a narrow wizard: what a rule charges goes under its sentence */
-@container sp-wizard (max-width: 560px) {
-	.sp-wizard .sp-rule-line {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.sp-wizard .sp-rule-price {
-		text-align: left;
-	}
-}
-
-/* ---------------------------------------------------------------- the Fallback and Review steps */
-/* A fallback card has a rule card's anatomy: the zone on the left and, on the right, what the fallback comes
- * to, as a rule card shows its price (brass when customers pay it, sage when it is free, brick when delivery is
- * not offered, quiet words otherwise). Then the choice, its chosen line marked like a filled-in chip, and one
- * sentence of what it means for customers. */
-.sp-wizard .sp-fallback-head {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 4px 16px;
-}
-
-.sp-wizard .sp-fallback-title {
-	margin: 0;
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-	line-height: 1.4;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-fallback.is-off .sp-fallback-title {
-	color: var(--text-muted);
-}
-
-.sp-wizard .sp-fallback-figure {
-	margin-left: auto;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	line-height: 28px;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-fallback-figure.is-paid,
-.sp-wizard .sp-fallback-figure.is-free {
-	font-size: var(--text-2xl, 20px);
-	font-weight: 600;
-	font-variant-numeric: tabular-nums lining-nums;
-}
-
-.sp-wizard .sp-fallback-figure.is-paid {
-	color: var(--sp-brass);
-}
-
-.sp-wizard .sp-fallback-figure.is-free {
-	color: var(--sp-sage);
-}
-
-.sp-wizard .sp-fallback-figure.is-not-offered {
-	color: var(--sp-brick);
-	font-weight: 600;
-}
-
-.sp-wizard .sp-fallback-choices .sp-option {
-	flex: 0 1 auto;
-	padding: 3px 10px 2px 8px;
-	border-bottom: 2px solid transparent;
-	border-radius: var(--border-radius-tiny, 4px) var(--border-radius-tiny, 4px) 0 0;
-}
-
-/* the chosen line reads as a blank filled in, as a rule's chips do */
-.sp-wizard .sp-fallback-choices .sp-option:has(input:checked) {
-	border-bottom-color: var(--sp-rule-strong);
-	background: var(--control-bg);
-	color: var(--heading-color);
-}
-
-.sp-wizard .sp-amount-box {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.sp-wizard .sp-amount-sign {
-	color: var(--text-muted);
-}
-
-.sp-wizard .sp-amount {
-	width: 7.5em;
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-}
-
-.sp-wizard .sp-fallback .sp-problem:empty {
-	display: none;
-}
-
-.sp-wizard .sp-fallback .sp-problem {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-fallback-sentence {
-	max-width: 72ch;
-	color: var(--text-color);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-/* the policy default and "Anything not covered" are for the whole policy: set apart from the zones */
-.sp-wizard .sp-fallback-policy {
-	margin-top: 28px;
-}
-
-/* With the rate card as the price source none of the fallbacks is used: a note says so, and what each would
- * come to goes quiet (the choices can still be made, for when the carrier is the price source again). */
-.sp-wizard .sp-mode-note {
-	max-width: 72ch;
-	margin: -4px 0 16px;
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-	color: var(--text-color);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-fallback-step.is-unused .sp-fallback-sentence,
-.sp-wizard .sp-fallback-step.is-unused .sp-fallback-figure {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	font-weight: 400;
-}
-
-/* The Review step reads as one statement, top down, not as cards: the problems, what will change, the policy
- * in plain words; then the receipt's double rule, and under it the decision to go live, as the tape's total
- * stands under its own. */
-.sp-wizard .sp-review-part {
-	max-width: 80ch;
-	margin-bottom: 28px;
-}
-
-.sp-wizard .sp-review-title {
-	margin: 0 0 10px;
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-	line-height: 1.4;
-}
-
-.sp-wizard .sp-review-diff > *,
-.sp-wizard .sp-review-problems {
-	transition: opacity 120ms ease-out;
-}
-
-/* waiting for the server's word on the draft as it is, as the tape's receipt waits for its price; after a stale
- * Apply, out of date (the line that says so stays at full strength) */
-.sp-wizard .sp-review-diff.is-stale > :not(.sp-out-of-date),
-.sp-wizard .sp-review-problems.is-stale {
-	opacity: 0.55;
-}
-
-.sp-wizard .sp-out-of-date {
-	max-width: 72ch;
-	margin-bottom: 8px;
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-	color: var(--text-color);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-review-problem-list {
-	display: grid;
-	gap: 6px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.sp-wizard .sp-review-problem {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-brick);
-	color: var(--sp-brick);
-	line-height: 1.5;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-fix {
-	margin-left: 10px;
-	font-size: var(--text-sm);
-	white-space: nowrap;
-}
-
-/* what will change: a ledger, its labels in one quiet column */
-.sp-wizard .sp-changes {
-	display: grid;
-	grid-template-columns: max-content minmax(0, 1fr);
-	gap: 4px 16px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-	line-height: 1.5;
-}
-
-.sp-wizard .sp-change {
-	display: grid;
-	grid-column: 1 / -1;
-	grid-template-columns: 13em minmax(0, 1fr);
-	grid-template-columns: subgrid;
-}
-
-.sp-wizard .sp-change-label {
-	color: var(--text-muted);
-}
-
-.sp-wizard .sp-change-text {
-	color: var(--text-color);
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-change-text:only-child {
-	grid-column: 1 / -1;
-}
-
-.sp-wizard .sp-change-arrow {
-	color: var(--text-muted);
-}
-
-/* the policy in plain words: a short paragraph a zone, its rules in the order they are checked */
-.sp-wizard .sp-review-summary {
-	display: grid;
-	gap: 18px;
-}
-
-.sp-wizard .sp-summary-source,
-.sp-wizard .sp-summary-closing {
-	max-width: 72ch;
-	color: var(--text-muted);
-	line-height: 1.55;
-}
-
-.sp-wizard .sp-summary-zone {
-	display: grid;
-	gap: 4px;
-	min-width: 0;
-}
-
-.sp-wizard .sp-summary-name {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px 8px;
-	margin: 0;
-	color: var(--heading-color);
-	font-size: var(--text-base);
-	font-weight: 600;
-	line-height: 1.5;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-summary-text {
-	max-width: 72ch;
-	line-height: 1.55;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-summary-rules {
-	display: grid;
-	gap: 2px;
-	max-width: 72ch;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-	line-height: 1.55;
-}
-
-/* with the rate card as the price source, what is not used reads quietly (the first sentence says why) */
-.sp-wizard .sp-review-summary.is-unused .sp-summary-rules,
-.sp-wizard .sp-review-summary.is-unused .sp-summary-pricing,
-.sp-wizard .sp-review-summary.is-unused .sp-summary-closing {
-	color: var(--text-muted);
-}
-
-.sp-wizard .sp-review-summary.is-unused .sp-summary-source {
-	color: var(--text-color);
-}
-
-/* a rule that wraps hangs under its own first word, so each starts where the eye looks for it */
-.sp-wizard .sp-summary-rules li {
-	padding-left: 1.25em;
-	text-indent: -1.25em;
-	overflow-wrap: anywhere;
-}
-
-/* going live */
-.sp-wizard .sp-golive {
-	display: grid;
-	gap: 14px;
-	max-width: 80ch;
-	padding-top: 16px;
-	border-top: 3px double var(--sp-rule-strong);
-}
-
-.sp-wizard .sp-switch-row {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 12px;
-}
-
-.sp-wizard .sp-switch-label {
-	margin: 0;
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-	cursor: pointer;
-}
-
-.sp-wizard .sp-switch-state {
-	color: var(--text-color);
-}
-
-/* The switch: the desk's own switch (its track, knob and colours: --switch-bg, --neutral, --invert-neutral),
- * drawn on the checkbox itself so that it stays a real control to tab to and click; its state is always said
- * in words beside it. The desk's pale off track alone is hard to see on its surface, so it has a 1 px ring in
- * the muted text colour. The desk sizes every checkbox with !important, hence the two here; its box sizing is
- * the border box, so the knob sits 1 px in from the ring. */
-.sp-wizard .sp-switch {
-	appearance: none;
-	position: relative;
-	flex: none;
-	box-sizing: border-box;
-	width: 32px !important;
-	height: 18px;
-	margin: 0 !important;
-	border: 1px solid var(--text-muted);
-	border-radius: 999px;
-	background: var(--switch-bg, var(--gray-500));
-	cursor: pointer;
-	transition: background-color 120ms ease-out, border-color 120ms ease-out;
-}
-
-.sp-wizard .sp-switch::before {
-	content: "";
-	position: absolute;
-	top: 1px;
-	inset-inline-start: 1px;
-	width: 14px;
-	height: 14px;
-	border-radius: 50%;
-	background: var(--neutral, #fff);
-	transition: inset-inline-start 120ms ease-out;
-}
-
-/* the whole border again: the desk's own rule for a ticked checkbox takes it away */
-.sp-wizard .sp-switch:checked {
-	border: 1px solid var(--invert-neutral, var(--heading-color));
-	background: var(--invert-neutral, var(--heading-color));
-}
-
-.sp-wizard .sp-switch:checked::before {
-	inset-inline-start: 15px;
-}
-
-.sp-wizard .sp-apply-row {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px 16px;
-}
-
-.sp-wizard .sp-apply.disabled {
+.sp-button:disabled {
+	opacity: 0.45;
 	cursor: not-allowed;
 }
-
-.sp-wizard .sp-apply-why {
+.sp-button.sp-primary {
+	background: var(--primary);
+	color: var(--fg-color, #fff);
+	border-color: var(--primary);
+	font-weight: 600;
+}
+.sp-primary:hover {
+	background: var(--primary);
+	filter: brightness(0.94);
+}
+.sp-button:focus-visible,
+.sp-input:focus-visible,
+.sp-check input:focus-visible,
+.sp-menu summary:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 3px;
+}
+.sp-add {
+	border: 0;
+	background: transparent;
 	color: var(--text-muted);
-	font-size: var(--text-sm);
+	padding: 12px 20px;
 }
-
-.sp-wizard .sp-apply-why .sp-link {
-	margin-left: 8px;
+.sp-add:hover {
+	color: var(--text-color);
 }
-
-.sp-wizard .sp-apply-error:not(:empty),
-.sp-wizard .sp-apply-done:not(:empty) {
+.sp-row-head,
+.sp-row-summary {
 	display: grid;
-	gap: 8px;
-	padding-left: 10px;
-	font-size: var(--text-sm);
-	line-height: 1.5;
+	grid-template-columns: 1fr 1.1fr 1fr;
+	gap: 12px;
 }
-
-.sp-wizard .sp-apply-error:not(:empty) {
-	border-left: 2px solid var(--sp-brick);
-	color: var(--sp-brick);
-	overflow-wrap: anywhere;
+.sp-row-head {
+	font-size: 10px;
+	letter-spacing: 0.4px;
+	color: var(--text-muted);
+	padding: 9px 53px 9px 20px;
+	border-top: 1px solid var(--border-color);
+	background: var(--subtle-fg);
 }
-
-.sp-wizard .sp-apply-lines {
-	margin: 0;
-	padding-left: 1.2em;
-}
-
-.sp-wizard .sp-apply-actions {
+.sp-row-line {
 	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
+	align-items: stretch;
+	border-top: 1px solid var(--border-color);
+	padding-right: 10px;
 }
-
-.sp-wizard .sp-apply-done:not(:empty) {
-	border-left: 2px solid var(--sp-rule-strong);
-}
-
-.sp-wizard .sp-apply-done-title {
-	color: var(--heading-color);
-	font-size: var(--text-base);
-	font-weight: 600;
-}
-
-/* a narrow wizard: the ledger's labels go above what they say */
-@container sp-wizard (max-width: 560px) {
-	.sp-wizard .sp-changes,
-	.sp-wizard .sp-change {
-		grid-template-columns: minmax(0, 1fr);
-	}
-}
-
-/* ---------------------------------------------------------------- the Rates step and the Test tab */
-/* The Rates step reads like a courier's printed tariff: the price source as two filled-in blanks, then the
- * import, whose preview is a receipt (a tear line, what the files hold, the notes and problems, then the decision
- * under the double rule), then the card as a sheet: numbered profiles (the first that fits an item takes it), each
- * opening to a ledger of zones whose prices stand on the right, brass for what customers pay and sage for free.
- * Everything is a line until it is opened. The Test tab is an inspection slip: the sample order, the three checks
- * in their order, and the verdict under the receipt's double rule. Words carry every state. */
-.sp-wizard summary:focus-visible,
-.sp-wizard .sp-file:focus-visible + .sp-file-button,
-.sp-wizard .sp-import-read:focus-visible,
-.sp-wizard .sp-import-taken-title:focus-visible {
-	outline: 2px solid var(--text-color);
-	outline-offset: 2px;
-	box-shadow: none;
-}
-
-/* ---- a line that opens: a chevron, its words, and anything on the right */
-.sp-wizard .sp-disclosure {
-	appearance: none;
-	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto;
-	align-items: baseline;
-	gap: 2px 10px;
-	width: 100%;
-	margin: 0;
-	padding: 10px 12px;
+.sp-row-line > .sp-button {
 	border: 0;
-	border-radius: var(--border-radius-sm, 6px);
-	background: none;
-	color: var(--text-color);
-	font: inherit;
-	text-align: start;
-	cursor: pointer;
-}
-
-.sp-wizard .sp-disclosure:hover {
-	background: var(--fg-hover-color);
-}
-
-.sp-wizard .sp-chevron {
-	display: inline-block;
-	width: 0;
-	height: 0;
-	border-top: 4px solid transparent;
-	border-bottom: 4px solid transparent;
-	border-left: 6px solid var(--text-muted);
-	transform: translateY(-1px);
-	transition: transform 120ms ease-out;
-}
-
-.sp-wizard .sp-disclosure[aria-expanded="true"] .sp-chevron {
-	transform: translateY(-1px) rotate(90deg);
-}
-
-.sp-wizard .sp-disclosure-text {
-	display: grid;
-	gap: 2px;
-	min-width: 0;
-}
-
-.sp-wizard .sp-disclosure-about {
+	background: transparent;
 	color: var(--text-muted);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-	overflow-wrap: anywhere;
 }
-
-/* ---- the price source: two filled-in blanks, each saying what it means */
-.sp-wizard .sp-source {
-	display: grid;
-	gap: 4px;
-	max-width: 80ch;
-	min-width: 0;
-	margin: 0 0 24px;
-	padding: 0;
+.sp-row-summary {
+	flex: 1;
 	border: 0;
-}
-
-.sp-wizard .sp-source-title {
-	margin: 0 0 6px;
-	padding: 0;
-	border: 0;
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-	line-height: 1.4;
-}
-
-.sp-wizard .sp-source-option {
-	display: flex;
-	align-items: baseline;
-	gap: 10px;
-	margin: 0;
-	padding: 8px 10px 7px;
-	border-bottom: 2px solid transparent;
-	border-radius: var(--border-radius-tiny, 4px) var(--border-radius-tiny, 4px) 0 0;
-	color: var(--text-color);
-	font-weight: 400;
-	cursor: pointer;
-}
-
-.sp-wizard .sp-source-option:hover {
-	background: var(--fg-hover-color);
-}
-
-.sp-wizard .sp-source-option:has(input:checked) {
-	border-bottom-color: var(--sp-rule-strong);
-	background: var(--control-bg);
-}
-
-.sp-wizard .sp-source-option input[type="radio"] {
-	flex: none;
-	margin: 0;
-	transform: translateY(1px);
-}
-
-.sp-wizard .sp-source-text {
-	display: grid;
-	gap: 2px;
-	min-width: 0;
-}
-
-.sp-wizard .sp-source-label {
-	color: var(--heading-color);
-	font-weight: 600;
-}
-
-.sp-wizard .sp-source-sentence {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-source-option:has(input:checked) .sp-source-sentence {
-	color: var(--text-color);
-}
-
-.sp-wizard .sp-source .sp-warning,
-.sp-wizard .sp-quiet-note {
-	margin-top: 8px;
-}
-
-.sp-wizard .sp-quiet-note {
-	max-width: 72ch;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-/* ---- what stops the card: the server's sentences, brick */
-.sp-wizard .sp-rates-problems {
-	max-width: 80ch;
-	margin-bottom: 24px;
-	transition: opacity 120ms ease-out;
-}
-
-.sp-wizard .sp-rates-problems.is-stale {
-	opacity: 0.55;
-}
-
-.sp-wizard .sp-rates-problems-title {
-	margin: 0 0 8px;
-	color: var(--heading-color);
-	font-size: var(--text-base);
-	font-weight: 600;
-}
-
-.sp-wizard .sp-rates-problem-list {
-	display: grid;
-	gap: 6px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.sp-wizard .sp-rates-problem {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-brick);
-	color: var(--sp-brick);
-	line-height: 1.5;
-	overflow-wrap: anywhere;
-}
-
-/* ---- the import: a form card whose preview is a receipt */
-.sp-wizard .sp-import {
-	container: sp-import / inline-size;
-	margin-bottom: 28px;
-	border: 1px solid var(--sp-edge);
-	border-radius: var(--border-radius-md, 10px);
-	background: var(--fg-color);
-}
-
-.sp-wizard .sp-import-head {
-	margin: 0;
-	padding: 4px;
-	font-size: var(--text-lg);
-}
-
-.sp-wizard .sp-import-toggle {
-	grid-template-columns: auto minmax(0, 1fr);
+	border-radius: 0;
+	background: transparent;
+	padding: 15px 20px;
 	align-items: center;
-	color: var(--heading-color);
-	font-weight: 600;
-}
-
-.sp-wizard .sp-import-body {
-	display: grid;
-	gap: 14px;
-	padding: 0 16px 16px;
-}
-
-.sp-wizard .sp-import-intro,
-.sp-wizard .sp-sheet-note {
-	max-width: 72ch;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	line-height: 1.5;
-}
-
-.sp-wizard .sp-import-files {
-	display: grid;
-	gap: 16px;
-}
-
-.sp-wizard .sp-import-file {
-	display: grid;
-	gap: 4px;
+	font-size: 12px;
 	min-width: 0;
-	margin: 0;
-	padding: 0;
-	border: 0;
 }
-
-.sp-wizard .sp-import-legend {
-	margin: 0 0 4px;
-	padding: 0;
-	border: 0;
-	color: var(--heading-color);
-	font-size: var(--text-base);
-	font-weight: 600;
-}
-
-/* a file field: the panel's own button and the file it holds (the browser's field is there for the keyboard only) */
-.sp-wizard .sp-file-row {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 4px 10px;
-	margin-bottom: 6px;
-}
-
-.sp-wizard .sp-file-button {
-	flex: none;
-	margin: 0;
-	font-weight: 400;
-	cursor: pointer;
-}
-
-.sp-wizard .sp-file-note {
+.sp-row-summary > span {
 	min-width: 0;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
 	overflow-wrap: anywhere;
 }
-
-.sp-wizard .sp-file-note.is-problem {
-	color: var(--sp-brick);
+.sp-row-summary[aria-expanded="true"] {
+	background: var(--subtle-fg);
 }
-
-.sp-wizard .sp-paste {
-	min-height: 4.5em;
-	font-size: var(--text-sm);
+.sp-price {
+	color: var(--sp-brass);
 	font-variant-numeric: tabular-nums;
-	resize: vertical;
-}
-
-.sp-wizard .sp-import-actions {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 14px;
-}
-
-.sp-wizard .sp-import-actions .btn[aria-disabled="true"] {
-	opacity: 0.6;
-	cursor: progress;
-}
-
-.sp-wizard .sp-import-status {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-import-problem:not(:empty),
-.sp-wizard .sp-test-problem:not(:empty) {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-brick);
-	color: var(--sp-brick);
-	font-size: var(--text-sm);
-	line-height: 1.5;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-import-preview {
-	display: grid;
-	gap: 12px;
-	padding-top: 14px;
-	border-top: 1px dashed var(--sp-rule);
-}
-
-.sp-wizard .sp-import-read {
-	max-width: 64ch;
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 500;
-	line-height: 1.4;
-}
-
-.sp-wizard .sp-import-notes,
-.sp-wizard .sp-pattern-help {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-import-notes summary,
-.sp-wizard .sp-pattern-help summary {
-	width: fit-content;
-	color: var(--text-color);
-	text-decoration: underline;
-	text-underline-offset: 2px;
-	cursor: pointer;
-}
-
-.sp-wizard .sp-pattern-help .sp-hint {
-	max-width: 72ch;
-	margin-top: 6px;
-	font-size: var(--text-sm);
-	line-height: 1.5;
-}
-
-.sp-wizard .sp-import-list {
-	display: grid;
-	gap: 4px;
-	margin: 6px 0 0;
-	padding: 0;
-	list-style: none;
-	line-height: 1.5;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-import-notes .sp-import-list li {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule);
-}
-
-.sp-wizard .sp-import-problems {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-brick);
-	color: var(--sp-brick);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-import-problems-title {
-	color: var(--text-color);
-	line-height: 1.5;
-}
-
-.sp-wizard .sp-import-closed,
-.sp-wizard .sp-import-missing {
-	max-width: 80ch;
-	line-height: 1.6;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-import-missing {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-import-use {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px 16px;
-	padding-top: 14px;
-	border-top: 3px double var(--sp-rule-strong);
-}
-
-.sp-wizard .sp-import-use .sp-hint,
-.sp-wizard .sp-import-taken .sp-hint {
-	font-size: var(--text-sm);
-}
-
-/* what Use these rates did: under the panel's title line, which it stays beside once the panel has folded */
-.sp-wizard .sp-import-taken:not(:empty) {
-	display: grid;
-	gap: 6px;
-	margin: 0 16px 14px;
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-	font-size: var(--text-sm);
-	line-height: 1.5;
-}
-
-.sp-wizard .sp-import-taken-title {
-	color: var(--heading-color);
-	font-size: var(--text-base);
 	font-weight: 600;
 }
-
-.sp-wizard .sp-import-switch {
-	margin-top: 4px;
+.sp-free {
+	color: var(--sp-sage);
 }
-
-/* ---- the card as a sheet: numbered profiles, each a ledger of zones */
-.sp-wizard .sp-sheet {
+.sp-blocked {
+	color: var(--sp-brick);
+}
+.sp-row-editor {
 	display: grid;
-	gap: 8px;
+	grid-template-columns: 1fr 1.5fr;
+	gap: 18px;
+	padding: 20px;
+	background: var(--subtle-fg);
+	border-top: 1px solid var(--border-color);
 }
-
-.sp-wizard .sp-sheet-title {
-	margin: 0;
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-	line-height: 1.4;
+.sp-row-editor > .sp-field:first-child {
+	grid-column: 1/-1;
+	max-width: 300px;
 }
-
-.sp-wizard .sp-sheet-summary {
-	color: var(--text-color);
-	line-height: 1.5;
-}
-
-.sp-wizard .sp-profiles {
-	display: grid;
-	gap: 12px;
-	margin: 8px 0 0;
-	padding: 0;
-	list-style: none;
-}
-
-.sp-wizard .sp-profile {
+.sp-field {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	margin: 0 0 12px;
+	font-size: 12px;
+	font-weight: normal;
 	min-width: 0;
-	border: 1px solid var(--sp-edge);
-	border-radius: var(--border-radius-md, 10px);
-	background: var(--fg-color);
 }
-
-.sp-wizard .sp-profile-head {
+.sp-field > span:first-child {
+	font-weight: 600;
+	color: var(--text-color);
+}
+.sp-input {
+	width: 100%;
+	min-width: 0;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background: var(--control-bg);
+	color: var(--text-color);
+	padding: 8px 10px;
+	font-size: 12px;
+	min-height: 34px;
+}
+.sp-check {
 	display: flex;
 	align-items: flex-start;
-	gap: 6px;
-	padding: 4px 8px 4px 4px;
-}
-
-.sp-wizard .sp-profile-head .sp-moves {
-	flex: none;
-	margin-top: 8px;
-}
-
-.sp-wizard .sp-profile-line {
-	display: flex;
-	align-items: baseline;
-	gap: 10px;
-	min-width: 0;
-}
-
-.sp-wizard .sp-profile-number {
-	flex: none;
-	color: var(--text-muted);
-	font-weight: 600;
-	font-variant-numeric: tabular-nums;
-}
-
-.sp-wizard .sp-profile-title {
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-	line-height: 1.4;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-profile-body {
-	display: grid;
-	gap: 16px;
-	margin: 0 16px;
-	padding: 14px 0 16px;
-	border-top: 1px dashed var(--sp-rule);
-}
-
-.sp-wizard .sp-profile-name .sp-input,
-.sp-wizard .sp-pattern-row,
-.sp-wizard .sp-czone-body .sp-countries .sp-combo,
-.sp-wizard .sp-czone-body .sp-field > .sp-input {
-	max-width: 360px;
-}
-
-.sp-wizard .sp-profile-body .sp-problem:empty,
-.sp-wizard .sp-czone-body .sp-problem:empty,
-.sp-wizard .sp-tiers .sp-problem:empty {
-	display: none;
-}
-
-.sp-wizard .sp-profile-body .sp-problem,
-.sp-wizard .sp-czone-body .sp-problem {
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-pattern-row {
-	display: flex;
 	gap: 8px;
-	align-items: center;
-}
-
-.sp-wizard .sp-pattern-input {
-	flex: 1 1 auto;
-}
-
-.sp-wizard .sp-profile-foot {
-	display: flex;
-	justify-content: flex-end;
-}
-
-/* a zone: a ledger line, its prices on the right */
-.sp-wizard .sp-czones {
-	margin: 0;
-	padding: 0;
-	border-bottom: 1px solid var(--sp-rule);
-	list-style: none;
-}
-
-.sp-wizard .sp-czone {
-	border-top: 1px solid var(--sp-rule);
-}
-
-.sp-wizard .sp-czone-toggle {
-	padding: 10px 8px;
-	border-radius: 0;
-}
-
-.sp-wizard .sp-czone-title {
-	color: var(--heading-color);
-	font-weight: 600;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-czone-figure {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	font-variant-numeric: tabular-nums lining-nums;
-	text-align: end;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-czone-figure.is-paid,
-.sp-wizard .sp-czone-figure.is-free {
-	font-size: var(--text-2xl, 20px);
-	font-weight: 600;
-	line-height: 1.2;
-}
-
-.sp-wizard .sp-czone-figure.is-paid {
-	color: var(--sp-brass);
-}
-
-.sp-wizard .sp-czone-figure.is-free {
-	color: var(--sp-sage);
-}
-
-.sp-wizard .sp-czone-body {
-	display: grid;
-	gap: 14px;
-	padding: 4px 8px 18px 28px;
-}
-
-.sp-wizard .sp-unknown-countries:empty {
-	display: none;
-}
-
-.sp-wizard .sp-unknown-countries {
-	display: grid;
-	gap: 6px;
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-brick);
-}
-
-.sp-wizard .sp-unknown-note {
-	color: var(--sp-brick);
-	font-size: var(--text-sm);
-	line-height: 1.45;
-}
-
-.sp-wizard .sp-unknown-countries .sp-token {
-	color: var(--sp-brick);
-}
-
-.sp-wizard .sp-more-countries {
-	width: fit-content;
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-czone-method {
-	display: grid;
-	grid-template-columns: minmax(0, 360px) 7em;
-	gap: 8px 12px;
-	align-items: start;
-}
-
-.sp-wizard .sp-czone-method .sp-field > .sp-input {
-	max-width: none;
-}
-
-.sp-wizard .sp-days {
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-}
-
-.sp-wizard .sp-czone-kinds {
-	gap: 4px;
-}
-
-.sp-wizard .sp-czone-kind-row {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 2px 8px;
-}
-
-.sp-wizard .sp-czone-kind-row .sp-option {
-	flex: 0 1 auto;
-	padding: 3px 10px 2px 8px;
-	border-bottom: 2px solid transparent;
-	border-radius: var(--border-radius-tiny, 4px) var(--border-radius-tiny, 4px) 0 0;
-}
-
-.sp-wizard .sp-czone-kind-row .sp-option:has(input:checked) {
-	border-bottom-color: var(--sp-rule-strong);
-	background: var(--control-bg);
-	color: var(--heading-color);
-}
-
-/* a choice that waits for something else first: dimmed, its reason in its title (and its description) */
-.sp-wizard .sp-czone-kind-row .sp-option:has(input:disabled) {
-	color: var(--text-muted);
-	cursor: not-allowed;
-}
-
-/* the tiers: a ledger of weight bands and their prices, the prices right-aligned as on a receipt */
-/* as wide as its columns: a grid item would stretch to the zone's width, and part the weights from their prices */
-.sp-wizard .sp-tiers {
-	justify-self: start;
-	width: auto;
-	max-width: 100%;
-	border-collapse: collapse;
-	font-variant-numeric: tabular-nums lining-nums;
-}
-
-.sp-wizard .sp-tiers th {
-	padding: 0 16px 6px 0;
-	border-bottom: 1px dashed var(--sp-rule);
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	font-weight: 400;
-	text-align: start;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-tiers .sp-tier-price-head {
-	text-align: end;
-}
-
-.sp-wizard .sp-tier td {
-	padding: 6px 16px 0 0;
-	vertical-align: top;
-}
-
-.sp-wizard .sp-tier-band {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.sp-wizard .sp-tier-any {
-	display: inline-block;
-	padding-top: 6px;
-	color: var(--text-color);
-}
-
-.sp-wizard .sp-tier-input {
-	width: 6.5em;
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-}
-
-.sp-wizard .sp-tier-price {
-	text-align: end;
-}
-
-.sp-wizard .sp-tier-price .sp-amount-box {
-	justify-content: flex-end;
-}
-
-.sp-wizard .sp-tier .sp-problem {
-	max-width: 24ch;
-	margin-top: 4px;
-	color: var(--text-color);
-	font-size: var(--text-xs);
-	line-height: 1.35;
-	text-align: start;
-	white-space: normal;
-}
-
-.sp-wizard .sp-tier td.sp-tier-remove {
-	padding-top: 12px;
-	white-space: nowrap;
-}
-
-/* ---- the Review's lines of the card */
-.sp-wizard .sp-summary-card {
-	display: grid;
-	gap: 14px;
-	padding-left: 10px;
-	border-left: 2px solid var(--sp-rule-strong);
-}
-
-.sp-wizard .sp-summary-number {
-	color: var(--text-muted);
-	font-variant-numeric: tabular-nums;
-}
-
-.sp-wizard .sp-summary-card-zones {
-	display: grid;
-	gap: 2px;
-	max-width: 72ch;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-	line-height: 1.55;
-}
-
-.sp-wizard .sp-summary-card-zones li {
-	padding-left: 1.25em;
-	text-indent: -1.25em;
-	overflow-wrap: anywhere;
-}
-
-/* ---- the Test tab */
-.sp-wizard .sp-test-order {
-	display: grid;
-	gap: 12px;
-	max-width: 640px;
-	min-width: 0;
-	margin: 0 0 18px;
-	padding: 0;
-	border: 0;
-}
-
-.sp-wizard .sp-test-legend {
-	margin: 0 0 2px;
-	padding: 0;
-	border: 0;
-	color: var(--heading-color);
-	font-size: var(--text-lg);
-	font-weight: 600;
-	line-height: 1.4;
-}
-
-.sp-wizard .sp-test-place {
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 12px;
-}
-
-.sp-wizard .sp-test-run {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px 12px;
-	margin-bottom: 14px;
-}
-
-.sp-wizard .sp-test-run .btn[aria-disabled="true"] {
-	opacity: 0.6;
-	cursor: progress;
-}
-
-/* the desk's own spinner (Bootstrap's), in the muted text colour */
-.sp-wizard .sp-spinner {
-	width: 16px;
-	height: 16px;
-	border-width: 2px;
-	color: var(--text-muted);
-}
-
-.sp-wizard .sp-test-status {
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-test-results {
-	display: grid;
-	gap: 0;
-	max-width: 80ch;
-	margin-top: 8px;
-}
-
-.sp-wizard .sp-checks {
-	display: grid;
-	gap: 10px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.sp-wizard .sp-check {
-	display: grid;
-	gap: 8px;
-	min-width: 0;
-	padding: 12px 16px;
-	border: 1px solid var(--sp-edge);
-	border-radius: var(--border-radius-md, 10px);
-	background: var(--fg-color);
-}
-
-.sp-wizard .sp-check.is-failed {
-	border-left: 3px solid var(--sp-brick);
-}
-
-.sp-wizard .sp-check-head {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 4px 12px;
-}
-
-.sp-wizard .sp-check-status {
-	flex: none;
-	padding: 0 8px;
-	border: 1px solid var(--sp-rule);
-	border-radius: 999px;
-	color: var(--text-muted);
-	font-size: var(--text-xs);
-	font-weight: 500;
-	line-height: 20px;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-check.is-passed .sp-check-status {
-	border-color: var(--sp-rule-strong);
-	color: var(--heading-color);
-}
-
-.sp-wizard .sp-check.is-failed .sp-check-status {
-	border-color: currentColor;
-	color: var(--sp-brick);
-}
-
-.sp-wizard .sp-check-name {
-	margin: 0;
-	color: var(--heading-color);
-	font-size: var(--text-base);
-	font-weight: 600;
-	line-height: 1.4;
-}
-
-.sp-wizard .sp-check-time {
-	margin-left: auto;
-	color: var(--text-muted);
-	font-size: var(--text-sm);
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-
-.sp-wizard .sp-check-summary {
-	color: var(--text-color);
-	line-height: 1.5;
-	overflow-wrap: anywhere;
-}
-
-.sp-wizard .sp-check-detail {
-	font-size: var(--text-sm);
-}
-
-.sp-wizard .sp-check-detail summary {
-	width: fit-content;
-	color: var(--text-muted);
-	text-decoration: underline;
-	text-underline-offset: 2px;
+	font-size: 12px;
+	font-weight: normal;
+	margin: 0 0 8px;
 	cursor: pointer;
 }
-
-.sp-wizard .sp-check-json {
-	max-height: 320px;
-	margin: 8px 0 0;
-	padding: 10px 12px;
-	overflow: auto;
-	border: 1px solid var(--sp-rule);
-	border-radius: var(--border-radius-sm, 6px);
-	background: var(--control-bg);
-	color: var(--text-color);
-	font: inherit;
-	font-size: var(--text-xs);
-	font-variant-numeric: tabular-nums;
-	line-height: 1.5;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
+.sp-check input {
+	margin-top: 3px;
+	accent-color: var(--primary);
 }
-
-/* the verdict: the slip's total, under the receipt's double rule. Its live region is always there; until it holds a
- * sentence it has neither rule nor label, and takes no room */
-.sp-wizard .sp-test-total {
-	max-width: 80ch;
-	margin-top: 16px;
-	padding-top: 12px;
-	border-top: 3px double var(--sp-rule-strong);
+.sp-services fieldset {
+	padding: 0;
+	border: 0;
+	margin: 0 0 14px;
 }
-
-.sp-wizard .sp-test-total:has(.sp-test-verdict:empty) {
-	margin-top: 0;
+.sp-services legend {
+	font-size: 12px;
+	font-weight: 600;
+	margin: 0 0 8px;
+}
+.sp-services .sp-check {
+	font-size: 11px;
+}
+.sp-segments {
+	display: flex;
+	gap: 3px;
+	flex-wrap: wrap;
+	margin-bottom: 14px;
+}
+.sp-segments .sp-button {
+	padding: 6px 8px;
+	font-size: 11px;
+	background: var(--card-bg);
+}
+.sp-segments .sp-selected {
+	border-color: var(--primary);
+	box-shadow: inset 0 0 0 1px var(--primary);
+}
+.sp-tier {
+	display: grid;
+	grid-template-columns: auto minmax(40px, 1fr) auto minmax(40px, 1fr) auto;
+	gap: 5px;
+	align-items: center;
+	margin-bottom: 8px;
+	font-size: 11px;
+}
+.sp-tier .sp-input {
+	padding: 6px;
+}
+.sp-tier .sp-button {
+	border: 0;
+}
+.sp-done {
+	grid-column: 1/-1;
+	justify-self: end;
+}
+.sp-section {
+	border-top: 1px solid var(--border-color);
+	padding: 22px 0 2px;
+	margin-top: 18px;
+}
+.sp-section h3 {
+	font-size: 14px;
+	margin-bottom: 14px;
+}
+.sp-zone-list {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.sp-fallback {
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+.sp-fallback > .sp-input {
+	width: 90px;
+}
+.sp-preview {
+	position: sticky;
+	top: 80px;
+	background: var(--card-bg);
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+	padding: 20px;
+}
+.sp-preview h3 {
+	font-size: 16px;
+}
+.sp-preview > .sp-muted {
+	margin: 6px 0 20px;
+}
+.sp-sample-item {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 45px auto;
+	gap: 6px;
+	align-items: center;
+	margin: 10px 0;
+	font-size: 11px;
+}
+.sp-sample-item > .sp-input {
+	padding: 6px;
+}
+.sp-receipt {
+	border-top: 1px solid var(--border-color);
+	margin-top: 14px;
+	padding-top: 14px;
+}
+.sp-offer {
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border-color);
+}
+.sp-offer:first-child {
 	padding-top: 0;
-	border-top: 0;
 }
-
-.sp-wizard .sp-test-total:has(.sp-test-verdict:empty) .sp-test-verdict-label {
+.sp-offer-title,
+.sp-share {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+}
+.sp-offer-title {
+	font-size: 12px;
+}
+.sp-share {
+	font-size: 11px;
+	color: var(--text-muted);
+	margin-top: 9px;
+}
+.sp-savebar {
+	position: fixed;
+	bottom: 22px;
+	left: 50%;
+	transform: translateX(-50%);
+	width: min(760px, calc(100vw - 32px));
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	background: var(--card-bg);
+	border: 1px solid var(--border-color);
+	box-shadow: var(--shadow-lg);
+	border-radius: 10px;
+	padding: 14px 18px;
+	z-index: 1010;
+}
+.sp-savebar[hidden] {
 	display: none;
 }
-
-.sp-wizard .sp-test-verdict-label {
-	margin-bottom: 2px;
+.sp-empty {
+	text-align: center;
+	padding: 42px 26px;
+	background: var(--card-bg);
+	border: 1px dashed var(--border-color);
+	border-radius: 10px;
+}
+.sp-empty .sp-button {
+	margin: 5px;
+}
+.sp-menu {
+	position: relative;
+}
+.sp-menu summary {
+	list-style: none;
+	cursor: pointer;
+	padding: 3px 8px;
+	font-size: 18px;
+}
+.sp-menu > div {
+	position: absolute;
+	right: 0;
+	top: 100%;
+	z-index: 2;
+	background: var(--card-bg);
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	padding: 5px;
+	min-width: 130px;
+	display: grid;
+	gap: 4px;
+}
+.sp-dialog {
+	border: 1px solid var(--border-color);
+	border-radius: 12px;
+	padding: 0;
+	background: var(--modal-bg, var(--card-bg));
+	color: var(--text-color);
+	width: min(720px, calc(100vw - 32px));
+	max-height: 85vh;
+	box-shadow: var(--shadow-lg);
+}
+.sp-dialog::backdrop {
+	background: rgba(0, 0, 0, 0.35);
+}
+.sp-dialog > header,
+.sp-dialog > footer {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	padding: 18px 22px;
+}
+.sp-dialog > header {
+	border-bottom: 1px solid var(--border-color);
+}
+.sp-dialog > footer {
+	justify-content: flex-end;
+	border-top: 1px solid var(--border-color);
+	flex-wrap: wrap;
+}
+.sp-dialog-body {
+	padding: 22px;
+	max-height: 64vh;
+	overflow: auto;
+}
+.sp-dialog-error {
+	color: var(--red-600);
+	padding: 10px 0;
+	font-size: 13px;
+}
+.sp-dialog .sp-chips {
+	margin-bottom: 12px;
+}
+.sp-filter-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 12px;
+}
+.sp-results-heading {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin: 12px 0;
+}
+.sp-product-results {
+	max-height: 320px;
+	overflow: auto;
+	border-top: 1px solid var(--border-color);
+}
+.sp-product-result {
+	display: grid;
+	grid-template-columns: 18px minmax(0, 1fr) 110px;
+	gap: 9px;
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border-color);
+	align-items: center;
+	cursor: pointer;
+	font-weight: normal;
+	font-size: 12px;
+}
+.sp-product-result strong {
+	font-size: 12px;
+}
+.sp-product-result small {
+	display: block;
+	font-size: 10px;
 	color: var(--text-muted);
-	font-size: var(--text-sm);
 }
-
-.sp-wizard .sp-test-verdict {
-	max-width: 64ch;
-	color: var(--heading-color);
-	font-size: var(--text-xl, 18px);
-	font-weight: 500;
-	line-height: 1.45;
+.sp-country-list {
+	max-height: 210px;
+	overflow: auto;
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 5px;
+	margin: 12px 0 20px;
 }
-
-/* the import's two files side by side once the panel has the room */
-@container sp-import (min-width: 620px) {
-	.sp-wizard .sp-import-files {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 24px;
+.sp-check-result {
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border-color);
+}
+.sp-combo {
+	position: relative;
+}
+.sp-combo-list {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	max-height: 230px;
+	overflow: auto;
+	z-index: 5;
+	background: var(--card-bg);
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	box-shadow: var(--shadow-md);
+	list-style: none;
+	padding: 4px;
+	margin: 3px 0;
+}
+.sp-combo-list[hidden] {
+	display: none;
+}
+.sp-combo-list li {
+	padding: 7px;
+	cursor: pointer;
+}
+.sp-combo-list [aria-selected="true"],
+.sp-combo-list li:hover {
+	background: var(--subtle-fg);
+}
+.sp-combo-list small {
+	color: var(--text-muted);
+	margin-left: 6px;
+}
+@media (max-width: 1100px) {
+	.sp-layout {
+		grid-template-columns: minmax(0, 1fr) 260px;
+		gap: 16px;
+	}
+	.sp-row-editor {
+		grid-template-columns: 1fr;
+	}
+	.sp-row-head,
+	.sp-row-summary {
+		grid-template-columns: 1fr 1fr 1fr;
+	}
+	.sp-header {
+		align-items: flex-start;
+	}
+	.sp-header > .sp-actions {
+		flex-direction: column;
+		align-items: stretch;
 	}
 }
-
-/* a narrow wizard: a zone's figure and a check's time go under their words */
-@container sp-wizard (max-width: 560px) {
-	.sp-wizard .sp-czone-toggle {
-		grid-template-columns: auto minmax(0, 1fr);
+@media (max-width: 800px) {
+	.sp-page { padding-bottom: 175px; }
+	.sp-layout {
+		grid-template-columns: 1fr;
 	}
-
-	.sp-wizard .sp-czone-figure {
+	.sp-preview {
+		position: static;
+	}
+	.sp-header {
+		flex-direction: column;
+	}
+	.sp-header > .sp-actions {
+		flex-direction: row;
+	}
+	.sp-row-head {
+		padding-left: 12px;
+	}
+	.sp-row-summary {
+		padding: 12px;
+		font-size: 11px;
+		gap: 8px;
+	}
+	.sp-card-header {
+		padding: 16px 12px;
+	}
+	.sp-dialog-body {
+		padding: 16px;
+	}
+	.sp-filter-grid {
+		grid-template-columns: 1fr;
+	}
+	.sp-product-result {
+		grid-template-columns: 18px minmax(0, 1fr);
+	}
+	.sp-product-result > small {
 		grid-column: 2;
-		text-align: start;
 	}
-
-	.sp-wizard .sp-czone-method,
-	.sp-wizard .sp-test-place {
-		grid-template-columns: minmax(0, 1fr);
+	.sp-savebar {
+		bottom: 86px;
+	}
+	.sp-savebar > .sp-actions {
+		gap: 4px;
+	}
+	.sp-country-list {
+		grid-template-columns: 1fr;
 	}
 }
-
-/* ---------------------------------------------------------------- less motion */
 @media (prefers-reduced-motion: reduce) {
-	.sp-wizard,
-	.sp-wizard *,
-	.sp-wizard *::before,
-	.sp-wizard *::after {
+	.sp-page *,
+	.sp-dialog * {
 		transition: none !important;
 		animation: none !important;
 		scroll-behavior: auto !important;
 	}
+}
+
+.sp-pricing > small {
+	display: block;
+	margin-top: 6px;
 }
