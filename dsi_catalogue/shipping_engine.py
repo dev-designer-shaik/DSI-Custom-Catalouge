@@ -194,6 +194,7 @@ def _resolve(policy, order):
 	if len(shipments) > 10:
 		return _result("invalid")
 	directory = order.get("directory")
+	required_service = bool(order.get("required_service"))
 	pending, parts, fallback_used = [], [], False
 	for s in shipments:
 		r = policy["rules"][s["row"]]
@@ -204,8 +205,10 @@ def _resolve(policy, order):
 			else (0 if s["quote"] else s["weight_kg"])
 		)
 		eligible = _eligible(directory, s["services"], country, weight)
-		if s["quote"] and eligible == set():
+		if (s["quote"] or required_service) and eligible == set():
 			return _result("not_served", shipments=shipments)
+		if required_service and eligible is not None:
+			s["services"] = sorted(eligible)
 		if s["quote"] and given is None:
 			pending.append(s)
 			continue
@@ -243,6 +246,8 @@ def _resolve(policy, order):
 					except FormulaError:
 						s["warnings"].append("The formula could not price " + name)
 			if not prices:
+				if required_service:
+					return _result("not_offered", shipments=shipments)
 				fb = policy.get("fallback", {})
 				if fb.get("method") != "fixed" or not number(fb.get("amount")):
 					return _result("not_offered", shipments=shipments)
@@ -255,7 +260,7 @@ def _resolve(policy, order):
 			flat = tier_price(r["price_table"], s["weight_lb"])
 			if flat is None:
 				return _result("too_heavy", shipments=shipments)
-			if not s["services"] or not eligible:
+			if not required_service and (not s["services"] or not eligible):
 				if s["services"]:
 					s["warnings"].append(
 						"Selected services cannot carry this shipment; delivery will be arranged by hand."
@@ -267,6 +272,8 @@ def _resolve(policy, order):
 	concrete = [p["services"] for p in parts if p["services"] is not None]
 	common = set.intersection(*concrete) if concrete else set()
 	carrier = any(p["shipment"]["quote"] for p in parts)
+	if required_service and (not common or fallback_used):
+		return _result("not_served", shipments=shipments)
 	if not common and carrier and not fallback_used:
 		return _result("not_covered", shipments=shipments)
 	if fallback_used:

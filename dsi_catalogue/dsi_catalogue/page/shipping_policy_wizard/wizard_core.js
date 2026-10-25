@@ -168,6 +168,16 @@ dsi_catalogue.ShippingPolicyWizard = class ShippingPolicyWizard {
 			header,
 			check("Use this policy at checkout", this.draft.active, (v) => this.change((d) => (d.active = v))),
 		);
+		const required = (this.state.services || []).filter((s) => s.required_for_group);
+		for (const service of required) {
+			this.root.append(
+				el(
+					"p",
+					{ class: "sp-muted" },
+					`${service.label} is required for matching ${service.restricted_item_group} products. Other services and manual fallback cannot replace it.`,
+				),
+			);
+		}
 		const layout = el("div", { class: "sp-layout" });
 		this.cards = el("section", { class: "sp-cards", "aria-label": "Product groups" });
 		const left = el(

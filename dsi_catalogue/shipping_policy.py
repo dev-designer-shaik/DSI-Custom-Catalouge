@@ -224,6 +224,9 @@ def services_directory():
 	providers = {
 		p["name"]: p for p in frappe.get_all("Shipping Provider", fields=["name", "enabled", "carrier_code"])
 	}
+	extra_fields = []
+	if frappe.get_meta("Shipping Service").has_field("restricted_item_group"):
+		extra_fields = ["restricted_item_group", "required_for_group", "live_rates_only"]
 	services = frappe.get_all(
 		"Shipping Service",
 		fields=[
@@ -234,6 +237,7 @@ def services_directory():
 			"enabled",
 			"estimated_days",
 			"max_weight_kg",
+			*extra_fields,
 		],
 		order_by="name asc",
 	)
@@ -253,6 +257,7 @@ def services_directory():
 			"estimated_days": s["estimated_days"],
 			"max_weight_kg": flt(s["max_weight_kg"]),
 			"countries": [normalize_country(c) for c in countries.get(s["name"], [])],
+			**{field: s.get(field) for field in extra_fields},
 		}
 		for s in services
 	]
@@ -261,12 +266,26 @@ def services_directory():
 def build_order(country_code, items):
 	codes = [i["item_code"] for i in items]
 	groups, facts = item_groups_for(codes), item_facts_for(codes)
+	directory = services_directory()
+	access = None
+	if directory is not None:
+		try:
+			from dsi_shipping.service_restrictions import restriction_context
+		except ImportError:
+			pass  # Older shipping installations have no product restrictions.
+		else:
+			access = restriction_context(items)
+	if access is not None:
+		directory = [s for s in directory if s["name"] in access["allowed_services"]]
 	return {
 		"country_code": normalize_country(country_code),
 		"items": [
 			{**i, **facts.get(i["item_code"], {}), "groups": groups.get(i["item_code"], [])} for i in items
 		],
-		"directory": services_directory(),
+		"directory": directory,
+		"required_service": bool(access and access["required"]),
+		"live_rates_only": bool(directory)
+		and all(s.get("live_rates_only") for s in directory if s["enabled"]),
 		"order_value": order_value_for(items),
 	}
 
@@ -279,6 +298,7 @@ def plan_token(policy, order, shipments):
 			"country": order["country_code"],
 			"items": order["items"],
 			"directory": order["directory"],
+			"required_service": order.get("required_service", False),
 			"shipments": shipments,
 		}
 	)

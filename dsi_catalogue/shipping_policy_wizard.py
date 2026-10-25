@@ -304,7 +304,7 @@ def try_order(draft, order):
 				continue
 			boxes = _packed_cartons(s["items"])
 			quotes = (
-				_carrier_quotes(sample["country_code"], city, boxes, given.get("postcode", ""))
+				_carrier_quotes(sample["country_code"], city, boxes, given.get("postcode", ""), items)
 				if boxes
 				else []
 			)
@@ -314,7 +314,7 @@ def try_order(draft, order):
 		result["preview_note"] = (
 			(
 				"Simulated provider prices — sandbox carrier simulation is enabled. "
-				if frappe.conf.get("shipping_mock_mode")
+				if frappe.conf.get("shipping_mock_mode") and not sample.get("live_rates_only")
 				else "Live provider quotes. "
 			)
 			+ city
@@ -411,7 +411,7 @@ class _CarrierFailed(Exception):
 	"""The carrier's answer is not a list of prices."""
 
 
-def _carrier_quotes(country, city, cartons, postcode="") -> list[dict]:
+def _carrier_quotes(country, city, cartons, postcode="", items=None) -> list[dict]:
 	"""The carrier's quotes for the cartons, asked one carton at a time as the website asks: each service's
 	prices added up, with the number of cartons it quoted, cheapest first. When the carrier fails in any way
 	(an error, an answer that says it failed, or one that is not a list of prices) there are no quotes at
@@ -433,7 +433,7 @@ def _carrier_quotes(country, city, cartons, postcode="") -> list[dict]:
 		return []
 	shown = len(frappe.local.message_log)
 	try:
-		return _quoted(get_shipping_rates, code, place, cartons, postcode)
+		return _quoted(get_shipping_rates, code, place, cartons, postcode, items)
 	except Exception:
 		del frappe.local.message_log[shown:]  # the carrier's own message (a SOAP fault, say) is not passed on
 		# At error level: outside a development server Frappe's loggers keep nothing below it.
@@ -444,7 +444,7 @@ def _carrier_quotes(country, city, cartons, postcode="") -> list[dict]:
 		return []
 
 
-def _quoted(get_shipping_rates, code, city, cartons, postcode="") -> list[dict]:
+def _quoted(get_shipping_rates, code, city, cartons, postcode="", items=None) -> list[dict]:
 	totals = {}
 	for carton in cartons:
 		reply = get_shipping_rates(
@@ -455,6 +455,7 @@ def _quoted(get_shipping_rates, code, city, cartons, postcode="") -> list[dict]:
 			dimensions=json.dumps(carton["size"]),
 			cod_amount=0,
 			currency="USD",
+			**({"items": items} if items is not None else {}),
 		)
 		rates = reply.get("rates") if isinstance(reply, dict) and reply.get("success") else None
 		if not isinstance(rates, list):
@@ -713,6 +714,7 @@ def _check_carrier(sample) -> dict:
 			postcode=sample.get("postcode", ""),
 			weight_kg=SAMPLE_PARCEL["weight_kg"],
 			dimensions=json.dumps(SAMPLE_PARCEL["box"]),
+			items=sample["items"],
 			cod_amount=0,
 			currency="USD",
 		)

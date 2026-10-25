@@ -72,6 +72,14 @@ An empty policy has no rows and offers no delivery. Start with your own rows, or
 - A quote that arrives incomplete, missing or unusable never becomes a free or underpriced delivery.
 - **Check it works** tests the ERP endpoint, the carrier API and the website named in Storefront Settings with the products and address in Try an order. A Storefront Settings website that reads a different ERP says nothing about this ERP's policy.
 
+## Product forwarding restrictions
+
+A Shipping Service can be limited to an ERP Item Group and its descendants, with individual products excluded. **Require this service for these products** makes matching orders use that service, including mixed orders. For example, a perfume group can require DGG while other products keep their normal options. These settings live on the Shipping Service form and apply independently of the pricing policy.
+
+Manual, free, weight, carrier and formula prices still work. A required forwarding service cannot be replaced by an ordinary service or manual fallback. If the required service is disabled, does not cover the destination, or cannot provide a required quote, delivery is refused. The policy page identifies these restrictions beside the service choices.
+
+**Always use live rates** on a service bypasses sandbox rate simulation for that service. **Contents description for carrier** supplies its configured goods description to the rate request.
+
 ## What the website receives
 
 At checkout the website asks the ERP for the price. The ERP answers either with final offers or with the shipments that need carrier quotes and an opaque plan token. The website returns the carton quotes with the token. Every resulting offer carries its provider, booking code, service, price and estimated days. Nothing is cached in the price path. Nothing is booked, paid or shipped by the preview.

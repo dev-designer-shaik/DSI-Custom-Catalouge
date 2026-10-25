@@ -261,3 +261,54 @@ def test_preview_explains_missing_configuration_without_changing_customer_refusa
 	p["rules"] = p["rules"][:2]
 	assert "not included in any product group" in preview_coverage_message(p, order(item("UNLISTED")))
 	assert "Petite has no delivery row for BH" in preview_coverage_message(p, order(country="BH"))
+
+
+def restricted_order(*items):
+	o = order(*items, directory=[service("Special")])
+	o["required_service"] = True
+	return o
+
+
+def test_required_service_prices_manual_rows_without_plain_delivery():
+	result = resolve(policy(), restricted_order(item(), item("P-X")))
+	assert [x["service_id"] for x in result["offers"]] == ["Special"]
+	assert result["offers"][0]["amount"] == 5
+
+
+def test_required_service_never_uses_free_fallback_or_wrong_service():
+	p = policy()
+	p["rules"][0].update(method="carrier", services=[])
+	p["fallback"] = {"method": "fixed", "amount": 0}
+	o = restricted_order()
+	planned = resolve(p, o)
+	assert planned["shipments"][0]["services"] == ["Special"]
+	for quotes in [
+		[],
+		[{"service_id": "Ordinary", "amount": 1, "boxes_quoted": 1}],
+		[{"service_id": "Special", "amount": 9, "boxes_quoted": 0}],
+	]:
+		r = resolve(p, quoted(o, quotes=quotes))
+		assert not r["offered"] and r["reason"] == "not_offered"
+	valid = resolve(p, quoted(o, quotes=[{"service_id": "Special", "amount": 9, "boxes_quoted": 1}]))
+	assert [x["service_id"] for x in valid["offers"]] == ["Special"]
+
+
+def test_required_service_refuses_unserved_disabled_missing_and_incompatible_manual_selection():
+	for directory in [[], [service("Special", enabled=False)], [service("Special", countries=["BH"])]]:
+		o = restricted_order()
+		o["directory"] = directory
+		assert not resolve(policy(), o)["offered"]
+	p = policy()
+	p["rules"][0]["services"] = ["Ordinary"]
+	assert not resolve(p, restricted_order())["offered"]
+
+
+def test_required_service_formula_preserves_special_option_and_refuses_invalid_formula():
+	p = policy()
+	p["rules"][0].update(method="formula", formula="carrier_price * 2")
+	p["fallback"] = {"method": "fixed", "amount": 0}
+	o = quoted(restricted_order(), quotes=[{"service_id": "Special", "amount": 9, "boxes_quoted": 1}])
+	r = resolve(p, o)
+	assert r["offers"][0]["amount"] == 18 and r["offers"][0]["service_id"] == "Special"
+	p["rules"][0]["formula"] = "1 / 0"
+	assert not resolve(p, o)["offered"]

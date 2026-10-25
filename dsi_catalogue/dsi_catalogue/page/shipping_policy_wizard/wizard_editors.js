@@ -40,7 +40,10 @@ Object.assign(dsi_catalogue.ShippingPolicyWizard.prototype, {
 							" of " +
 							countries.length +
 							" countries" +
-							(!service.enabled ? " · Disabled" : ""),
+							(!service.enabled ? " · Disabled" : "") +
+							(service.required_for_group
+								? " · Required for matching " + service.restricted_item_group + " products"
+								: ""),
 						row.services.includes(service.name),
 						(v) => {
 							this.change(() => {
@@ -65,7 +68,7 @@ Object.assign(dsi_catalogue.ShippingPolicyWizard.prototype, {
 					? "Only selected services will be offered."
 					: row.method === "table"
 						? "No provider selected. This delivery is arranged manually."
-						: "All available provider services will be offered.",
+						: "All eligible provider services will be offered. Product restrictions always apply.",
 			),
 		);
 		if (!row.services.length && row.method === "table")
