@@ -207,7 +207,7 @@ def _country_names(policy) -> dict[str, str]:
 	codes = {
 		code
 		for zone in policy["zones"]
-		if zone["enabled"] and not zone["everywhere_else"]
+		if zone["enabled"]
 		for code in zone["countries"]
 	}
 	if not codes:
