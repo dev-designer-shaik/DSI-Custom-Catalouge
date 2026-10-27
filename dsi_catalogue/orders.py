@@ -528,34 +528,75 @@ def _record_payment(so, payment):
 	if not (mode and account):
 		return None
 	charge_id = (payment.get("charge_id") or "").strip()
-	amount = float(payment.get("amount") or 0)
-	if not charge_id or amount <= 0:
+	if not charge_id:
 		return None
-	if frappe.db.exists("Payment Entry", {"reference_no": charge_id, "docstatus": 1}):
-		return frappe.db.get_value("Payment Entry", {"reference_no": charge_id, "docstatus": 1}, "name")
 
 	frappe.db.savepoint("tap_payment_entry")
 	try:
+		from math import isfinite
+
 		from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 
-		pe = get_payment_entry("Sales Order", so.name, party_amount=amount, bank_account=account)
+		# Serialize retries for the same order before checking for its receipt.
+		frappe.db.sql("select name from `tabSales Order` where name=%s for update", (so.name,))
+		so.reload()
+		amount = float(payment.get("amount") or 0)
+		currency = (payment.get("currency") or so.currency or "").upper()
+		if so.docstatus != 1:
+			raise ValueError("A captured payment on a draft or cancelled order needs review")
+		if not isfinite(amount) or amount <= 0 or currency != so.currency:
+			raise ValueError("Captured payment amount or currency is invalid for this order")
+		if abs(amount - float(so.grand_total)) > 0.02:
+			raise ValueError("Captured payment does not match the order total")
+
+		existing = frappe.get_all(
+			"Payment Entry",
+			filters={"reference_no": charge_id, "docstatus": 1},
+			pluck="name",
+			limit_page_length=2,
+		)
+		if len(existing) > 1:
+			raise ValueError("Multiple submitted receipts use this Tap charge reference")
+		# Do NOT pass the charge as party_amount: it is in order currency, while
+		# party_amount is in the receivable account currency. ERPNext converts
+		# the order correctly when the override is omitted (USD 91 -> BHD 34.223).
+		pe = (
+			frappe.get_doc("Payment Entry", existing[0])
+			if existing
+			else get_payment_entry("Sales Order", so.name, bank_account=account)
+		)
+		if pe.payment_type != "Receive" or pe.party != so.customer or pe.company != so.company:
+			raise ValueError("Payment Entry belongs to a different customer or company")
+		factor = 1.0
+		if pe.paid_from_account_currency != so.currency:
+			order_rate = float(so.conversion_rate or 0)
+			party_rate = float(pe.source_exchange_rate or 0)
+			if not isfinite(order_rate) or not isfinite(party_rate) or min(order_rate, party_rate) <= 0:
+				raise ValueError("A valid currency conversion is required for the receipt")
+			factor = party_rate / order_rate
+		allocated = sum(
+			float(r.allocated_amount or 0)
+			for r in pe.references
+			if r.reference_doctype == "Sales Order" and r.reference_name == so.name
+		)
+		for value in (float(pe.paid_amount or 0), allocated):
+			if not isfinite(value) or abs(value * factor - amount) > 0.02:
+				raise ValueError("Receipt amount or allocation does not match the captured payment")
+		if existing:
+			return pe.name
 		pe.mode_of_payment = mode
 		pe.reference_no = charge_id
 		pe.reference_date = frappe.utils.nowdate()
-		pe.remarks = "Tap charge {} ({} {:.2f}) captured at website checkout".format(
-			charge_id, (payment.get("currency") or so.currency or "").upper(), amount
-		)
+		pe.remarks = f"Tap charge {charge_id} ({currency} {amount:.2f}) captured at website checkout"
 		pe.flags.ignore_permissions = True
 		pe.insert(ignore_permissions=True)
 		pe.submit()
 		return pe.name
 	except Exception:
 		frappe.db.rollback(save_point="tap_payment_entry")
-		# Title first, body second: Frappe truncates the TITLE, so the traceback
-		# belongs in the body or the useful half of the log is what gets cut.
 		frappe.log_error(
-			f"{so.name}: {frappe.get_traceback()}",
-			"create_order_atomic: Payment Entry failed",
+			title="create_order_atomic: Payment Entry failed",
+			message=f"{so.name}: {frappe.get_traceback()}",
 		)
 		frappe.get_doc(
 			{
