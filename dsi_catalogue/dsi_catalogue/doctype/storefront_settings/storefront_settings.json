@@ -8,14 +8,12 @@
     {
       "fieldname": "active_domain",
       "fieldtype": "Data",
-      "label": "Current Website",
-      "default": "https://dsi-web-n.netlify.app"
+      "label": "Current Website"
     },
     {
       "fieldname": "production_domain",
       "fieldtype": "Data",
-      "label": "Future Production Domain",
-      "default": "https://designershaik.com"
+      "label": "Production Website"
     },
     {
       "fieldname": "robots_text",

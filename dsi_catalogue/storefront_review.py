@@ -205,8 +205,10 @@ def seed(path):
         settings.robots_text = 'User-agent: *\nAllow: /\n'
     if not settings.llm_text:
         settings.llm_text = data['llmText']
-    settings.active_domain = 'https://dsi-web-n.netlify.app'
-    settings.production_domain = 'https://designershaik.com'
+    # Preserve the configured domains when reseeding. On first setup, use the
+    # ERP's configured website URL rather than an old deployment address.
+    if not settings.active_domain:
+        settings.active_domain = frappe.conf.get('website_base_url') or ''
     settings.save(ignore_permissions=True)
     from frappe.permissions import add_permission, update_permission_property
     add_permission('Website Item', 'Storefront Reviewer', 0)
